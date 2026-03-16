@@ -1,0 +1,56 @@
+# ── Segredos e configuração local ────────────────────────────
+.env
+secrets/
+
+# ── Volumes persistentes dos containers ──────────────────────
+data/
+
+# ── Vaults do Obsidian (conteúdo pessoal) ────────────────────
+vaults/alfred/
+vaults/pedro/
+
+# ── SearXNG: config local com ajustes e tokens ───────────────
+config/searxng/settings.yml
+
+# ── Shell Executor: ambiente Python virtual ───────────────────
+services/shell-executor/venv/
+services/shell-executor/__pycache__/
+services/**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── N8N: exports com credenciais embutidas ───────────────────
+# (commitar apenas o JSON limpo, sem credenciais)
+services/n8n/
+data/n8n/
+
+# ── Certificados e chaves ─────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ── Sistemas operacionais ─────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editores ──────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Arquivos temporários e builds ────────────────────────────
+*.tmp
+*.bak
+*.orig
+__pycache__/
+.cache/

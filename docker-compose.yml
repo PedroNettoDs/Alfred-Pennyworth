@@ -1,0 +1,82 @@
+# docker-compose.yml — Projeto Alfred Pennyworth
+# Lê configuração exclusivamente do .env na mesma pasta
+
+name: alfred
+
+services:
+
+  # ── Open WebUI ──────────────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: alfred-webui
+    restart: unless-stopped
+    ports:
+      - "${PORT_WEBUI}:8080"
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - WEBUI_AUTH=${WEBUI_AUTH}
+      - ENABLE_RAG_WEB_SEARCH=true
+      - RAG_WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>&format=json
+      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=
+      - ENABLE_API_KEY=true
+    volumes:
+      - ./data/open-webui:/app/backend/data
+      - "${VAULT_ALFRED}:/vaults/alfred:rw"
+      - "${VAULT_PEDRO}:/vaults/pedro:ro"
+    depends_on:
+      - searxng
+      - chromadb
+    networks:
+      - alfred-net
+
+  # ── SearXNG ─────────────────────────────────────────────────
+  searxng:
+    image: searxng/searxng:latest
+    container_name: alfred-searxng
+    restart: unless-stopped
+    ports:
+      - "${PORT_SEARXNG}:8080"
+    volumes:
+      - ./config/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:${PORT_SEARXNG}
+    networks:
+      - alfred-net
+
+  # ── ChromaDB ────────────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: alfred-chromadb
+    restart: unless-stopped
+    ports:
+      - "${PORT_CHROMADB}:8000"
+    volumes:
+      - ./data/chromadb:/chroma/chroma
+    networks:
+      - alfred-net
+
+  # ── N8N ─────────────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: alfred-n8n
+    restart: unless-stopped
+    ports:
+      - "${PORT_N8N}:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - WEBHOOK_URL=http://localhost:${PORT_N8N}
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+    networks:
+      - alfred-net
+
+networks:
+  alfred-net:
+    driver: bridge
