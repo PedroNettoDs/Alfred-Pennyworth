@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(tree -L 3 -I 'venv|__pycache__|*.dist-info' /mnt/SSD/alfred 2>/dev/null || find /mnt/SSD/alfred -not -path '*/venv/*' -not -path '*/__pycache__/*' -not -path '*/*.dist-info/*' -type f | grep -v \".pyc\" | sort)",
+      "Bash(head -50 /mnt/SSD/alfred/vaults/alfred/research/*.md | head -100)",
+      "Bash(wc -l /mnt/SSD/alfred/docs/*.json)",
+      "Bash(chmod +x /mnt/SSD/alfred/services/researcher/run.sh)",
+      "Bash(cd /mnt/SSD/alfred/services/researcher && python3 -m venv venv && venv/bin/pip install --quiet -r requirements.txt 2>&1 | tail -5)",
+      "Bash(sudo cp /mnt/SSD/alfred/services/researcher/alfred-researcher.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable alfred-researcher && sudo systemctl start alfred-researcher && sleep 2 && sudo systemctl status alfred-researcher --no-pager)",
+      "Bash(pkill -f \"uvicorn main:app --host 0.0.0.0 --port 7071\" 2>/dev/null; echo \"stopped\")",
+      "Bash(du -sh /mnt/SSD/alfred/* 2>/dev/null | sort -h)",
+      "Read(//etc/systemd/system/**)",
+      "Bash(systemctl status alfred-researcher)",
+      "Bash(test -f /mnt/SSD/alfred/.env.example && echo \"exists\" || echo \"not found\")",
+      "Bash(grep -r \"import\\\\|from\" /mnt/SSD/alfred/services/*.py /mnt/SSD/alfred/tools/*.py 2>/dev/null | grep -E \"^[^:]+: *\\(import|from\\)\" | cut -d: -f1 | sort -u)",
+      "Bash(wc -l /mnt/SSD/alfred/docs/*.json /mnt/SSD/alfred/docs/*.md 2>/dev/null)"
     ]
   }
 }

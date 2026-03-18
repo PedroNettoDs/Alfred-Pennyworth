@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "alfred/research/2026-03-16 2026-03-17 Ollama 6-Month Update Summary.md",
+                "file": "alfred/research/2026-03-16 2025-03-17 Pesquisa Ollama 2025.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "2026-03-16 2026-03-17 Ollama 6-Month Update Summary"
+              "title": "2026-03-16 2025-03-17 Pesquisa Ollama 2025"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "alfred/research/2026-03-16 2026-03-17 Ollama 6-Month Update Summary.md",
+                "file": "alfred/research/2026-03-16 2025-03-17 Pesquisa Ollama 2025.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Links inversos para 2026-03-16 2026-03-17 Ollama 6-Month Update Summary"
+              "title": "Links inversos para 2026-03-16 2025-03-17 Pesquisa Ollama 2025"
             }
           },
           {
@@ -113,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "alfred/research/2026-03-16 2026-03-17 Ollama 6-Month Update Summary.md",
+                "file": "alfred/research/2026-03-16 2025-03-17 Pesquisa Ollama 2025.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Links de saída para 2026-03-16 2026-03-17 Ollama 6-Month Update Summary"
+              "title": "Links de saída para 2026-03-16 2025-03-17 Pesquisa Ollama 2025"
             }
           },
           {
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "alfred/research/2026-03-16 2026-03-17 Ollama 6-Month Update Summary.md",
+                "file": "alfred/research/2026-03-16 2025-03-17 Pesquisa Ollama 2025.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Sumário de 2026-03-16 2026-03-17 Ollama 6-Month Update Summary"
+              "title": "Sumário de 2026-03-16 2025-03-17 Pesquisa Ollama 2025"
             }
           }
         ]
@@ -183,12 +183,12 @@
       "bases:Criar nova base": false
     }
   },
-  "active": "854c89080231d5e5",
+  "active": "8df8691cc855b6f7",
   "lastOpenFiles": [
-    "alfred/research/2026-03-16 2025-03-17 Pesquisa Ollama 2025.md",
     "alfred/research/2026-03-16 2026-03-17 Ollama 6-Month Update Summary.md",
-    "alfred/research/2026-03-16 Ollama_2025_Research.md",
     "alfred/research/2026-03-16 Pesquisa Ollama 2025.md",
+    "alfred/research/2026-03-16 Ollama_2025_Research.md",
+    "alfred/research/2026-03-16 2025-03-17 Pesquisa Ollama 2025.md",
     "alfred/logs",
     "alfred/decisions"
   ]

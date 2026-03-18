@@ -25,6 +25,7 @@ ALLOWED_PREFIXES = [
     "curl",
     "tree",
     "WEBUI_TOKEN=",
+    "python3",
 ]
 
 def is_allowed(command: str) -> bool:

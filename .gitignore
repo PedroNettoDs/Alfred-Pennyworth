@@ -1,7 +1,8 @@
 # ── Segredos e configuração local ────────────────────────────
 .env
 secrets/
-
+.venv
+venv/
 # ── Volumes persistentes dos containers ──────────────────────
 data/
 
