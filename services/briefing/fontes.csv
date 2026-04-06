@@ -1,0 +1,24 @@
+tipo,nome,url,query,categorias,max_items,enabled
+query,SearXNG,,Desenvolvimento e Engenharia de Software,news|it,,yes
+query,SearXNG,,Cloud e Infraestrutura,news|it,,yes
+query,SearXNG,,Cibersegurança,news|it,,yes
+query,SearXNG,,Open Source,news|it,,yes
+query,SearXNG,,hardware technology news,news|it,,yes
+query,SearXNG,,startups tech funding,news|it,,yes
+query,SearXNG,,Ciência e Fronteiras,news|it,,yes
+query,SearXNG,,notícias tecnologia Brasil,news|it,,yes
+feed,Hacker News (top),https://hnrss.org/frontpage,,,10,yes
+feed,Ars Technica,https://feeds.arstechnica.com/arstechnica/index,,,5,yes
+feed,The Verge,https://www.theverge.com/rss/index.xml,,,5,yes
+feed,TechCrunch,https://techcrunch.com/feed/,,,5,yes
+feed,InfoQ,https://feed.infoq.com/,,,5,yes
+feed,Lobsters,https://lobste.rs/rss,,,5,yes
+feed,TLDR Newsletter,https://tldr.tech/api/rss/tech,,,10,yes
+feed,MIT Technology Review,https://www.technologyreview.com/feed/,,,5,yes
+extra,TechDrop,https://www.techdrop.news/,,,,yes
+extra,TLDR Newsletter,https://tldr.tech/,,,,yes
+extra,stratechery,https://stratechery.com/,,,,yes
+extra,hipster ponto tech,https://www.hipsters.tech/,,,,yes
+extra,tecnoblog,https://tecnoblog.net/tecnocast/,,,,yes
+extra,hackernew,https://hackernewsletter.com/ ,,,,yes
+extra,Loopmatinal,https://loopmatinal.libsyn.com/,,,,yes

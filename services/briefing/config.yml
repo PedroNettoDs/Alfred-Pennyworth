@@ -1,6 +1,7 @@
 # ══════════════════════════════════════════════════════════════
-#  Tech Briefing — fontes e configuração
-#  Edite este arquivo para personalizar seu briefing matinal
+#  Tech Briefing v2 — configuração
+#  Fontes de dados em CSV único: fontes.csv
+#  Coluna 'tipo' separa: query, feed, extra
 # ══════════════════════════════════════════════════════════════
 
 # Horário de referência (usado no frontmatter do relatório)
@@ -13,75 +14,22 @@ tts_voice: "pt-BR-FranciscaNeural"
 # Número máximo de notícias no briefing final
 max_items: 15
 
-# ── Buscas no SearXNG ─────────────────────────────────────────
-# Cada query vira uma busca separada; resultados são deduplicados
-searxng_queries:
-  - "artificial intelligence news today"
-  - "machine learning LLM news"
-  - "software development news"
-  - "open source releases"
-  - "hardware technology news"
-  - "startups tech funding"
-  - "notícias tecnologia Brasil"
-
-# ── RSS Feeds ─────────────────────────────────────────────────
-# Adicione quantos quiser; o script busca os N mais recentes de cada
-rss_feeds:
-  - name: "Hacker News (top)"
-    url: "https://hnrss.org/frontpage"
-    max_items: 10
-
-  - name: "Ars Technica"
-    url: "https://feeds.arstechnica.com/arstechnica/index"
-    max_items: 5
-
-  - name: "The Verge"
-    url: "https://www.theverge.com/rss/index.xml"
-    max_items: 5
-
-  - name: "TechCrunch"
-    url: "https://techcrunch.com/feed/"
-    max_items: 5
-
-  - name: "InfoQ"
-    url: "https://feed.infoq.com/"
-    max_items: 5
-
-  - name: "Lobsters"
-    url: "https://lobste.rs/rss"
-    max_items: 5
-
-  - name: "TLDR Newsletter"
-    url: "https://tldr.tech/api/rss/tech"
-    max_items: 10
-
-  - name: "MIT Technology Review"
-    url: "https://www.technologyreview.com/feed/"
-    max_items: 5
-
-# ── Newsletters / Fontes extras ───────────────────────────────
-# URLs fixas que o script vai tentar buscar e extrair conteúdo
-# (útil para newsletters que publicam em página web)
-extra_urls:
-   - "https://www.techdrop.news/"
-   - "https://tldr.tech/"
-   - "https://jack-clark.net/"
-   - "https://stratechery.com/"
-   - "https://www.hipsters.tech/"
-   - "https://tecnoblog.net/tecnocast/"
-   - "https://loopmatinal.libsyn.com/"
-   - "https://hackernewsletter.com/"
-   
+# ── CSV de fontes (caminho relativo ao diretório do script) ───
+csv_fontes: "fontes.csv"
 
 # ── Prompt de síntese ─────────────────────────────────────────
-# Personalize o estilo do relatório
 synthesis_prompt: |
   Você é Alfred Pennyworth, assistente pessoal de Pedro Netto.
   Pedro é estudante de Análise e Desenvolvimento de Sistemas e entusiasta de IA.
 
   Com base nas notícias abaixo, crie um BRIEFING MATINAL DE TECNOLOGIA em português brasileiro.
 
-  Formato obrigatório:
+  REGRA CRÍTICA: A PRIMEIRA LINHA da sua resposta deve ser o título da manchete principal,
+  sem formatação markdown, sem ##, sem **, apenas o texto do título.
+  Formato do título: uma frase curta, informativa, sem markdown e em português brasileiro.
+  NÃO copie este exemplo: "[Escreva aqui o título real da notícia mais importante de hoje]"
+
+  Após o título, pule uma linha e continue com o formato abaixo:
 
   ## Manchete do dia
   A notícia mais impactante em 2-3 frases.
@@ -103,7 +51,7 @@ synthesis_prompt: |
 
   Seja direto, técnico quando necessário, e com o humor seco característico do Alfred.
   Não use introduções como "Bom dia" ou "Aqui está seu briefing".
-  Comece direto pelo conteúdo.
+  Comece direto pelo título da manchete.
 
 # ── Prompt do áudio (versão falada) ───────────────────────────
 audio_prompt: |
