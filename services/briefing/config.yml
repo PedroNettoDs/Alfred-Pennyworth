@@ -8,7 +8,7 @@ schedule: "07:00"
 
 # Voz do TTS (pt-BR)
 # Opções: pt-BR-AntonioNeural (masculino), pt-BR-FranciscaNeural (feminino)
-tts_voice: "pt-BR-AntonioNeural"
+tts_voice: "pt-BR-FranciscaNeural"
 
 # Número máximo de notícias no briefing final
 max_items: 15
@@ -63,7 +63,7 @@ rss_feeds:
 # URLs fixas que o script vai tentar buscar e extrair conteúdo
 # (útil para newsletters que publicam em página web)
 extra_urls: []
-  # - "https://newsletter.example.com/latest"
+   - "https://www.techdrop.news/"
 
 # ── Prompt de síntese ─────────────────────────────────────────
 # Personalize o estilo do relatório

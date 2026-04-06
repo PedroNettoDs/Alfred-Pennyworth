@@ -1,0 +1,81 @@
+# ══════════════════════════════════════════════════════════════
+#  Scanner de Licitações — AttanoTech
+#  Edite este arquivo para ajustar perfil e fontes
+# ══════════════════════════════════════════════════════════════
+
+# ── Perfil da empresa ─────────────────────────────────────────
+empresa:
+  nome: "AttanoTech"
+  area: "Consultoria de tecnologia e projetos/implantações de TI"
+  servicos:
+    - consultoria em tecnologia da informação
+    - desenvolvimento de software
+    - implantação de sistemas
+    - suporte técnico em TI
+    - infraestrutura de redes
+    - cloud computing e migração
+    - segurança da informação
+    - treinamento em tecnologia
+    - manutenção de equipamentos de informática
+    - outsourcing de TI
+  palavras_chave:
+    - tecnologia da informação
+    - desenvolvimento de software
+    - sistemas de informação
+    - consultoria TI
+    - infraestrutura de rede
+    - segurança cibernética
+    - cloud computing
+    - suporte técnico
+    - licenciamento de software
+    - transformação digital
+    - inteligência artificial
+    - automação
+  regiao: "São Paulo"
+  porte: "ME/EPP"
+
+# ── Buscas no SearXNG ─────────────────────────────────────────
+searxng_queries:
+  - "licitação tecnologia da informação 2026"
+  - "pregão eletrônico TI consultoria"
+  - "licitação software desenvolvimento sistema"
+  - "pregão infraestrutura rede informática"
+  - "licitação suporte técnico informática"
+  - "pregão cloud computing governo"
+  - "licitação segurança informação"
+
+# ── Portais de licitação (busca via SearXNG) ──────────────────
+# O SearXNG já indexa esses sites; as queries acima os cobrem
+portais:
+  - "pncp.gov.br"
+  - "comprasnet.gov.br"
+  - "bec.sp.gov.br"
+  - "licitacoes-e.com.br"
+  - "portaldecompraspublicas.com.br"
+
+# ── PNCP API (Portal Nacional de Contratações Públicas) ───────
+# API pública, sem autenticação
+pncp:
+  enabled: true
+  base_url: "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+  # Códigos de classe/grupo de material/serviço relevantes
+  # 27: Equipamentos de TI | 70: Serviços de TI | 81: Software
+  palavras: "tecnologia informação,software,consultoria TI,rede,suporte técnico"
+  dias_retroativos: 3
+  max_items: 30
+
+# ── Filtros ───────────────────────────────────────────────────
+filtros:
+  valor_minimo: 0
+  valor_maximo: 5000000
+  # Modalidades: pregao, concorrencia, tomada_preco, convite, dispensa
+  modalidades_aceitas:
+    - pregao
+    - concorrencia
+    - dispensa
+  # Score mínimo de relevância (0-100) para incluir no relatório
+  score_minimo: 30
+
+# ── Relatório ─────────────────────────────────────────────────
+max_items_relatorio: 10
+tts_enabled: false
