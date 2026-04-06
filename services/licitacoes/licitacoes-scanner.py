@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-Alfred Licitações Scanner v2 — busca licitações em TODOS os portais estaduais do Brasil.
+Alfred Licitações Scanner v3 — busca licitações ABERTAS em TODOS os portais do Brasil.
+Mudanças v3:
+  - Novo endpoint PNCP /proposta para licitações com propostas abertas
+  - Filtro de ano corrente em todas as fontes
+  - Filtro de status: descarta licitações encerradas/canceladas/homologadas
+  - codigoModalidadeContratacao enviado corretamente (obrigatório na API)
+  - SearXNG queries incluem ano corrente e termos de status
+
 Fontes: SearXNG (queries genéricas + site:portal), PNCP API, portais.csv.
 Análise: Ollama classifica relevância por perfil da empresa.
 Saída: Markdown no vault + ChromaDB para histórico.
@@ -29,6 +36,9 @@ VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
 CHROMADB_URL = os.getenv("CHROMADB_URL", "http://localhost:8000")
 OLLAMA_EMBED = os.getenv("MODEL_EMBED", "nomic-embed-text-v2-moe:latest")
 
+# ── Ano corrente (usado em filtros e queries) ─────────────────
+ANO_CORRENTE = datetime.now().year
+
 
 def load_config() -> dict:
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -54,6 +64,55 @@ def extrair_dominio(url: str) -> str:
     """Extrai o domínio de uma URL para usar com site:"""
     url = url.replace("https://", "").replace("http://", "")
     return url.split("/")[0]
+
+
+# ── Filtro de status: palavras que indicam licitação ENCERRADA ──
+TERMOS_ENCERRADA = [
+    "homologad", "encerrad", "cancelad", "anulad", "revogad",
+    "deserta", "fracassad", "adjudicad", "arquivad", "suspens",
+    "resultado final", "vencedor definido", "contrato assinado",
+]
+
+
+def parece_encerrada(texto: str) -> bool:
+    """Verifica se o texto contém indicadores de licitação encerrada."""
+    texto_lower = texto.lower()
+    return any(termo in texto_lower for termo in TERMOS_ENCERRADA)
+
+
+def filtrar_ano_corrente(items: list[dict]) -> list[dict]:
+    """Remove itens que claramente NÃO são do ano corrente.
+    Heurística: se o texto menciona um ano anterior (2020-ANO_CORRENTE-1)
+    mas NÃO menciona o ano corrente, descarta.
+    """
+    ano_str = str(ANO_CORRENTE)
+    filtrados = []
+    for item in items:
+        texto = f"{item.get('titulo') or ''} {item.get('descricao') or ''}".lower()
+        # Se menciona explicitamente o ano corrente, inclui
+        if ano_str in texto:
+            filtrados.append(item)
+            continue
+        # Se menciona um ano anterior E não menciona o corrente, descarta
+        menciona_ano_antigo = any(
+            str(ano) in texto
+            for ano in range(2020, ANO_CORRENTE)
+        )
+        if menciona_ano_antigo:
+            continue
+        # Sem indicação de ano → inclui (pode ser corrente)
+        filtrados.append(item)
+    return filtrados
+
+
+def filtrar_abertas(items: list[dict]) -> list[dict]:
+    """Remove itens que parecem já encerrados/cancelados/homologados."""
+    filtrados = []
+    for item in items:
+        texto = f"{item.get('titulo') or ''} {item.get('descricao') or ''}".lower()
+        if not parece_encerrada(texto):
+            filtrados.append(item)
+    return filtrados
 
 
 # ── SearXNG ───────────────────────────────────────────────────
@@ -122,65 +181,235 @@ def buscar_por_portal(portais: list[dict], config: dict) -> list[dict]:
 
 
 # ── PNCP API ──────────────────────────────────────────────────
-def buscar_pncp(config: dict) -> list[dict]:
+# Códigos de modalidade (Manual PNCP API Consultas v1.0, seção 5.2):
+# 1=Leilão Eletrônico, 2=Diálogo Competitivo, 3=Concurso,
+# 4=Concorrência Eletrônica, 5=Concorrência Presencial,
+# 6=Pregão Eletrônico, 7=Pregão Presencial,
+# 8=Dispensa de Licitação, 9=Inexigibilidade,
+# 10=Manifestação de Interesse, 11=Pré-qualificação,
+# 12=Credenciamento, 13=Leilão Presencial
+#
+# Categoria do Processo (seção 5.11):
+# 3=Informática (TIC) — NÃO disponível como filtro de entrada na API,
+# apenas como campo de retorno em /v1/contratos.
+# Filtramos por palavras-chave no objetoCompra como alternativa.
+MODALIDADES_PNCP = {
+    "pregao": 6,
+    "pregao_presencial": 7,
+    "concorrencia": 4,
+    "concorrencia_presencial": 5,
+    "dispensa": 8,
+    "inexigibilidade": 9,
+    "credenciamento": 12,
+}
+
+
+def buscar_pncp_propostas_abertas(config: dict) -> list[dict]:
+    """
+    Usa o endpoint /proposta do PNCP que retorna SOMENTE
+    contratações com recebimento de propostas ABERTO.
+    
+    ATENÇÃO: codigoModalidadeContratacao é OBRIGATÓRIO neste endpoint
+    (Manual PNCP API Consultas v1.0, seção 6.4).
+    Iteramos sobre cada modalidade configurada em filtros.modalidades_aceitas.
+    """
     pncp_config = config.get("pncp", {})
     if not pncp_config.get("enabled"):
         return []
 
-    base_url = pncp_config.get("base_url", "")
-    dias = pncp_config.get("dias_retroativos", 3)
-    max_items = pncp_config.get("max_items", 30)
+    base_url = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta"
+    max_items = pncp_config.get("max_items", 50)
     palavras = pncp_config.get("palavras", "tecnologia informação")
     ufs_filtro = pncp_config.get("ufs_filtro", [])
 
-    data_inicio = (datetime.now() - timedelta(days=dias)).strftime("%Y%m%d")
+    # dataFinal = até quando buscar (obrigatório)
     data_fim = datetime.now().strftime("%Y%m%d")
 
+    # codigoModalidadeContratacao é obrigatório — iterar sobre cada uma
+    filtros = config.get("filtros", {})
+    modalidades_config = filtros.get("modalidades_aceitas", ["pregao", "dispensa", "concorrencia"])
+    codigos_modalidade = [
+        MODALIDADES_PNCP[m] for m in modalidades_config
+        if m in MODALIDADES_PNCP
+    ]
+    if not codigos_modalidade:
+        codigos_modalidade = [6, 8, 4]  # pregão eletrônico, dispensa, concorrência
+
+    palavras_list = [p.strip().lower() for p in palavras.split(",") if p.strip()]
     items = []
-    for palavra in palavras.split(","):
-        palavra = palavra.strip()
-        if not palavra:
-            continue
+
+    for codigo_mod in codigos_modalidade:
+        pagina = 1
         try:
             with httpx.Client(timeout=30) as client:
-                resp = client.get(
-                    base_url,
-                    params={
-                        "dataInicial": data_inicio,
-                        "dataFinal": data_fim,
-                        "pagina": 1,
-                        "tamanhoPagina": min(max_items, 50),
-                    },
-                )
-                if resp.status_code == 200:
+                while len(items) < max_items:
+                    resp = client.get(
+                        base_url,
+                        params={
+                            "dataFinal": data_fim,
+                            "codigoModalidadeContratacao": codigo_mod,
+                            "pagina": pagina,
+                            "tamanhoPagina": min(max_items, 500),
+                        },
+                    )
+                    if resp.status_code != 200:
+                        log(f"[PNCP/proposta] mod={codigo_mod} HTTP {resp.status_code}")
+                        break
+
                     data = resp.json()
                     registros = data if isinstance(data, list) else data.get("data", data.get("registros", []))
-                    if isinstance(registros, list):
-                        for r in registros:
-                            objeto = r.get("objetoCompra", r.get("objeto", r.get("description", "")))
-                            if not objeto:
-                                continue
-                            objeto_lower = objeto.lower()
-                            if any(p.lower() in objeto_lower for p in palavra.split()):
-                                uf = r.get("unidadeOrgao", {}).get("ufSigla", r.get("uf", "BR"))
-                                if ufs_filtro and uf not in ufs_filtro:
-                                    continue
-                                items.append({
-                                    "titulo": objeto[:200],
-                                    "url": r.get("linkSistemaOrigem", r.get("link", "https://pncp.gov.br")),
-                                    "descricao": (
-                                        f"Órgão: {r.get('orgaoEntidade', {}).get('razaoSocial', r.get('orgao', 'N/I'))}\n"
-                                        f"UF: {uf}\n"
-                                        f"Modalidade: {r.get('modalidadeNome', r.get('modalidade', 'N/I'))}\n"
-                                        f"Valor: R$ {r.get('valorTotalEstimado', r.get('valor', 'N/I'))}\n"
-                                        f"Data: {r.get('dataPublicacaoPncp', r.get('data', 'N/I'))}"
-                                    ),
-                                    "fonte": "PNCP",
-                                    "uf": uf,
-                                })
-                    log(f"[PNCP] '{palavra}': {len(registros) if isinstance(registros, list) else 0} resultados")
+                    if not isinstance(registros, list) or not registros:
+                        break
+
+                    encontrados_mod = 0
+                    for r in registros:
+                        objeto = r.get("objetoCompra", r.get("objeto", r.get("description", "")))
+                        if not objeto:
+                            continue
+
+                        # Filtrar por palavras-chave do perfil da empresa
+                        objeto_lower = objeto.lower()
+                        match = any(
+                            all(word in objeto_lower for word in p.split())
+                            for p in palavras_list
+                        )
+                        if not match:
+                            continue
+
+                        uf = r.get("unidadeOrgao", {}).get("ufSigla", r.get("uf", "BR"))
+                        if ufs_filtro and uf not in ufs_filtro:
+                            continue
+
+                        # Extrair datas de proposta para mostrar prazo
+                        data_abertura = r.get("dataAberturaProposta", "")
+                        data_encerramento = r.get("dataEncerramentoProposta", "")
+                        prazo_info = ""
+                        if data_encerramento:
+                            prazo_info = f"\nPrazo propostas: até {data_encerramento[:10]}"
+
+                        items.append({
+                            "titulo": objeto[:200],
+                            "url": r.get("linkSistemaOrigem", r.get("link", "https://pncp.gov.br")),
+                            "descricao": (
+                                f"Órgão: {r.get('orgaoEntidade', {}).get('razaoSocial', r.get('orgao', 'N/I'))}\n"
+                                f"UF: {uf}\n"
+                                f"Modalidade: {r.get('modalidadeNome', r.get('modalidade', 'N/I'))}\n"
+                                f"Valor est.: R$ {r.get('valorTotalEstimado', r.get('valor', 'N/I'))}\n"
+                                f"Situação: {r.get('situacaoCompraNome', 'N/I')}\n"
+                                f"Data pub.: {r.get('dataPublicacaoPncp', r.get('data', 'N/I'))}"
+                                f"{prazo_info}\n"
+                                f"Status: PROPOSTAS ABERTAS"
+                            ),
+                            "fonte": "PNCP (propostas abertas)",
+                            "uf": uf,
+                            "status": "aberta",
+                        })
+                        encontrados_mod += 1
+
+                    log(f"[PNCP/proposta] mod={codigo_mod} pag={pagina}: {len(registros)} registros, {encontrados_mod} relevantes")
+
+                    # Paginação
+                    if len(registros) < 500:
+                        break
+                    pagina += 1
+                    if pagina > 3:  # Limitar a 3 páginas por modalidade
+                        break
+
         except Exception as e:
-            log(f"[PNCP] Erro buscando '{palavra}': {e}")
+            log(f"[PNCP/proposta] mod={codigo_mod} Erro: {e}")
+
+    log(f"[PNCP/proposta] Total: {len(items)} licitações abertas relevantes")
+    return items[:max_items]
+
+
+def buscar_pncp_publicacao(config: dict) -> list[dict]:
+    """
+    Usa o endpoint /publicacao do PNCP com os parâmetros corretos.
+    Agora envia codigoModalidadeContratacao (obrigatório) e filtra por ano.
+    """
+    pncp_config = config.get("pncp", {})
+    if not pncp_config.get("enabled"):
+        return []
+
+    base_url = pncp_config.get(
+        "base_url",
+        "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+    )
+    dias = pncp_config.get("dias_retroativos", 3)
+    max_items = pncp_config.get("max_items", 50)
+    palavras = pncp_config.get("palavras", "tecnologia informação")
+    ufs_filtro = pncp_config.get("ufs_filtro", [])
+
+    # Garantir que o range de datas fique dentro do ano corrente
+    data_inicio_dt = max(
+        datetime.now() - timedelta(days=dias),
+        datetime(ANO_CORRENTE, 1, 1),
+    )
+    data_inicio = data_inicio_dt.strftime("%Y%m%d")
+    data_fim = datetime.now().strftime("%Y%m%d")
+
+    # Modalidades a buscar (obrigatório na API)
+    filtros = config.get("filtros", {})
+    modalidades_config = filtros.get("modalidades_aceitas", ["pregao", "dispensa", "concorrencia"])
+    codigos_modalidade = [
+        MODALIDADES_PNCP[m] for m in modalidades_config
+        if m in MODALIDADES_PNCP
+    ]
+    if not codigos_modalidade:
+        codigos_modalidade = [6, 8, 4]  # pregão, dispensa, concorrência
+
+    items = []
+    for codigo_mod in codigos_modalidade:
+        for palavra in [p.strip() for p in palavras.split(",") if p.strip()]:
+            try:
+                with httpx.Client(timeout=30) as client:
+                    resp = client.get(
+                        base_url,
+                        params={
+                            "dataInicial": data_inicio,
+                            "dataFinal": data_fim,
+                            "codigoModalidadeContratacao": codigo_mod,
+                            "pagina": 1,
+                            "tamanhoPagina": min(max_items, 50),
+                        },
+                    )
+                    if resp.status_code != 200:
+                        continue
+
+                    data = resp.json()
+                    registros = data if isinstance(data, list) else data.get("data", data.get("registros", []))
+                    if not isinstance(registros, list):
+                        continue
+
+                    for r in registros:
+                        objeto = r.get("objetoCompra", r.get("objeto", r.get("description", "")))
+                        if not objeto:
+                            continue
+                        objeto_lower = objeto.lower()
+                        if not any(w in objeto_lower for w in palavra.lower().split()):
+                            continue
+
+                        uf = r.get("unidadeOrgao", {}).get("ufSigla", r.get("uf", "BR"))
+                        if ufs_filtro and uf not in ufs_filtro:
+                            continue
+
+                        items.append({
+                            "titulo": objeto[:200],
+                            "url": r.get("linkSistemaOrigem", r.get("link", "https://pncp.gov.br")),
+                            "descricao": (
+                                f"Órgão: {r.get('orgaoEntidade', {}).get('razaoSocial', r.get('orgao', 'N/I'))}\n"
+                                f"UF: {uf}\n"
+                                f"Modalidade: {r.get('modalidadeNome', r.get('modalidade', 'N/I'))}\n"
+                                f"Valor: R$ {r.get('valorTotalEstimado', r.get('valor', 'N/I'))}\n"
+                                f"Data pub.: {r.get('dataPublicacaoPncp', r.get('data', 'N/I'))}"
+                            ),
+                            "fonte": "PNCP",
+                            "uf": uf,
+                        })
+
+                    log(f"[PNCP/pub] mod={codigo_mod} '{palavra}': {len(registros) if isinstance(registros, list) else 0}")
+            except Exception as e:
+                log(f"[PNCP/pub] Erro buscando mod={codigo_mod} '{palavra}': {e}")
 
     return items[:max_items]
 
@@ -191,8 +420,8 @@ def deduplicate(items: list[dict]) -> list[dict]:
     seen_titles = set()
     unique = []
     for item in items:
-        url = item.get("url", "")
-        title_norm = re.sub(r"\s+", " ", item.get("titulo", "").lower().strip())
+        url = item.get("url") or ""
+        title_norm = re.sub(r"\s+", " ", (item.get("titulo") or "").lower().strip())
         if url in seen_urls:
             continue
         skip = False
@@ -248,7 +477,6 @@ def ensure_collection(collection_name: str = "licitacoes") -> str:
             )
             if resp.status_code in (200, 201):
                 return resp.json().get("id", "")
-            # Fallback v2
             resp = client.post(
                 f"{CHROMADB_URL}/api/v2/tenants/default_tenant/databases/default_database/collections",
                 json={"name": collection_name, "get_or_create": True},
@@ -267,20 +495,22 @@ def upsert_chromadb(collection_id: str, items: list[dict]):
 
     ids, embeddings, documents, metadatas = [], [], [], []
     for item in items:
-        text = f"{item['titulo']}\n{item['descricao']}"
+        text = f"{item.get('titulo') or ''}\n{item.get('descricao') or ''}"
         embedding = ollama_embed(text)
         if not embedding:
             continue
-        item_id = re.sub(r"[^a-zA-Z0-9]", "_", item.get("url", "")[-60:])
+        url = item.get("url") or ""
+        item_id = re.sub(r"[^a-zA-Z0-9]", "_", url[-60:]) if url else f"no_url_{len(ids)}"
         ids.append(item_id)
         embeddings.append(embedding)
         documents.append(text)
         metadatas.append({
-            "titulo": item["titulo"][:200],
-            "url": item.get("url", ""),
-            "fonte": item.get("fonte", ""),
-            "uf": item.get("uf", ""),
+            "titulo": (item.get("titulo") or "")[:200],
+            "url": url,
+            "fonte": item.get("fonte") or "",
+            "uf": item.get("uf") or "",
             "data": datetime.now().strftime("%Y-%m-%d"),
+            "status": item.get("status") or "desconhecido",
         })
 
     if not ids:
@@ -303,19 +533,15 @@ def upsert_chromadb(collection_id: str, items: list[dict]):
 
 # ── Estatísticas por UF ───────────────────────────────────────
 def gerar_stats_uf(items: list[dict]) -> str:
-    """Gera resumo de licitações encontradas por UF."""
     contagem = {}
     for item in items:
         uf = item.get("uf", "N/I") or "N/I"
         contagem[uf] = contagem.get(uf, 0) + 1
-    
     if not contagem:
         return "Nenhuma licitação com UF identificada."
-    
     lines = []
     for uf, count in sorted(contagem.items(), key=lambda x: x[1], reverse=True):
         lines.append(f"| {uf} | {count} |")
-    
     return "| UF | Quantidade |\n|----|-----------|\n" + "\n".join(lines)
 
 
@@ -330,52 +556,67 @@ def main():
     empresa = config.get("empresa", {})
     filtros = config.get("filtros", {})
 
-    log(f"=== Licitações Scanner v2 — {date_human} ===")
+    log(f"=== Licitações Scanner v3 — {date_human} ===")
     log(f"Empresa: {empresa.get('nome', 'N/A')} | Área: {empresa.get('area', 'N/A')}")
     log(f"Portais carregados: {len(portais)} (CSV)")
+    log(f"Filtro: somente licitações ABERTAS de {ANO_CORRENTE}")
 
     # ── 1. Coletar licitações ─────────────────────────────────
     all_items = []
 
-    # 1a. SearXNG — queries genéricas
+    # 1a. PNCP — endpoint /proposta (somente abertas) ← PRIORITÁRIO
+    log("[PNCP] Buscando licitações com propostas abertas...")
+    propostas_abertas = buscar_pncp_propostas_abertas(config)
+    all_items.extend(propostas_abertas)
+
+    # 1b. PNCP — endpoint /publicacao (publicadas recentemente)
+    log("[PNCP] Buscando publicações recentes...")
+    publicacoes = buscar_pncp_publicacao(config)
+    all_items.extend(publicacoes)
+
+    # 1c. SearXNG — queries genéricas (já incluem ano no config.yml)
     for query in config.get("searxng_queries", []):
         results = searxng_search(query)
         all_items.extend(results)
         if results:
             log(f"[SearXNG] '{query}': {len(results)} resultados")
 
-    # 1b. SearXNG — busca direcionada por portal (site:domínio)
+    # 1d. SearXNG — busca direcionada por portal (site:domínio)
     portal_items = buscar_por_portal(portais, config)
     all_items.extend(portal_items)
 
-    # 1c. PNCP API
-    pncp_items = buscar_pncp(config)
-    all_items.extend(pncp_items)
+    log(f"[Total bruto] {len(all_items)} itens coletados")
 
-    log(f"[Total] {len(all_items)} itens coletados")
+    # ── 2. Filtrar: ano corrente + status aberto ──────────────
+    all_items = filtrar_ano_corrente(all_items)
+    log(f"[Filtro ano] {len(all_items)} itens do ano {ANO_CORRENTE}")
 
-    # ── 2. Deduplicar ─────────────────────────────────────────
+    all_items = filtrar_abertas(all_items)
+    log(f"[Filtro status] {len(all_items)} itens sem indicação de encerramento")
+
+    # ── 3. Deduplicar ─────────────────────────────────────────
     unique = deduplicate(all_items)
     log(f"[Dedup] {len(unique)} itens únicos")
 
     if not unique:
-        log("[AVISO] Nenhuma licitação encontrada hoje.")
+        log("[AVISO] Nenhuma licitação aberta encontrada hoje.")
         lic_dir = VAULT_ALFRED / "licitacoes"
         lic_dir.mkdir(parents=True, exist_ok=True)
         (lic_dir / f"{date_str}.md").write_text(
-            f"---\ntitle: Licitações — {date_human}\ndate: {date_str}\n"
-            f"type: licitacoes\nstatus: vazio\n---\n\n"
-            f"# Licitações — {date_human}\n\nNenhuma licitação relevante encontrada hoje.\n",
+            f"---\ntitle: Licitações Abertas — {date_human}\ndate: {date_str}\n"
+            f"type: licitacoes\nstatus: vazio\nfiltro: abertas_{ANO_CORRENTE}\n---\n\n"
+            f"# Licitações Abertas — {date_human}\n\n"
+            f"Nenhuma licitação aberta relevante encontrada para {ANO_CORRENTE}.\n",
             encoding="utf-8",
         )
         return
 
-    # ── 3. Indexar no ChromaDB ────────────────────────────────
+    # ── 4. Indexar no ChromaDB ────────────────────────────────
     collection_id = ensure_collection("licitacoes")
     if collection_id:
         upsert_chromadb(collection_id, unique)
 
-    # ── 4. Classificar relevância com Ollama ──────────────────
+    # ── 5. Classificar relevância com Ollama ──────────────────
     log("[Ollama] Classificando relevância...")
 
     perfil_empresa = (
@@ -401,6 +642,8 @@ def main():
 
 PERFIL DA EMPRESA:
 {perfil_empresa}
+
+IMPORTANTE: Todas as licitações abaixo são ABERTAS (com recebimento de propostas ativo ou publicadas recentemente em {ANO_CORRENTE}).
 
 LICITAÇÕES ENCONTRADAS:
 {licitacoes_text}
@@ -441,7 +684,7 @@ Ordene por score decrescente. Inclua TODAS."""
 
     log(f"[Análise] {len(scored_items)} licitações acima do score mínimo ({score_minimo})")
 
-    # ── 5. Gerar relatório com Ollama ─────────────────────────
+    # ── 6. Gerar relatório com Ollama ─────────────────────────
     log("[Ollama] Gerando relatório...")
 
     stats_uf = gerar_stats_uf(unique)
@@ -456,7 +699,9 @@ Ordene por score decrescente. Inclua TODAS."""
     )
 
     report_prompt = f"""Você é Alfred Pennyworth, assistente de Pedro Netto da empresa AttanoTech.
-Crie um RELATÓRIO DE LICITAÇÕES em português brasileiro.
+Crie um RELATÓRIO DE LICITAÇÕES ABERTAS em português brasileiro.
+
+IMPORTANTE: Este relatório contém SOMENTE licitações ABERTAS (com propostas em andamento) de {ANO_CORRENTE}.
 
 PERFIL:
 {perfil_empresa}
@@ -470,7 +715,7 @@ DISTRIBUIÇÃO POR UF:
 Formato obrigatório:
 
 ## Resumo do dia
-Quantas licitações analisadas, quantas relevantes, quais UFs mais ativas, tendência geral.
+Quantas licitações abertas analisadas, quantas relevantes, quais UFs mais ativas, tendência geral.
 
 ## Oportunidades prioritárias
 As 3-5 licitações mais relevantes (score > 60), cada uma com:
@@ -496,22 +741,24 @@ Seja direto e objetivo. Não use introduções."""
     if not report:
         report = "Relatório não gerado — erro na síntese com Ollama."
 
-    # ── 6. Salvar no vault ────────────────────────────────────
+    # ── 7. Salvar no vault ────────────────────────────────────
     lic_dir = VAULT_ALFRED / "licitacoes"
     lic_dir.mkdir(parents=True, exist_ok=True)
 
     md_content = "\n".join([
         "---",
-        f"title: Licitações — {date_human}",
+        f"title: Licitações Abertas — {date_human}",
         f"date: {date_str}",
         "type: licitacoes",
+        f"filtro: abertas_{ANO_CORRENTE}",
         f"total_encontradas: {len(unique)}",
         f"relevantes: {len(scored_items)}",
         f"portais_consultados: {len(portais)}",
-        f"tags: [licitacoes, attanotech, daily]",
+        f"tags: [licitacoes, attanotech, abertas, daily]",
         "---",
         "",
-        f"# Licitações — {date_human}",
+        f"# Licitações Abertas — {date_human}",
+        f"> Filtro: somente licitações abertas de {ANO_CORRENTE}",
         "",
         report,
         "",
@@ -538,20 +785,20 @@ Seja direto e objetivo. Não use introduções."""
     md_path.write_text(md_content, encoding="utf-8")
     log(f"[Vault] Relatório salvo: {md_path}")
 
-    # ── 7. Notificação desktop ────────────────────────────────
+    # ── 8. Notificação desktop ────────────────────────────────
     try:
         import subprocess
         subprocess.run([
             "notify-send", "--icon=dialog-information",
-            "Alfred — Licitações",
+            "Alfred — Licitações Abertas",
             f"Relatório de {date_human} pronto.\n"
-            f"{len(unique)} encontradas · {len(scored_items)} relevantes · {len(portais)} portais.",
+            f"{len(unique)} abertas · {len(scored_items)} relevantes · {len(portais)} portais.",
         ], timeout=5, capture_output=True)
     except Exception:
         pass
 
     log("=== Scanner concluído ===")
-    log(f"  Total: {len(unique)} | Relevantes: {len(scored_items)} | Portais: {len(portais)}")
+    log(f"  Abertas: {len(unique)} | Relevantes: {len(scored_items)} | Portais: {len(portais)}")
     log(f"  Relatório: {md_path}")
 
 

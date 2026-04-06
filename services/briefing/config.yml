@@ -64,6 +64,14 @@ rss_feeds:
 # (útil para newsletters que publicam em página web)
 extra_urls:
    - "https://www.techdrop.news/"
+   - "https://tldr.tech/"
+   - "https://jack-clark.net/"
+   - "https://stratechery.com/"
+   - "https://www.hipsters.tech/"
+   - "https://tecnoblog.net/tecnocast/"
+   - "https://loopmatinal.libsyn.com/"
+   - "https://hackernewsletter.com/"
+   
 
 # ── Prompt de síntese ─────────────────────────────────────────
 # Personalize o estilo do relatório

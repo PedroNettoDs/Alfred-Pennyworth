@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════
-#  Scanner de Licitações — AttanoTech
-#  Edite este arquivo para ajustar perfil e fontes
+#  Scanner de Licitações v3 — AttanoTech
+#  Agora filtra somente licitações ABERTAS do ano corrente
 # ══════════════════════════════════════════════════════════════
 
 # ── Perfil da empresa ─────────────────────────────────────────
@@ -35,72 +35,64 @@ empresa:
   porte: "ME/EPP"
 
 # ── Arquivo CSV com todos os portais mapeados ─────────────────
-# Colunas: uf,estado,regiao,portal,url,tipo,api
 portais_csv: "portais.csv"
 
 # ── Buscas no SearXNG ─────────────────────────────────────────
-# Queries genéricas (sem site: — o SearXNG busca em tudo)
+# NOTA v3: queries agora incluem "2026" e "aberto/aberta" para
+# filtrar por ano corrente e status. Ao mudar de ano, atualize aqui.
 searxng_queries:
-  - "licitação tecnologia da informação 2026"
-  - "pregão eletrônico TI consultoria"
-  - "licitação software desenvolvimento sistema"
-  - "pregão infraestrutura rede informática"
-  - "licitação suporte técnico informática"
-  - "pregão cloud computing governo"
-  - "licitação segurança informação"
-  - "dispensa licitação serviços TI"
-  - "pregão consultoria transformação digital"
+  - "licitação tecnologia da informação 2026 aberta"
+  - "pregão eletrônico TI consultoria 2026"
+  - "licitação software desenvolvimento sistema 2026 aberta"
+  - "pregão infraestrutura rede informática 2026"
+  - "licitação suporte técnico informática 2026 aberta"
+  - "pregão cloud computing governo 2026"
+  - "licitação segurança informação 2026"
+  - "dispensa licitação serviços TI 2026"
+  - "pregão consultoria transformação digital 2026"
 
 # ── Buscas direcionadas por portal (site:domínio) ─────────────
-# O scanner gera automaticamente queries "site:URL licitação TI"
-# para cada portal do CSV. Abaixo, controle quais tipos incluir.
 busca_por_portal:
   enabled: true
-  # Quais tipos de portal buscar via site: (estadual, federal, privado)
   tipos:
     - estadual
     - federal
     - privado
-  # Filtrar por UFs específicas (vazio = todas)
-  # Exemplo: ["SP", "MG", "RJ", "PR"] para focar no Sudeste+Sul
   ufs_filtro: []
-  # Queries usadas com site:domínio
+  # v3: queries por site também incluem ano
   queries_por_site:
-    - "licitação tecnologia informação"
-    - "pregão TI consultoria software"
+    - "licitação tecnologia informação 2026"
+    - "pregão TI consultoria software 2026 aberto"
 
 # ── PNCP API (Portal Nacional de Contratações Públicas) ───────
-# API pública, sem autenticação — agrega TODOS os estados
+# v3: agora usa DOIS endpoints:
+#   - /proposta  → licitações com propostas ABERTAS (prioridade)
+#   - /publicacao → publicações recentes (com codigoModalidade obrigatório)
 pncp:
   enabled: true
   base_url: "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
   palavras: "tecnologia informação,software,consultoria TI,infraestrutura rede,suporte técnico,cloud computing,segurança informação,desenvolvimento sistemas"
-  dias_retroativos: 3
+  dias_retroativos: 7
   max_items: 50
-  # Filtrar por UFs específicas (vazio = nacional)
   ufs_filtro: []
 
 # ── APIs estaduais com dados abertos ──────────────────────────
 apis_estaduais:
-  # Compras.gov.br (federal — inclui SP que migrou para cá)
   - nome: "Compras.gov.br (Dados Abertos)"
     url: "https://dadosabertos.compras.gov.br/modulo-contratacao/1_consultarContratacao"
     enabled: false
     nota: "Requer análise dos endpoints disponíveis"
 
-  # Portal da Transparência CGU
   - nome: "Portal da Transparência (CGU)"
     url: "https://api.portaldatransparencia.gov.br/api-de-dados/licitacoes"
     enabled: false
     nota: "Requer cadastro para API key"
 
-  # Minas Gerais (PRODEMGE)
   - nome: "Compras MG (PRODEMGE)"
     url: "https://api.prodemge.gov.br/"
     enabled: false
     nota: "API com dados de compras estaduais de MG"
 
-  # Rio de Janeiro (TCE-RJ)
   - nome: "TCE-RJ Dados Abertos"
     url: "https://dados.tcerj.tc.br/api/v1/"
     enabled: false
@@ -115,6 +107,9 @@ filtros:
     - concorrencia
     - dispensa
   score_minimo: 30
+  # v3: novos filtros de status
+  somente_abertas: true
+  ano_corrente_obrigatorio: true
 
 # ── Relatório ─────────────────────────────────────────────────
 max_items_relatorio: 15
