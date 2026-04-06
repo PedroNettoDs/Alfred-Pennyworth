@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Alfred Research Service
+Alfred Research Service v2.0
 Orquestrador: busca web → síntese com LLM → vault Obsidian → sync Knowledge Base
 
 POST /research  {"topic": "...", "num_queries": 4, "results_per_query": 8}
@@ -19,33 +19,33 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="Alfred Researcher", version="1.0.0")
+app = FastAPI(title="Alfred Researcher", version="2.0.0")
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config (tudo via env, zero hardcode) ──────────────────────
 TOKEN        = os.getenv("SHELL_EXECUTOR_TOKEN", "")
 SEARXNG_URL  = os.getenv("SEARXNG_URL", "http://localhost:8888")
 OLLAMA_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-MODEL        = os.getenv("MODEL_CHAT", "qwen3:8b")
-VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", "/mnt/SSD/alfred/vaults/alfred"))
-SERVICES_DIR = Path(__file__).parent.parent
-WEBUI_TOKEN  = os.getenv("WEBUI_TOKEN", "")
+MODEL        = os.getenv("MODEL_CHAT", "llama3.1:8b")
+VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
+WEBUI_TOKEN  = os.getenv("WEBUI_API_TOKEN", "")
 WEBUI_URL    = os.getenv("WEBUI_URL", "http://localhost:3000")
+SCRIPTS_DIR  = Path(__file__).parent.parent / "scripts"
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────
 def check_auth(authorization: Optional[str]):
     if not TOKEN or authorization != f"Bearer {TOKEN}":
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────
 class ResearchRequest(BaseModel):
     topic: str
     num_queries: int = 4
     results_per_query: int = 8
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────
 def slugify(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
@@ -80,9 +80,9 @@ def searxng_search(query: str, num_results: int = 8) -> list[dict]:
 
 def trigger_sync():
     """Dispara sync incremental assíncrono do vault para a Knowledge Base."""
-    sync_script = SERVICES_DIR / "sync_knowledge.py"
+    sync_script = SCRIPTS_DIR / "sync-knowledge.py"
     if sync_script.exists() and WEBUI_TOKEN:
-        env = {**os.environ, "WEBUI_TOKEN": WEBUI_TOKEN, "WEBUI_URL": WEBUI_URL}
+        env = {**os.environ, "WEBUI_API_TOKEN": WEBUI_TOKEN, "WEBUI_URL": WEBUI_URL}
         subprocess.Popen(
             ["python3", str(sync_script)],
             env=env,
@@ -91,7 +91,7 @@ def trigger_sync():
         )
 
 
-# ── Main endpoint ─────────────────────────────────────────────────────────────
+# ── Main endpoint ─────────────────────────────────────────────
 @app.post("/research")
 def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
@@ -105,7 +105,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     topic_dir = VAULT_ALFRED / "research" / slug
     topic_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 1. Gerar consultas de pesquisa ────────────────────────────────────────
+    # ── 1. Gerar consultas de pesquisa ────────────────────────
     queries_prompt = (
         f'Gere {req.num_queries} consultas de pesquisa variadas sobre: "{topic}"\n'
         f"Inclua variações em português e inglês.\n"
@@ -122,7 +122,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
 
     queries = queries[: req.num_queries]
 
-    # ── 2. Executar buscas ────────────────────────────────────────────────────
+    # ── 2. Executar buscas ────────────────────────────────────
     all_results = []
     for q in queries:
         all_results.extend(searxng_search(q, req.results_per_query))
@@ -134,7 +134,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
             seen.add(url)
             unique.append(r)
 
-    # ── 3. Sintetizar com LLM ─────────────────────────────────────────────────
+    # ── 3. Sintetizar com LLM ─────────────────────────────────
     sources_text = "\n\n".join(
         f"[{i+1}] {r.get('title', '')}\nURL: {r.get('url', '')}\n"
         f"{r.get('content', r.get('snippet', ''))[:600]}"
@@ -146,32 +146,21 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
         f"crie uma nota de conhecimento estruturada em português.\n\n"
         f"FONTES:\n{sources_text}\n\n"
         f"Escreva APENAS o conteúdo markdown (sem frontmatter) com estas seções:\n"
-        f"## Visão Geral\n"
-        f"## Conceitos Principais\n"
-        f"## Como Funciona / Arquitetura\n"
-        f"## Aplicações Práticas\n"
-        f"## Referências Importantes\n"
-        f"## Perguntas para Explorar\n\n"
+        f"## Visão Geral\n## Conceitos Principais\n"
+        f"## Como Funciona / Arquitetura\n## Aplicações Práticas\n"
+        f"## Referências Importantes\n## Perguntas para Explorar\n\n"
         f"Seja técnico, preciso e objetivo. "
         f"Não adicione introduções ou meta-comentários sobre o que vai fazer."
     )
 
     synthesis = ollama_generate(synthesis_prompt, timeout=180)
 
-    # ── 4. Salvar no vault ────────────────────────────────────────────────────
-    # sources.md
+    # ── 4. Salvar no vault ────────────────────────────────────
     sources_md_lines = [
-        f"---",
-        f'title: "Fontes — {topic}"',
-        f"date: {date_str}",
-        f"topic: {slug}",
-        f"type: sources",
-        f"---",
-        f"",
-        f"# Fontes: {topic}",
-        f"",
-        f"> Coletado em {dt_str} | {len(unique)} fontes únicas",
-        f"",
+        "---", f'title: "Fontes — {topic}"', f"date: {date_str}",
+        f"topic: {slug}", "type: sources", "---", "",
+        f"# Fontes: {topic}", "",
+        f"> Coletado em {dt_str} | {len(unique)} fontes únicas", "",
     ]
     for i, r in enumerate(unique[:20], 1):
         title   = r.get("title", "Sem título")
@@ -181,61 +170,29 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
 
     (topic_dir / "sources.md").write_text("\n".join(sources_md_lines), encoding="utf-8")
 
-    # synthesis.md
     synthesis_md = "\n".join([
-        "---",
-        f'title: "Síntese — {topic}"',
-        f"date: {date_str}",
-        f"topic: {slug}",
-        "type: synthesis",
-        f"tags: [research, {slug}]",
-        "---",
-        "",
-        f"# {topic}",
-        "",
-        synthesis,
-        "",
-        "---",
-        f"*Sintetizado em {dt_str} a partir de {len(unique)} fontes*",
+        "---", f'title: "Síntese — {topic}"', f"date: {date_str}",
+        f"topic: {slug}", "type: synthesis", f"tags: [research, {slug}]",
+        "---", "", f"# {topic}", "", synthesis, "",
+        "---", f"*Sintetizado em {dt_str} a partir de {len(unique)} fontes*",
     ])
-
     (topic_dir / "synthesis.md").write_text(synthesis_md, encoding="utf-8")
 
-    # index.md
     queries_list = "\n".join(f"- `{q}`" for q in queries)
     index_md = "\n".join([
-        "---",
-        f'title: "{topic}"',
-        f"date: {date_str}",
-        f"topic: {slug}",
-        "type: index",
-        f"tags: [research, {slug}]",
-        "---",
-        "",
-        f"# {topic}",
-        "",
-        f"> Pesquisa realizada em {dt_str}",
-        "",
-        "## Arquivos",
-        "",
-        "- [[synthesis|Síntese e análise]]",
-        f"- [[sources|Fontes ({len(unique)} resultados)]]",
-        "",
-        "## Consultas realizadas",
-        "",
-        queries_list,
-        "",
-        "## Resumo rápido",
-        "",
-        synthesis[:500] + ("..." if len(synthesis) > 500 else ""),
-        "",
-        "---",
-        "*Gerado pelo Alfred Research Service*",
+        "---", f'title: "{topic}"', f"date: {date_str}",
+        f"topic: {slug}", "type: index", f"tags: [research, {slug}]",
+        "---", "", f"# {topic}", "", f"> Pesquisa realizada em {dt_str}", "",
+        "## Arquivos", "", "- [[synthesis|Síntese e análise]]",
+        f"- [[sources|Fontes ({len(unique)} resultados)]]", "",
+        "## Consultas realizadas", "", queries_list, "",
+        "## Resumo rápido", "",
+        synthesis[:500] + ("..." if len(synthesis) > 500 else ""), "",
+        "---", "*Gerado pelo Alfred Research Service*",
     ])
-
     (topic_dir / "index.md").write_text(index_md, encoding="utf-8")
 
-    # ── 5. Disparar sync assíncrono ───────────────────────────────────────────
+    # ── 5. Disparar sync assíncrono ───────────────────────────
     trigger_sync()
 
     return {
@@ -251,4 +208,4 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL, "vault": str(VAULT_ALFRED)}
+    return {"status": "ok", "version": "2.0.0", "model": MODEL, "vault": str(VAULT_ALFRED)}

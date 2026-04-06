@@ -2,7 +2,7 @@
 title: Alfred Shell Executor
 description: Executa comandos reais no sistema do Pedro via Shell Executor local. Use para docker, disco, memória, GPU, rede e processos.
 author: Alfred Pennyworth
-version: 1.0.0
+version: 2.0.0
 """
 
 import requests
@@ -17,8 +17,8 @@ class Tools:
             description="URL do Shell Executor no host",
         )
         token: str = Field(
-            default="4695e1b8e210d1f7e4eefc9d3fb4d91488e950fd2fb0334845dbde0165416879",
-            description="Token de autenticação Bearer",
+            default="",
+            description="Token Bearer — configure nas Valves após importar",
         )
 
     def __init__(self):
@@ -31,7 +31,8 @@ class Tools:
         Quando usar: sempre que Pedro perguntar sobre estado do sistema.
         Exemplos: "docker ps", "df -h", "free -h", "nvidia-smi", "systemctl status alfred-executor", "uptime"
 
-        REGRA: nunca invente ou suponha o resultado. Execute e retorne o output real.
+        REGRA: nunca invente ou suponha o resultado.
+        Execute e retorne o output real.
 
         :param command: Comando a executar. Ex: "docker ps", "nvidia-smi", "df -h"
         :param timeout: Timeout em segundos (padrão 15)
@@ -60,9 +61,9 @@ class Tools:
                 return f"[comando executado, sem output, rc={returncode}]"
 
             elif resp.status_code == 403:
-                return f"[bloqueado]: '{command}' não está na whitelist do executor. Adicione ao ALLOWED_PREFIXES no main.py."
+                return f"[bloqueado]: '{command}' não está na whitelist do executor."
             elif resp.status_code == 401:
-                return "[erro]: token inválido. Verifique o campo token nas Valves da tool."
+                return "[erro]: token inválido. Configure o token nas Valves desta tool."
             else:
                 detail = resp.json().get("detail", "erro desconhecido")
                 return f"[erro {resp.status_code}]: {detail}"

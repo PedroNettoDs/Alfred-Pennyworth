@@ -1,57 +1,39 @@
 # ── Segredos e configuração local ────────────────────────────
 .env
-secrets/
-.venv
-venv/
+.env.bak
+
 # ── Volumes persistentes dos containers ──────────────────────
 data/
 
-# ── Vaults do Obsidian (conteúdo pessoal) ────────────────────
-vaults/alfred/
-vaults/pedro/
+# ── Vaults do Obsidian ───────────────────────────────────────
+vaults/
 
-# ── SearXNG: config local com ajustes e tokens ───────────────
+# ── SearXNG config local ─────────────────────────────────────
 config/searxng/settings.yml
 
-# ── Shell Executor: ambiente Python virtual ───────────────────
-services/shell-executor/venv/
-services/shell-executor/__pycache__/
-services/**/__pycache__/
+# ── Ambientes virtuais Python ─────────────────────────────────
+venv/
+.venv/
+services/*/venv/
+**/__pycache__/
 **/*.pyc
-**/*.pyo
-**/*.pyd
 
 # ── Logs ──────────────────────────────────────────────────────
+logs/*
+!logs/.gitkeep
 *.log
-logs/
 
-# ── N8N: exports com credenciais embutidas ───────────────────
-# (commitar apenas o JSON limpo, sem credenciais)
-services/n8n/
-data/n8n/
-
-# ── Certificados e chaves ─────────────────────────────────────
+# ── Certificados ─────────────────────────────────────────────
 *.pem
 *.key
 *.crt
-*.p12
-*.pfx
 
-# ── Sistemas operacionais ─────────────────────────────────────
+# ── SO e editores ────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-desktop.ini
-
-# ── Editores ──────────────────────────────────────────────────
 .vscode/settings.json
 .idea/
 *.swp
-*.swo
 *~
-
-# ── Arquivos temporários e builds ────────────────────────────
 *.tmp
 *.bak
-*.orig
-__pycache__/
-.cache/

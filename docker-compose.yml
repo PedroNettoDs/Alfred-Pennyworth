@@ -1,6 +1,3 @@
-# docker-compose.yml — Projeto Alfred Pennyworth
-# Lê configuração exclusivamente do .env na mesma pasta
-
 name: alfred
 
 services:

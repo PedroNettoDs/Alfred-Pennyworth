@@ -1,6 +1,6 @@
 """
 title: Alfred Vault Reader
-description: Busca notas no vault do Pedro por termo ou palavra-chave. Use para consultar o conhecimento pessoal do Pedro antes de responder sobre seus projetos, estudos ou anotações.
+description: Busca notas no vault do Pedro por termo ou palavra-chave. Acesso somente leitura.
 author: Alfred Pennyworth
 version: 2.0.0
 """
@@ -14,137 +14,81 @@ class Tools:
     class Valves(BaseModel):
         vault_path: str = Field(
             default="/vaults/pedro",
-            description="Caminho do vault do Pedro dentro do container (read-only)",
-        )
-        max_results: int = Field(
-            default=5, description="Número máximo de notas retornadas por busca"
-        )
-        max_chars_per_note: int = Field(
-            default=800, description="Máximo de caracteres exibidos por nota"
+            description="Caminho do vault do Pedro dentro do container",
         )
 
     def __init__(self):
         self.valves = self.Valves()
 
-    def search_vault(self, query: str, folder: Optional[str] = "") -> str:
+    def search_vault(
+        self, query: str, folder: Optional[str] = "", max_results: Optional[int] = 5
+    ) -> str:
         """
-        Busca notas no vault do Pedro por termo ou palavra-chave.
+        Pesquisa notas no vault do Pedro por palavras-chave.
+        Use quando Pedro perguntar sobre seus próprios projetos, anotações ou decisões.
 
-        Use ANTES de responder perguntas sobre projetos, estudos, anotações
-        ou qualquer coisa que Pedro possa ter documentado no Obsidian.
-        Não use para buscar informações gerais — apenas para consultar o
-        conhecimento pessoal do Pedro.
-
-        :param query: Termo de busca (palavra ou frase)
-        :param folder: Subpasta para limitar a busca (vazio = vault inteiro)
-        :return: Trechos das notas relevantes encontradas
+        :param query: Termos a buscar (case-insensitive)
+        :param folder: Subpasta para restringir a busca (vazio = vault inteiro)
+        :param max_results: Máximo de resultados (padrão: 5)
+        :return: Notas relevantes com trechos
         """
         try:
             vault = Path(self.valves.vault_path)
             target = vault / folder if folder else vault
 
             if not target.exists():
-                return f"Vault não encontrado em: {target}"
+                return f"Pasta '{folder}' não encontrada no vault."
 
-            md_files = list(target.rglob("*.md"))
-            if not md_files:
-                return "Vault vazio ou sem arquivos .md."
+            terms = [t.lower() for t in query.split() if t]
+            if not terms:
+                return "Nenhum termo de busca fornecido."
 
-            terms = query.lower().split()
+            files = sorted(target.rglob("*.md"))
+            if not files:
+                return "Vault vazio."
+
             results = []
-
-            for md_file in md_files:
+            for f in files:
                 try:
-                    content = md_file.read_text(encoding="utf-8", errors="ignore")
+                    content = f.read_text(encoding="utf-8", errors="ignore")
                     content_lower = content.lower()
-
-                    content_score = sum(content_lower.count(t) for t in terms)
-                    title_score = sum(md_file.stem.lower().count(t) for t in terms) * 3
-                    total = content_score + title_score
-
-                    if total > 0:
-                        results.append((total, md_file, content))
+                    name_lower = f.name.lower()
+                    score = sum(content_lower.count(t) for t in terms)
+                    score += sum(10 for t in terms if t in name_lower)
+                    if score > 0:
+                        preview = content[:300].replace("\n", " ").strip()
+                        results.append((score, f, preview))
                 except Exception:
                     continue
 
-            if not results:
-                return f"Nenhuma nota encontrada para '{query}' no vault do Pedro."
-
             results.sort(key=lambda x: x[0], reverse=True)
-            top = results[: self.valves.max_results]
+            top = results[:max_results]
 
-            output = [
-                f"Encontrei {len(results)} nota(s) para '{query}'. Exibindo as {len(top)} mais relevantes:\n"
-            ]
+            if not top:
+                return f"Nenhuma nota encontrada para '{query}'."
 
-            for score, md_file, content in top:
-                rel_path = md_file.relative_to(vault)
-                excerpt = content.strip()[: self.valves.max_chars_per_note]
-                if len(content.strip()) > self.valves.max_chars_per_note:
-                    excerpt += "..."
-                output.append(f"### {md_file.stem}\n📄 {rel_path}\n\n{excerpt}\n\n---")
+            lines = []
+            for score, f, preview in top:
+                rel = f.relative_to(vault)
+                lines.append(f"### {rel} (score: {score})\n{preview}...")
 
-            return "\n".join(output)
+            return f"{len(top)} resultado(s) para '{query}':\n\n" + "\n\n".join(lines)
 
         except Exception as e:
-            return f"[erro ao ler vault]: {str(e)}"
+            return f"[erro]: {str(e)}"
 
     def read_note(self, path: str) -> str:
         """
-        Lê o conteúdo completo de uma nota específica do vault do Pedro.
+        Lê o conteúdo completo de uma nota do vault do Pedro.
 
-        Use quando search_vault encontrar uma nota relevante e você precisar
-        do conteúdo completo para responder com mais detalhes.
-
-        :param path: Caminho relativo da nota (ex: 'projetos/SubMax.md')
+        :param path: Caminho relativo da nota (ex: "projetos/meu-projeto.md")
         :return: Conteúdo completo da nota
         """
         try:
             vault = Path(self.valves.vault_path)
             filepath = vault / path
-
             if not filepath.exists():
                 return f"Nota não encontrada: {path}"
-
-            if filepath.suffix != ".md":
-                return "Apenas arquivos .md são suportados."
-
-            content = filepath.read_text(encoding="utf-8", errors="ignore")
-            return f"### {filepath.stem}\n📄 {path}\n\n{content}"
-
+            return filepath.read_text(encoding="utf-8", errors="ignore")
         except Exception as e:
-            return f"[erro ao ler nota]: {str(e)}"
-
-    def list_vault_folders(self) -> str:
-        """
-        Lista as pastas disponíveis no vault do Pedro.
-        Use para entender a estrutura antes de buscar em uma pasta específica.
-
-        :return: Estrutura de pastas do vault
-        """
-        try:
-            vault = Path(self.valves.vault_path)
-            if not vault.exists():
-                return f"Vault não encontrado em: {vault}"
-
-            folders = sorted(
-                set(
-                    str(p.parent.relative_to(vault))
-                    for p in vault.rglob("*.md")
-                    if str(p.parent.relative_to(vault)) != "."
-                )
-            )
-
-            total = len(list(vault.rglob("*.md")))
-            if not folders:
-                return f"Vault sem subpastas. {total} arquivo(s) na raiz."
-
-            lines = [f"Vault do Pedro — {total} notas em {len(folders)} pasta(s):\n"]
-            for f in folders:
-                count = len(list((vault / f).glob("*.md")))
-                lines.append(f"  📁 {f}/ ({count} notas)")
-
-            return "\n".join(lines)
-
-        except Exception as e:
-            return f"[erro ao listar vault]: {str(e)}"
+            return f"[erro]: {str(e)}"

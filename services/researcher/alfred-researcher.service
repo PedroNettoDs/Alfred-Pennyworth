@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=pedro.netto
-WorkingDirectory=/mnt/SSD/alfred/services/researcher
-EnvironmentFile=/mnt/SSD/alfred/.env
-ExecStart=/mnt/SSD/alfred/services/researcher/venv/bin/uvicorn main:app --host 0.0.0.0 --port 7071
+User=netto
+WorkingDirectory=/home/netto/Alfred-Pennyworth/services/researcher
+EnvironmentFile=/home/netto/Alfred-Pennyworth/.env
+ExecStart=/home/netto/Alfred-Pennyworth/services/researcher/venv/bin/uvicorn main:app --host 0.0.0.0 --port 7071
 Restart=on-failure
 RestartSec=3
 

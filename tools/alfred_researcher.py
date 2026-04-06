@@ -1,22 +1,28 @@
 """
-Alfred Researcher Tool — Open WebUI
-
-Importe este arquivo em Open WebUI:
-  Workspace → Tools → "+" → cole o conteúdo → salve como "alfred_researcher"
-
-Depois adicione o tool ao modelo Alfred Pennyworth:
-  Workspace → Models → Alfred Pennyworth → Tools → habilite "alfred_researcher"
+title: Alfred Researcher
+description: Pesquisa um tema na web, sintetiza com IA e salva notas no vault. Use quando Pedro pedir para pesquisar ou estudar algo.
+author: Alfred Pennyworth
+version: 2.0.0
 """
 
-import json
 import os
-
 import requests
+from pydantic import BaseModel, Field
 
 
 class Tools:
+    class Valves(BaseModel):
+        researcher_url: str = Field(
+            default="http://172.17.0.1:7071",
+            description="URL do Research Service no host",
+        )
+        token: str = Field(
+            default="",
+            description="Token Bearer — configure nas Valves após importar",
+        )
+
     def __init__(self):
-        self._base = "http://172.17.0.1:7071"
+        self.valves = self.Valves()
 
     def research_topic(self, topic: str) -> str:
         """
@@ -27,12 +33,11 @@ class Tools:
         :param topic: O tema a ser pesquisado (ex: "Kubernetes operators", "RAG com LangChain")
         :return: Resultado da pesquisa com caminho das notas salvas no vault
         """
-        token = os.getenv("SHELL_EXECUTOR_TOKEN", "")
         try:
             resp = requests.post(
-                f"{self._base}/research",
+                f"{self.valves.researcher_url}/research",
                 json={"topic": topic, "num_queries": 4, "results_per_query": 8},
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {self.valves.token}"},
                 timeout=300,
             )
             if resp.status_code == 200:
@@ -44,7 +49,7 @@ class Tools:
                     f"- Vault: {data['vault_path']}\n"
                     f"- Arquivos: {', '.join(data['files'])}\n"
                     f"- Consultas usadas: {'; '.join(data['queries_used'])}\n\n"
-                    f"Use list_vault('research/{data[\"slug\"]}') para ver o conteúdo salvo."
+                    f"Use list_vault('research/{data['slug']}') para ver o conteúdo salvo."
                 )
             return f"Erro {resp.status_code}: {resp.text[:300]}"
         except requests.exceptions.Timeout:
