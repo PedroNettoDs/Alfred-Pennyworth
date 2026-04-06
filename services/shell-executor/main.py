@@ -44,6 +44,7 @@ ALLOWED_PREFIXES = [
     "date",
     "curl http://localhost",
     "curl http://127.0.0.1",
+    "/home/netto/Alfred-Pennyworth/services/briefing/run.sh",
 ]
 
 
