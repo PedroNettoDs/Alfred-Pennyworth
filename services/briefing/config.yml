@@ -62,7 +62,7 @@ rss_feeds:
 # ── Newsletters / Fontes extras ───────────────────────────────
 # URLs fixas que o script vai tentar buscar e extrair conteúdo
 # (útil para newsletters que publicam em página web)
-extra_urls: []
+extra_urls:
    - "https://www.techdrop.news/"
 
 # ── Prompt de síntese ─────────────────────────────────────────

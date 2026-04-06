@@ -1,0 +1,37 @@
+uf,estado,regiao,portal,url,tipo,api
+AC,Acre,Norte,Portal de Licitações do Acre,http://licitacao.ac.gov.br/,estadual,nao
+AL,Alagoas,Nordeste,AMGESP,https://amgesp.al.gov.br/,estadual,sim
+AM,Amazonas,Norte,e-Compras Amazonas,https://www.e-compras.am.gov.br/publico/,estadual,nao
+AP,Amapá,Norte,Compras Amapá,https://www.compras.ap.gov.br/,estadual,nao
+BA,Bahia,Nordeste,ComprasNet.BA,https://www.comprasnet.ba.gov.br/,estadual,nao
+CE,Ceará,Nordeste,Portal de Compras CE / LicitaWeb,https://www.portalcompras.ce.gov.br/,estadual,nao
+DF,Distrito Federal,Centro-Oeste,Portal de Compras GDF,https://portal.compras.df.gov.br/,estadual,nao
+ES,Espírito Santo,Sudeste,Portal de Compras ES,https://compras.es.gov.br/,estadual,sim
+GO,Goiás,Centro-Oeste,SISLOG Goiás,https://sislog.go.gov.br/,estadual,nao
+MA,Maranhão,Nordeste,Compras Governamentais MA,https://www.compras.ma.gov.br/portal/,estadual,nao
+MG,Minas Gerais,Sudeste,Portal de Compras MG,https://compras.mg.gov.br/,estadual,sim
+MS,Mato Grosso do Sul,Centro-Oeste,Compras MS,https://www.compras.ms.gov.br/,estadual,sim
+MT,Mato Grosso,Centro-Oeste,Portal de Aquisições MT,https://aquisicoes.seplag.mt.gov.br/home/,estadual,nao
+PA,Pará,Norte,Compras Pará,https://www.seplad.pa.gov.br/compras/,estadual,nao
+PB,Paraíba,Nordeste,Central de Compras PB,https://centraldecompras.pb.gov.br/,estadual,nao
+PE,Pernambuco,Nordeste,PE-Integrado,https://www.peintegrado.pe.gov.br/,estadual,nao
+PI,Piauí,Nordeste,Central de Compras PI,https://centraldecompras.sead.pi.gov.br/,estadual,nao
+PR,Paraná,Sul,Compras Paraná,https://www.administracao.pr.gov.br/Compras,estadual,parcial
+RJ,Rio de Janeiro,Sudeste,Portal de Compras RJ,https://www.compras.rj.gov.br/,estadual,sim
+RN,Rio Grande do Norte,Nordeste,Licita Fácil TCE-RN,https://licitafacil.tce.rn.gov.br/,estadual,nao
+RO,Rondônia,Norte,SUPEL Rondônia,https://rondonia.ro.gov.br/supel/licitacoes/,estadual,nao
+RR,Roraima,Norte,SELC Roraima,https://selc.rr.gov.br/,estadual,nao
+RS,Rio Grande do Sul,Sul,CELIC / Compras Eletrônicas RS,https://www.compras.rs.gov.br/,estadual,nao
+SC,Santa Catarina,Sul,Portal de Compras SC,https://www.portaldecompras.sc.gov.br/,estadual,nao
+SE,Sergipe,Nordeste,ComprasNet Sergipe,https://sistema.comprasnet.se.gov.br/publico/Processos.aspx?pLicit=S,estadual,nao
+SP,São Paulo,Sudeste,Portal de Compras SP / BEC,https://compras.sp.gov.br/,estadual,sim
+TO,Tocantins,Norte,Central de Compras TO,https://centraldecompras.to.gov.br/,estadual,nao
+BR,Federal,Federal,Compras.gov.br,https://www.gov.br/compras/pt-br,federal,sim
+BR,Federal,Federal,PNCP,https://pncp.gov.br/,federal,sim
+BR,Federal,Federal,Portal da Transparência,https://portaldatransparencia.gov.br/licitacoes,federal,sim
+BR,Privado,Privado,Licitações-e (BB),https://licitacoes-e2.bb.com.br/,privado,nao
+BR,Privado,Privado,Portal de Compras Públicas,https://www.portaldecompraspublicas.com.br/,privado,nao
+BR,Privado,Privado,BLL Compras,https://bllcompras.com/,privado,nao
+BR,Privado,Privado,BNC Compras,https://bnccompras.com/,privado,nao
+BR,Privado,Privado,LicitaNet,https://licitanet.com.br/,privado,nao
+BR,Privado,Privado,Licitar Digital,https://licitar.digital/,privado,nao

@@ -18,12 +18,10 @@ import httpx
 import yaml
 import edge_tts
 
-# ── Paths ─────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 CONFIG_FILE  = SCRIPT_DIR / "config.yml"
 
-# ── Env ───────────────────────────────────────────────────────
 SEARXNG_URL  = os.getenv("SEARXNG_URL", "http://localhost:8888")
 OLLAMA_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL        = os.getenv("MODEL_CHAT", "llama3.1:8b")
@@ -38,6 +36,33 @@ def load_config() -> dict:
 def log(msg: str):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+def slugify(text: str, max_len: int = 60) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"-+", "-", text)
+    return text[:max_len].strip("-")
+
+
+def extrair_titulo_manchete(briefing: str) -> str:
+    """Extrai o título da manchete do briefing gerado."""
+    lines = briefing.strip().split("\n")
+    for line in lines:
+        line = line.strip()
+        # Pular headers markdown
+        if line.startswith("## "):
+            continue
+        # Pegar primeira linha com conteúdo real após "Manchete do dia"
+        if line and not line.startswith("#") and len(line) > 15:
+            # Limpar formatação
+            clean = re.sub(r"[*_\[\]()]", "", line).strip()
+            # Pegar até o primeiro ponto ou 80 chars
+            if "." in clean:
+                clean = clean[:clean.index(".")]
+            return clean[:80]
+    return "Tech Briefing"
 
 
 # ── SearXNG ───────────────────────────────────────────────────
@@ -75,7 +100,6 @@ def fetch_rss(feed_config: dict) -> list[dict]:
         items = []
         for entry in feed.entries[:max_items]:
             summary = entry.get("summary", entry.get("description", ""))
-            # Limpar HTML básico
             summary = re.sub(r"<[^>]+>", "", summary)[:400]
             items.append({
                 "title": entry.get("title", ""),
@@ -95,30 +119,22 @@ def deduplicate(items: list[dict]) -> list[dict]:
     seen_urls = set()
     seen_titles = set()
     unique = []
-
     for item in items:
         url = item.get("url", "")
         title_norm = re.sub(r"\s+", " ", item.get("title", "").lower().strip())
-
-        # Pular se URL duplicada
         if url in seen_urls:
             continue
-
-        # Pular se título muito similar
         skip = False
         for seen in seen_titles:
-            # Similaridade simples: se 80%+ das palavras são iguais
             words_new = set(title_norm.split())
             words_seen = set(seen.split())
             if len(words_new) > 2 and len(words_new & words_seen) / max(len(words_new), 1) > 0.8:
                 skip = True
                 break
-
         if not skip:
             seen_urls.add(url)
             seen_titles.add(title_norm)
             unique.append(item)
-
     return unique
 
 
@@ -148,20 +164,20 @@ def main():
     config = load_config()
     today = datetime.now()
     date_str = today.strftime("%Y-%m-%d")
+    time_str = today.strftime("%H:%M")
     date_human = today.strftime("%d/%m/%Y")
+    timestamp = today.strftime("%Y-%m-%d_%H%M")
 
-    log(f"=== Tech Briefing — {date_human} ===")
+    log(f"=== Tech Briefing — {date_human} {time_str} ===")
 
     # ── 1. Coletar notícias ───────────────────────────────────
     all_items = []
 
-    # SearXNG
     for query in config.get("searxng_queries", []):
         results = searxng_search(query)
         all_items.extend(results)
         log(f"[SearXNG] '{query}': {len(results)} resultados")
 
-    # RSS
     for feed in config.get("rss_feeds", []):
         items = fetch_rss(feed)
         all_items.extend(items)
@@ -170,7 +186,7 @@ def main():
 
     # ── 2. Deduplicar e limitar ───────────────────────────────
     max_items = config.get("max_items", 15)
-    unique = deduplicate(all_items)[:max_items * 2]  # margem para o LLM escolher
+    unique = deduplicate(all_items)[:max_items * 2]
     log(f"[Dedup] {len(unique)} itens únicos")
 
     if not unique:
@@ -199,20 +215,30 @@ def main():
 
     log(f"[Ollama] Briefing gerado ({len(briefing)} chars)")
 
-    # ── 5. Salvar markdown ────────────────────────────────────
+    # ── 5. Extrair título da manchete ─────────────────────────
+    titulo_manchete = extrair_titulo_manchete(briefing)
+    titulo_slug = slugify(titulo_manchete)
+    filename_base = f"{timestamp}_{titulo_slug}" if titulo_slug else timestamp
+
+    log(f"[Título] {titulo_manchete}")
+
+    # ── 6. Salvar markdown ────────────────────────────────────
     briefing_dir = VAULT_ALFRED / "briefings"
     briefing_dir.mkdir(parents=True, exist_ok=True)
 
     md_content = "\n".join([
         "---",
-        f"title: Tech Briefing — {date_human}",
+        f"title: \"{titulo_manchete}\"",
         f"date: {date_str}",
+        f"time: \"{time_str}\"",
         f"type: briefing",
         f"sources: {len(unique)}",
         f"tags: [briefing, tech, daily]",
         "---",
         "",
-        f"# Tech Briefing — {date_human}",
+        f"# {titulo_manchete}",
+        "",
+        f"> Briefing de {date_human} às {time_str} · {len(unique)} fontes",
         "",
         briefing,
         "",
@@ -225,11 +251,11 @@ def main():
     for i, item in enumerate(unique[:20], 1):
         md_content += f"{i}. [{item['title']}]({item['url']}) — *{item['source']}*\n"
 
-    md_path = briefing_dir / f"{date_str}.md"
+    md_path = briefing_dir / f"{filename_base}.md"
     md_path.write_text(md_content, encoding="utf-8")
     log(f"[Vault] Markdown salvo: {md_path}")
 
-    # ── 6. Gerar versão para áudio ────────────────────────────
+    # ── 7. Gerar versão para áudio ────────────────────────────
     log("[Ollama] Gerando versão para áudio...")
     audio_prompt = config.get("audio_prompt", "Reescreva para áudio.") + \
         f"\n\nBRIEFING:\n{briefing}"
@@ -240,30 +266,31 @@ def main():
         log("[AVISO] Falha na versão áudio, usando texto original.")
         audio_text = re.sub(r"[#*\[\]\(\)]", "", briefing)
 
-    # ── 7. Gerar MP3 via edge-tts ─────────────────────────────
+    # ── 8. Gerar MP3 via edge-tts ─────────────────────────────
     voice = config.get("tts_voice", "pt-BR-AntonioNeural")
-    mp3_path = briefing_dir / f"{date_str}.mp3"
+    mp3_path = briefing_dir / f"{filename_base}.mp3"
 
     log(f"[TTS] Gerando áudio com voz {voice}...")
     asyncio.run(generate_tts(audio_text, voice, mp3_path))
     log(f"[TTS] Áudio salvo: {mp3_path}")
 
-    # ── 8. Notificação desktop ────────────────────────────────
+    # ── 9. Notificação desktop ────────────────────────────────
     try:
         subprocess.run([
-            "notify-send",
-            "--icon=dialog-information",
-            "--urgency=normal",
+            "notify-send", "--icon=dialog-information", "--urgency=normal",
             "Alfred — Tech Briefing",
-            f"Seu briefing de {date_human} está pronto.\n"
-            f"{len(unique)} fontes · Áudio disponível.",
+            f"{titulo_manchete}\n{len(unique)} fontes · Áudio disponível.",
         ], timeout=5, capture_output=True)
     except Exception:
-        pass  # Sem notificação não é fatal
+        pass
 
     log("=== Briefing concluído ===")
-    log(f"  Markdown: {md_path}")
-    log(f"  Áudio:    {mp3_path}")
+    log(f"  Título:   {titulo_manchete}")
+    log(f"  Markdown: {md_path.name}")
+    log(f"  Áudio:    {mp3_path.name}")
+
+    # Imprimir path do arquivo para o tool capturar
+    print(f"BRIEFING_FILE={md_path}")
 
 
 if __name__ == "__main__":
