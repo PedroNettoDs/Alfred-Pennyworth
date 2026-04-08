@@ -1,0 +1,126 @@
+# ══════════════════════════════════════════════════════════════
+#  Alfred — Perfis e definições centrais
+#  Fonte única de verdade. Editar aqui propaga pra todos os serviços.
+# ══════════════════════════════════════════════════════════════
+
+perfis:
+  pedro_dev:
+    descricao: "Pedro Netto, estudante de ADS, foco em IA local e self-hosting"
+    interesses_quentes:
+      - LLMs locais
+      - RAG e vector databases
+      - Ollama e modelos open-source
+      - FastAPI e Python
+      - homelab e self-hosting
+    interesses_mornos:
+      - Kubernetes
+      - observabilidade
+      - Rust
+    excluir:
+      - crypto
+      - NFT
+      - blockchain marketing
+    idiomas: [pt, en]
+    tom: "técnico, direto, humor seco britânico"
+
+  attanotech:
+    descricao: "Consultoria de TI, ME/EPP, atende interior de SP"
+    area: "Consultoria de tecnologia e projetos/implantações de TI"
+    servicos:
+      - consultoria em TI
+      - desenvolvimento de software
+      - implantação de sistemas
+      - infraestrutura de redes
+      - cloud computing
+      - segurança da informação
+    palavras_chave:
+      - tecnologia da informação
+      - desenvolvimento de software
+      - consultoria TI
+      - infraestrutura
+      - cloud
+      - segurança cibernética
+    regiao_alvo: [SP, MG, PR]
+    porte: "ME/EPP"
+    valor_max: 5000000
+    tom: "executivo, foco em oportunidades concretas"
+
+# ── Coleções de fontes reutilizáveis ──────────────────────────
+fontes:
+  searxng_tech_geral:
+    tipo: searxng
+    queries:
+      - { q: "Desenvolvimento e Engenharia de Software", cat: "news,it" }
+      - { q: "Cloud e Infraestrutura", cat: "news,it" }
+      - { q: "Cibersegurança", cat: "news,it" }
+      - { q: "Open Source", cat: "news,it" }
+      - { q: "hardware technology news", cat: "news,it" }
+
+  searxng_tech_brasil:
+    tipo: searxng
+    queries:
+      - { q: "notícias tecnologia Brasil", cat: "news,it" }
+      - { q: "startups brasileiras tech", cat: "news,it" }
+
+  rss_tech_internacional:
+    tipo: rss
+    feeds:
+      - { nome: "Hacker News", url: "https://hnrss.org/frontpage", max: 10 }
+      - { nome: "Ars Technica", url: "https://feeds.arstechnica.com/arstechnica/index", max: 5 }
+      - { nome: "The Verge", url: "https://www.theverge.com/rss/index.xml", max: 5 }
+      - { nome: "TechCrunch", url: "https://techcrunch.com/feed/", max: 5 }
+      - { nome: "InfoQ", url: "https://feed.infoq.com/", max: 5 }
+      - { nome: "Lobsters", url: "https://lobste.rs/rss", max: 5 }
+      - { nome: "TLDR", url: "https://tldr.tech/api/rss/tech", max: 10 }
+      - { nome: "MIT Tech Review", url: "https://www.technologyreview.com/feed/", max: 5 }
+
+  rss_tech_brasil:
+    tipo: rss
+    feeds:
+      - { nome: "Tecnoblog", url: "https://tecnoblog.net/feed/", max: 5 }
+
+  pncp_licitacoes_ti:
+    tipo: pncp
+    palavras: [tecnologia informação, software, consultoria TI, infraestrutura rede, suporte técnico, cloud computing, segurança informação, desenvolvimento sistemas]
+    modalidades: [pregao, dispensa, concorrencia]
+    dias_retroativos: 7
+    max_items: 50
+
+# ── Definições de briefings ───────────────────────────────────
+briefings:
+  matinal_tech:
+    perfil: pedro_dev
+    fontes: [searxng_tech_geral, rss_tech_internacional, rss_tech_brasil]
+    horario: "07:00"
+    max_items: 15
+    formato: [markdown, audio]
+    tts_voice: "pt-BR-FranciscaNeural"
+    template_prompt: "briefing_tecnico"
+
+  vespertino_mercado:
+    perfil: attanotech
+    fontes: [searxng_tech_brasil, rss_tech_brasil]
+    horario: "18:00"
+    max_items: 10
+    formato: [markdown]
+    template_prompt: "briefing_executivo"
+
+# ── Definições de scanners ────────────────────────────────────
+scanners:
+  licitacoes_attanotech:
+    perfil: attanotech
+    fontes: [pncp_licitacoes_ti]
+    score_minimo: 30
+    max_relatorio: 15
+    filtros:
+      somente_abertas: true
+      ano_corrente_obrigatorio: true
+
+# ── Defaults globais ──────────────────────────────────────────
+defaults:
+  vault_alfred_subfolders:
+    briefings: "briefings"
+    research: "research"
+    licitacoes: "licitacoes"
+    decisions: "decisions"
+    logs: "logs"

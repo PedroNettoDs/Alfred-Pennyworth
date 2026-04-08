@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Alfred Research Service v3.1
-Orquestrador: cache exato → cache semântico → busca web → síntese LLM → vault → sync KB
+Alfred Research Service v3.0
+Orquestrador: cache → busca web → síntese LLM → vault Obsidian → sync KB
 
 POST /research  {"topic": "...", "num_queries": 4, "results_per_query": 8,
                   "perfil": null, "refresh": false}
@@ -22,13 +22,10 @@ from pydantic import BaseModel
 
 # ── Shared libs ───────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from _shared.lib_alfred import (
-    log, slugify, ollama_generate, ollama_embed, searxng_search, vault_write,
-)
+from _shared.lib_alfred import log, slugify, ollama_generate, searxng_search, vault_write
 from _shared.perfis import get_perfil
-import _shared.lib_chromadb as chroma
 
-app = FastAPI(title="Alfred Researcher", version="3.1.0")
+app = FastAPI(title="Alfred Researcher", version="3.0.0")
 
 # ── Config ────────────────────────────────────────────────────
 TOKEN        = os.getenv("SHELL_EXECUTOR_TOKEN", "")
@@ -37,11 +34,6 @@ WEBUI_TOKEN  = os.getenv("WEBUI_API_TOKEN", "")
 WEBUI_URL    = os.getenv("WEBUI_URL", "http://localhost:3000")
 SCRIPTS_DIR  = Path(__file__).parent.parent / "scripts"
 CACHE_DAYS   = 7
-CHROMA_COLLECTION = "research_alfred"
-SEMANTIC_DIST_MAX = 0.25   # distância coseno ≤ 0.25 ≡ similaridade ≥ 0.75
-
-# collection_id lazy-init (None enquanto ChromaDB não for contactado)
-_chroma_id: Optional[str] = None
 
 
 # ── Auth ──────────────────────────────────────────────────────
@@ -59,47 +51,7 @@ class ResearchRequest(BaseModel):
     refresh: bool = False
 
 
-# ── ChromaDB helpers ──────────────────────────────────────────
-def _get_chroma() -> Optional[str]:
-    """Retorna collection_id, inicializando na primeira chamada. None se offline."""
-    global _chroma_id
-    if _chroma_id is None:
-        _chroma_id = chroma.ensure_collection(CHROMA_COLLECTION)
-        if _chroma_id:
-            log(f"[researcher] ChromaDB OK — collection '{CHROMA_COLLECTION}' id={_chroma_id[:8]}…")
-        else:
-            log("[researcher] ChromaDB indisponível — operando sem cache semântico")
-    return _chroma_id
-
-
-def _index_synthesis(slug: str, topic: str, date_str: str, topic_dir: Path, synthesis: str):
-    """Indexa a síntese no ChromaDB de forma não-bloqueante. Falha silenciosa."""
-    cid = _get_chroma()
-    if not cid:
-        return
-
-    embedding = ollama_embed(topic)
-    if not embedding:
-        log("[researcher] ollama_embed retornou vazio — pulando indexação ChromaDB")
-        return
-
-    ok = chroma.upsert_document(
-        collection_id=cid,
-        doc_id=slug,
-        text=topic,
-        metadata={
-            "slug":       slug,
-            "topic":      topic,
-            "date":       date_str,
-            "vault_path": str(topic_dir),
-        },
-        embedding=embedding,
-    )
-    if ok:
-        log(f"[researcher] ChromaDB indexado — {slug}")
-
-
-# ── Cache exato ───────────────────────────────────────────────
+# ── Cache ─────────────────────────────────────────────────────
 def _cache_valid(synthesis_path: Path) -> bool:
     """True se synthesis.md existe e tem menos de CACHE_DAYS dias."""
     if not synthesis_path.exists():
@@ -109,72 +61,13 @@ def _cache_valid(synthesis_path: Path) -> bool:
 
 
 def _read_synthesis(synthesis_path: Path) -> str:
-    """Lê synthesis.md removendo frontmatter YAML."""
+    """Lê synthesis.md removendo o frontmatter YAML."""
     raw = synthesis_path.read_text(encoding="utf-8")
     if raw.startswith("---"):
         end = raw.find("\n---", 3)
         if end != -1:
             return raw[end + 4:].lstrip("\n")
     return raw
-
-
-# ── Cache semântico ───────────────────────────────────────────
-def _meta_age_ok(metadata: dict) -> bool:
-    """True se a data do metadata está dentro de CACHE_DAYS."""
-    date_str = metadata.get("date", "")
-    try:
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        return (datetime.now() - date) < timedelta(days=CACHE_DAYS)
-    except Exception:
-        return False
-
-
-def check_semantic_cache(topic: str) -> Optional[dict]:
-    """
-    Gera embedding do topic e busca no ChromaDB.
-    Retorna dict com resultado se similaridade ≥ 0.75 e idade ≤ 7 dias, None caso contrário.
-    """
-    cid = _get_chroma()
-    if not cid:
-        return None
-
-    embedding = ollama_embed(topic)
-    if not embedding:
-        return None
-
-    results = chroma.query_similar(cid, embedding, n_results=3)
-    for r in results:
-        distance = r.get("distance", 1.0)
-        if distance > SEMANTIC_DIST_MAX:
-            continue
-
-        metadata = r.get("metadata", {})
-        if not _meta_age_ok(metadata):
-            continue
-
-        matched_slug = metadata.get("slug", r["id"])
-        matched_topic = metadata.get("topic", matched_slug)
-        vault_path_str = metadata.get("vault_path", "")
-        vault_path = Path(vault_path_str) if vault_path_str else VAULT_ALFRED / "research" / matched_slug
-        synthesis_path = vault_path / "synthesis.md"
-
-        # Confirma que o arquivo ainda existe no disco
-        if not synthesis_path.exists():
-            log(f"[researcher] Semantic hit {matched_slug} mas synthesis.md não existe — ignorando")
-            continue
-
-        similarity = round(1.0 - distance, 4)
-        log(f"[researcher] SEMANTIC HIT — '{matched_topic}' (distância={distance:.4f}, similaridade={similarity:.4f})")
-
-        return {
-            "matched_slug":  matched_slug,
-            "matched_topic": matched_topic,
-            "similarity":    similarity,
-            "vault_path":    str(vault_path),
-            "synthesis":     _read_synthesis(synthesis_path),
-        }
-
-    return None
 
 
 # ── Perfil ────────────────────────────────────────────────────
@@ -221,48 +114,28 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
 
     log(f"[researcher] topic={topic!r} slug={slug} perfil={req.perfil} refresh={req.refresh}")
 
-    # ── 1. Cache exato ────────────────────────────────────────
+    # ── Cache hit ─────────────────────────────────────────────
     if not req.refresh and _cache_valid(synthesis_path):
-        log(f"[researcher] CACHE EXATO HIT — {slug}")
+        log(f"[researcher] CACHE HIT — {slug}")
         return {
-            "status":     "success",
-            "topic":      topic,
-            "slug":       slug,
+            "status": "success",
+            "topic": topic,
+            "slug": slug,
             "vault_path": str(topic_dir),
-            "cached":     True,
-            "cache_type": "exact",
-            "synthesis":  _read_synthesis(synthesis_path),
-            "files":      ["index.md", "synthesis.md", "sources.md"],
+            "cached": True,
+            "synthesis": _read_synthesis(synthesis_path),
+            "files": ["index.md", "synthesis.md", "sources.md"],
         }
 
-    # ── 2. Cache semântico ────────────────────────────────────
-    if not req.refresh:
-        sem = check_semantic_cache(topic)
-        if sem:
-            return {
-                "status":        "success",
-                "topic":         topic,
-                "slug":          slug,
-                "cached":        True,
-                "cache_type":    "semantic",
-                "matched_topic": sem["matched_topic"],
-                "matched_slug":  sem["matched_slug"],
-                "similarity":    sem["similarity"],
-                "vault_path":    sem["vault_path"],
-                "synthesis":     sem["synthesis"],
-                "files":         ["index.md", "synthesis.md", "sources.md"],
-            }
-
-    # ── 3. Pesquisa nova ──────────────────────────────────────
     topic_dir.mkdir(parents=True, exist_ok=True)
     now      = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     dt_str   = now.strftime("%d/%m/%Y %H:%M")
 
-    perfil_ctx  = _build_perfil_context(req.perfil) if req.perfil else ""
+    perfil_ctx = _build_perfil_context(req.perfil) if req.perfil else ""
     perfil_hint = f"\n{perfil_ctx}\n" if perfil_ctx else ""
 
-    # 3a. Gerar consultas
+    # ── 1. Gerar consultas ────────────────────────────────────
     queries_prompt = (
         f'Gere {req.num_queries} consultas de pesquisa variadas sobre: "{topic}"\n'
         f"{perfil_hint}"
@@ -280,7 +153,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
 
     queries = queries[: req.num_queries]
 
-    # 3b. Buscar
+    # ── 2. Buscar ─────────────────────────────────────────────
     all_results = []
     for q in queries:
         all_results.extend(searxng_search(q, max_results=req.results_per_query))
@@ -292,7 +165,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
             seen.add(url)
             unique.append(r)
 
-    # 3c. Sintetizar
+    # ── 3. Sintetizar ─────────────────────────────────────────
     sources_text = "\n\n".join(
         f"[{i+1}] {r.get('title', '')}\nURL: {r.get('url', '')}\n"
         f"{r.get('snippet', '')[:600]}"
@@ -327,9 +200,9 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
         )
     vault_write(VAULT_ALFRED, f"research/{slug}", "sources", sources_body, frontmatter={
         "title": f"Fontes — {topic}",
-        "date":  date_str,
+        "date": date_str,
         "topic": slug,
-        "type":  "sources",
+        "type": "sources",
     })
 
     synthesis_body = (
@@ -339,10 +212,10 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     )
     vault_write(VAULT_ALFRED, f"research/{slug}", "synthesis", synthesis_body, frontmatter={
         "title": f"Síntese — {topic}",
-        "date":  date_str,
+        "date": date_str,
         "topic": slug,
-        "type":  "synthesis",
-        "tags":  ["research", slug],
+        "type": "synthesis",
+        "tags": ["research", slug],
     })
 
     queries_list = "\n".join(f"- `{q}`" for q in queries)
@@ -359,38 +232,32 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     )
     vault_write(VAULT_ALFRED, f"research/{slug}", "index", index_body, frontmatter={
         "title": topic,
-        "date":  date_str,
+        "date": date_str,
         "topic": slug,
-        "type":  "index",
-        "tags":  ["research", slug],
+        "type": "index",
+        "tags": ["research", slug],
     })
 
-    # ── 5. Indexar no ChromaDB ────────────────────────────────
-    _index_synthesis(slug, topic, date_str, topic_dir, synthesis)
-
-    # ── 6. Sync KB ────────────────────────────────────────────
+    # ── 5. Sync ───────────────────────────────────────────────
     trigger_sync()
 
     return {
-        "status":       "success",
-        "topic":        topic,
-        "slug":         slug,
-        "vault_path":   str(topic_dir),
-        "cached":       False,
-        "cache_type":   None,
+        "status": "success",
+        "topic": topic,
+        "slug": slug,
+        "vault_path": str(topic_dir),
+        "cached": False,
         "queries_used": queries,
         "sources_found": len(unique),
-        "files":        ["index.md", "synthesis.md", "sources.md"],
+        "files": ["index.md", "synthesis.md", "sources.md"],
     }
 
 
 @app.get("/health")
 def health():
-    chroma_ok = _get_chroma() is not None
     return {
-        "status":     "ok",
-        "version":    "3.1.0",
-        "vault":      str(VAULT_ALFRED),
+        "status": "ok",
+        "version": "3.0.0",
+        "vault": str(VAULT_ALFRED),
         "cache_days": CACHE_DAYS,
-        "chromadb":   "online" if chroma_ok else "offline",
     }
