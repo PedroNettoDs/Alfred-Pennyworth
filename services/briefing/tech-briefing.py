@@ -477,12 +477,13 @@ def _build_clustered_news_text(
             reverse=True,
         )
         anchor = sorted_itms[0]
-        lines  = [f"TEMA {tema_num}: {anchor.get('title', '')}"]
+        lines  = [f"NOTÍCIA: {anchor.get('title', '')} | URL: {anchor.get('url', '')}"]
         for item in sorted_itms:
             source  = item.get("source", "")
             title   = item.get("title", "")
-            snippet = item.get("snippet", "")[:200]
-            lines.append(f"  [{source}] {title} — {snippet}")
+            url     = item.get("url", "")
+            snippet = item.get("snippet", "")[:300]
+            lines.append(f"  [{source}] {title} | {url}\n  Contexto: {snippet}")
 
         destaques_parts.append("\n".join(lines))
 
@@ -500,6 +501,84 @@ def _build_clustered_news_text(
     news_text_radar = "\n".join(radar_lines)
 
     return news_text_destaques, news_text_radar
+
+
+# ── Extração de tópicos do briefing gerado ───────────────────
+def _extrair_topicos_do_briefing(briefing_text: str, n: int = 3) -> list[str]:
+    """
+    Extrai N conceitos/termos-chave CURTOS do briefing para definição posterior.
+    Retorna nomes próprios, tecnologias ou conceitos específicos — nunca títulos completos.
+    """
+    prompt = (
+        f"Leia o briefing abaixo e extraia exatamente {n} CONCEITOS-CHAVE curtos (1 a 3 palavras cada).\n"
+        f"Regras:\n"
+        f"- Extraia NOMES PRÓPRIOS, TECNOLOGIAS ou CONCEITOS ESPECÍFICOS mencionados\n"
+        f"- NUNCA copie títulos ou frases longas — apenas o conceito central\n"
+        f"- Prefira termos que um leitor possa não conhecer e que merecem explicação\n"
+        f'- Responda APENAS um JSON array. Exemplo: ["Artemis II", "Windows Insider", "mantle plume"]\n\n'
+        f"BRIEFING:\n{briefing_text[:2000]}"
+    )
+    raw = ollama_generate(prompt, timeout=60).strip()
+    try:
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if match:
+            topicos = json.loads(match.group())
+            if isinstance(topicos, list):
+                # Filtra entradas longas (mais de 5 palavras = provavelmente um título)
+                return [str(t).strip() for t in topicos if t and len(str(t).split()) <= 5][:n]
+    except Exception as e:
+        log(f"[Palavras-chave] Falha ao extrair tópicos: {e}")
+    return []
+
+
+# ── Seção de palavras-chave (substitui Radar vazio) ──────────
+def _build_keywords_section(interesses: list[str], max_termos: int = 3) -> str:
+    """
+    Quando não há itens de Radar, para cada interesse do perfil:
+      1. Busca 1 resultado no SearXNG com query "o que é: <termo>"
+      2. Usa o snippet como contexto e pede ao LLM uma definição concisa
+    Retorna string vazia se SearXNG e LLM não responderem.
+    """
+    if not interesses:
+        return ""
+
+    termos = interesses[:max_termos]
+    blocos: list[str] = []
+
+    for termo in termos:
+        resultados = searxng_search(f"o que é: {termo}", categories="general,it", max_results=1)
+
+        snippet_ctx = ""
+        link_ref    = ""
+        if resultados:
+            r = resultados[0]
+            snippet_ctx = r.get("snippet", "").strip()[:400]
+            url   = r.get("url", "")
+            title = r.get("title", "").strip()
+            if url and title:
+                link_ref = f"\n\n*Referência: [{title}]({url})*"
+
+        ctx_bloco = (
+            f"\n\nContexto encontrado na web (use SOMENTE se for claramente sobre '{termo}' — "
+            f"se o conteúdo não tiver relação direta, IGNORE completamente e use seu próprio conhecimento):\n{snippet_ctx}"
+            if snippet_ctx else ""
+        )
+        prompt = (
+            f"Em 2-3 frases diretas, explique o que é '{termo}' para um desenvolvedor."
+            f"{ctx_bloco}"
+            f"\n\nResponda apenas a definição, sem introdução nem prefixo."
+        )
+
+        definicao = ollama_generate(prompt, timeout=60).strip()
+        if not definicao:
+            continue
+
+        blocos.append(f"### {termo}\n\n{definicao}{link_ref}")
+
+    if not blocos:
+        return ""
+
+    return "## Palavras-chave\n\n" + "\n\n".join(blocos)
 
 
 # ── Fluxo briefing nomeado ────────────────────────────────────
@@ -598,11 +677,24 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         if len(briefing_text) < original_len:
             log("[seen] Seção 'Acompanhamento' removida (sem continuações)")
 
+    # ── Palavras-chave (substitui Radar quando vazio) ─────────
+    keywords_section = ""
+    if not news_text_radar:
+        log("[Palavras-chave] Radar vazio — extraindo tópicos do briefing...")
+        topicos = _extrair_topicos_do_briefing(briefing_text, n=3)
+        log(f"[Palavras-chave] Tópicos extraídos: {topicos}")
+        if topicos:
+            keywords_section = _build_keywords_section(topicos, max_termos=3)
+            if keywords_section:
+                log(f"[Palavras-chave] Seção gerada ({len(keywords_section)} chars)")
+            else:
+                log("[Palavras-chave] SearXNG sem resultados — seção omitida")
+
     # ── Título via LLM ────────────────────────────────────────
     log("[Ollama] Extraindo título...")
     titulo_manchete = generate_title_via_llm(briefing_text)
     titulo_slug     = slugify(titulo_manchete)
-    filename_base   = f"{timestamp}_{briefing_name}_{titulo_slug}" if titulo_slug else f"{timestamp}_{briefing_name}"
+    filename_base   = f"{date_str}_{titulo_slug}" if titulo_slug else f"{date_str}_{briefing_name}"
 
     log(f"[Título] {titulo_manchete}")
     log(f"[Slug]   {titulo_slug}")
@@ -613,6 +705,23 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
 
     # Templates instruem "não coloque título na primeira linha" — usar direto
     briefing_body = briefing_text
+    if keywords_section:
+        briefing_body = briefing_body.rstrip() + "\n\n" + keywords_section
+
+    # ── Fontes citadas — somente as que aparecem no briefing ────
+    urls_citadas = set(re.findall(r'https?://[^\s\)\]"]+', briefing_body))
+    fontes_citadas = [
+        item for item in unique
+        if item.get("url") in urls_citadas
+    ]
+    # Fallback: se nenhuma URL do briefing bateu (LLM não usou links),
+    # usa os itens dos clusters de destaque (novas_clusterizadas)
+    if not fontes_citadas:
+        urls_destaques = set(re.findall(r'https?://[^\s\)\]"]+', news_text_destaques))
+        fontes_citadas = [item for item in unique if item.get("url") in urls_destaques]
+
+    n_citadas = len(fontes_citadas)
+    log(f"[Fontes] {n_citadas}/{len(unique)} itens citados no briefing")
 
     md_content = "\n".join([
         "---",
@@ -622,22 +731,22 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         f"briefing: {briefing_name}",
         f"perfil: {briefing_cfg['perfil']}",
         "type: briefing",
-        f"sources: {len(unique)}",
+        f"sources: {n_citadas}",
         f"tags: [briefing, {briefing_name}]",
         "---",
         "",
         f"# {titulo_manchete}",
         "",
-        f"> {briefing_name} · {date_human} às {time_str} · {len(unique)} fontes",
+        f"> {briefing_name} · {date_human} às {time_str} · {n_citadas} fonte(s) citada(s)",
         "",
         briefing_body,
         "",
         "---",
         "",
-        "## Fontes coletadas",
+        "## Fontes citadas",
         "",
     ])
-    for i, item in enumerate(unique[:20], 1):
+    for i, item in enumerate(fontes_citadas, 1):
         md_content += f"{i}. [{item['title']}]({item['url']}) — *{item['source']}*\n"
 
     md_path = briefing_dir / f"{filename_base}.md"
@@ -710,14 +819,28 @@ def _run_adhoc(tema: str):
     log(f"[ad-hoc] slug: {slug}")
 
     # ── Coletar ───────────────────────────────────────────────
-    results = searxng_search(tema, categories="general,news", max_results=15)
-    log(f"[SearXNG] '{tema}': {len(results)} resultados")
+    # Usa query qualificada para reduzir resultados irrelevantes por polissemia
+    query_qualificada = f'"{tema}" o que é'
+    results = searxng_search(query_qualificada, categories="general,news", max_results=15)
+    log(f"[SearXNG] '{query_qualificada}': {len(results)} resultados")
 
-    if not results:
+    # Filtra resultados que não mencionam o tema no título ou snippet
+    tema_lower = tema.lower()
+    results_filtrados = [
+        r for r in results
+        if tema_lower in (r.get("title", "") + r.get("snippet", "")).lower()
+    ]
+    log(f"[Filtro] {len(results_filtrados)}/{len(results)} resultados com '{tema}' no conteúdo")
+
+    # Fallback: se o filtro zerou, usa os resultados originais
+    if not results_filtrados:
+        results_filtrados = results
+
+    if not results_filtrados:
         log(f"[ERRO] Nenhum resultado encontrado para '{tema}'. Abortando.")
         sys.exit(1)
 
-    unique = deduplicate_by_url_and_title(results)
+    unique = deduplicate_by_url_and_title(results_filtrados)
     log(f"[Dedup] {len(unique)} itens únicos")
 
     # ── Síntese via template ──────────────────────────────────
@@ -743,7 +866,7 @@ def _run_adhoc(tema: str):
     titulo = generate_title_via_llm(resumo)
     if not titulo or titulo == "Tech Briefing":
         titulo = tema.title()
-    filename_base = f"{timestamp}_adhoc_{slug}"
+    filename_base = f"{date_str}_{slug}"
 
     log(f"[Título] {titulo}")
     log(f"[Arquivo] {filename_base}")

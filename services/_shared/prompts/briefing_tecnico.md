@@ -51,10 +51,13 @@ Formato:
 A notícia mais impactante em 2-3 frases.
 
 ## Destaques
-As notícias abaixo estão agrupadas em TEMAs — cada TEMA é um cluster de matérias sobre o mesmo assunto, coletadas de fontes diferentes. Para cada TEMA, escreva uma análise integrada usando todas as fontes listadas, não trate cada fonte como item separado. Apresente 3 a 5 TEMAs com:
-- **Tema** (título do cluster em suas palavras)
-- Síntese de 2-3 frases integrando o que as diferentes fontes dizem sobre o mesmo assunto
-- Fontes entre parênteses
+Apresente 3 a 5 notícias/grupos de notícias relacionadas. Para cada uma:
+
+1. **Título em negrito com link markdown** — use o título da notícia principal como texto do link, e a URL como destino. Formato obrigatório: `**[Título da notícia](URL)**`
+2. Análise de 3-5 frases que responda: o que aconteceu, por que importa, qual o impacto provável e o que fica em aberto. Se houver múltiplas fontes sobre o mesmo assunto, integre-as numa análise única — não liste cada uma separado.
+3. Fontes no final, com links markdown: `*([Ars Technica](URL_ars), [The Verge](URL_verge))*`. Use as URLs exatas fornecidas em cada notícia — nunca escreva uma URL de memória.
+
+NUNCA omita o link do título. NUNCA omita as fontes com link. Se o assunto tiver mais de uma notícia relacionada, inclua todas as fontes com seus respectivos links no item 3.
 
 ## Tendências
 Padrões ou movimentos que conectam os temas de hoje (2-3 frases).

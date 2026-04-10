@@ -1,0 +1,21 @@
+[Unit]
+Description=Alfred Briefing Vespertino (vespertino_mercado)
+After=network.target
+# Disparado pelo alfred-briefing-vespertino.timer às 18:00 diariamente
+
+[Service]
+Type=oneshot
+User=netto
+WorkingDirectory=/home/netto/Alfred-Pennyworth/services/briefing
+EnvironmentFile=/home/netto/Alfred-Pennyworth/.env
+ExecStart=/home/netto/Alfred-Pennyworth/services/briefing/run.sh vespertino_mercado
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+# INSTALAÇÃO:
+# sudo cp alfred-briefing-vespertino.service alfred-briefing-vespertino.timer /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now alfred-briefing-vespertino.timer

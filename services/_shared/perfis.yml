@@ -7,18 +7,16 @@ perfis:
   pedro_dev:
     descricao: "Pedro Netto, estudante de ADS, foco em IA local e self-hosting"
     interesses_quentes:
+      - DevOps e automação
+      - homelab e self-hosting
       - LLMs locais
       - RAG e vector databases
       - Ollama e modelos open-source
-      - FastAPI e Python
-      - homelab e self-hosting
     interesses_mornos:
       - Kubernetes
       - observabilidade
       - Rust
     excluir:
-      - crypto
-      - NFT
       - blockchain marketing
     idiomas: [pt, en]
     tom: "técnico, direto, humor seco britânico"
@@ -51,44 +49,24 @@ perfis:
       - transformação digital
       - inteligência artificial
       - automação
-    regiao_alvo: [SP, MG, PR]
-    porte: "ME/EPP"
-    valor_max: 5000000
     tom: "executivo, foco em oportunidades concretas"
-    palavras_excluidas:
-      - gêneros alimentícios
-      - merenda escolar
-      - combustível
-      - medicamentos
-      - material hospitalar
-      - material de construção
-      - roçagem
-      - capinação
-      - jardinagem
-      - pavimentação
-      - veículo automotor
-      - material de limpeza
 
 # ── Coleções de fontes reutilizáveis ──────────────────────────
 fontes:
-  searxng_tech_geral:
+  searxng_tech:
     tipo: searxng
     queries:
-      - { q: "TechDrop", cat: "news,it" }
-      - { q: "Cloud e Infraestrutura", cat: "news,it" }
-      - { q: "Cibersegurança", cat: "news,it" }
-      - { q: "Open Source", cat: "news,it" }
-      - { q: "hardware technology news", cat: "news,it" }
+      - { q: "últimas notícias tecnologia", cat: "news,it" }
+      - { q: "cloud computing infraestrutura novidades", cat: "news,it" }
+      - { q: "cibersegurança vulnerabilidade", cat: "news,it" }
+      - { q: "open source", cat: "news,it" }
+      - { q: "notícias tecnologia", cat: "news,it" }
+      - { q: "startups tech", cat: "news,it" }
 
-  searxng_tech_brasil:
-    tipo: searxng
-    queries:
-      - { q: "notícias tecnologia Brasil", cat: "news,it" }
-      - { q: "startups brasileiras tech", cat: "news,it" }
-
-  rss_tech_internacional:
+  rss_tech:
     tipo: rss
     feeds:
+      - { nome: "TabNews", url: "https://www.tabnews.com.br/recentes/rss", max: 10 }
       - { nome: "Hacker News", url: "https://hnrss.org/frontpage", max: 10 }
       - { nome: "Ars Technica", url: "https://feeds.arstechnica.com/arstechnica/index", max: 5 }
       - { nome: "The Verge", url: "https://www.theverge.com/rss/index.xml", max: 5 }
@@ -97,17 +75,13 @@ fontes:
       - { nome: "Lobsters", url: "https://lobste.rs/rss", max: 5 }
       - { nome: "TLDR", url: "https://tldr.tech/api/rss/tech", max: 10 }
       - { nome: "MIT Tech Review", url: "https://www.technologyreview.com/feed/", max: 5 }
-
-  rss_tech_brasil:
-    tipo: rss
-    feeds:
       - { nome: "Tecnoblog", url: "https://tecnoblog.net/feed/", max: 5 }
 
 # ── Definições de briefings ───────────────────────────────────
 briefings:
   matinal_tech:
     perfil: pedro_dev
-    fontes: [rss_tech_internacional, rss_tech_brasil]
+    fontes: [rss_tech]
     horario: "07:00"
     max_items: 15
     formato: [markdown, audio]
@@ -117,7 +91,7 @@ briefings:
 
   vespertino_mercado:
     perfil: attanotech
-    fontes: [searxng_tech_brasil, rss_tech_brasil]
+    fontes: [searxng_tech, rss_tech]
     horario: "18:00"
     max_items: 10
     formato: [markdown, audio]
