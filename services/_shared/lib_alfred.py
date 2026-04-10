@@ -154,6 +154,58 @@ def ollama_embed(
     return []
 
 
+# ── 5b. ollama_embed_batch ────────────────────────────────────
+def ollama_embed_batch(
+    texts: list[str],
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> list[list[float]]:
+    """
+    Gera embeddings para múltiplos textos via Ollama.
+
+    Reutiliza um único httpx.Client para economizar handshake TLS entre
+    chamadas (Ollama não tem batch real no /api/embeddings).
+
+    Retorna lista na mesma ordem de entrada — alinhamento de índice garantido.
+    Texto vazio ou erro vira [] na posição correspondente.
+    Nunca levanta exceção — degradação graciosa com log().
+
+    :param texts:    Lista de textos para embedar
+    :param model:    Nome do modelo (default: MODEL_EMBED do .env)
+    :param base_url: URL do Ollama (default: OLLAMA_BASE_URL do .env)
+    :return:         list[list[float]], mesma ordem de entrada
+    """
+    model    = model    or os.getenv("MODEL_EMBED",    DEFAULT_MODEL_EMBED)
+    base_url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
+
+    results: list[list[float]] = []
+    try:
+        with httpx.Client(timeout=60) as client:
+            for text in texts:
+                if not text or not text.strip():
+                    results.append([])
+                    continue
+                try:
+                    resp = client.post(
+                        f"{base_url}/api/embeddings",
+                        json={"model": model, "prompt": text},
+                    )
+                    if resp.status_code == 200:
+                        results.append(resp.json().get("embedding", []))
+                    else:
+                        log(f"[ollama_embed_batch] HTTP {resp.status_code} — {text[:40]!r}")
+                        results.append([])
+                except Exception as e:
+                    log(f"[ollama_embed_batch] Erro em item: {e}")
+                    results.append([])
+    except Exception as e:
+        log(f"[ollama_embed_batch] Erro ao inicializar client: {e}")
+        while len(results) < len(texts):
+            results.append([])
+
+    return results
+
+
 # ── 6. searxng_search ─────────────────────────────────────────
 def searxng_search(
     query: str,

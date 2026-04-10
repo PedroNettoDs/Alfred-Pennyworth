@@ -19,12 +19,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import feedparser
+import numpy as np
+from sklearn.cluster import AgglomerativeClustering
 import yaml
 
 # ── Shared libs ───────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import (
-    log, slugify, ollama_generate, searxng_search,
+    log, slugify, ollama_generate, ollama_embed_batch, searxng_search,
     deduplicate_by_url_and_title, vault_write,
 )
 from _shared.perfis import get_briefing, list_all
@@ -39,6 +41,23 @@ VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
 
 SEEN_FILE         = PROJECT_ROOT / "logs" / "briefing_seen.json"
 SEEN_WINDOW_HOURS = 24
+
+
+# ── Pesos de fontes para ranqueamento de clusters ─────────────
+# Fonte não listada usa default 0.5. Migra pro perfis.yml no PR seguinte.
+PESOS_FONTES: dict[str, float] = {
+    "MIT News":        1.0,
+    "Ars Technica":    0.95,
+    "Hacker News":     0.9,
+    "The Verge":       0.85,
+    "InfoQ":           0.85,
+    "MIT Tech Review": 0.85,
+    "TechCrunch":      0.75,
+    "Lobsters":        0.75,
+    "TLDR":            0.7,
+    "Tecnoblog":       0.7,
+}
+_PESO_DEFAULT = 0.5
 
 
 # ── Config ────────────────────────────────────────────────────
@@ -276,6 +295,213 @@ def strip_acompanhamento_section(text: str) -> str:
     ).strip()
 
 
+# ── Clustering e ranqueamento de notícias ─────────────────────
+
+def _cluster_items(items: list[dict]) -> list[dict]:
+    """
+    Agrupa items por similaridade semântica de título via AgglomerativeClustering.
+
+    Adiciona 'cluster_id' (int) e 'cluster_size' (int) a cada item.
+    Items com embedding vazio recebem cluster_id=-1, cluster_size=1.
+    Listas com menos de 2 items pulam o clustering (cluster_id=0).
+    """
+    if not items:
+        return items
+
+    if len(items) < 2:
+        items[0]["cluster_id"]   = 0
+        items[0]["cluster_size"] = 1
+        return items
+
+    # Montar textos: título curto → concatena primeiras 15 palavras do snippet
+    textos = []
+    for item in items:
+        title = item.get("title", "")
+        if len(title.split()) < 4:
+            snippet_words = item.get("snippet", "").split()[:15]
+            text = (title + " " + " ".join(snippet_words)).strip()
+        else:
+            text = title
+        textos.append(text)
+
+    log(f"[cluster] Gerando {len(textos)} embeddings...")
+    embeddings_raw = ollama_embed_batch(textos)
+
+    valid_idx   = [i for i, e in enumerate(embeddings_raw) if e]
+    invalid_idx = [i for i, e in enumerate(embeddings_raw) if not e]
+
+    # Itens sem embedding → cluster solo
+    for i in invalid_idx:
+        items[i]["cluster_id"]   = -1
+        items[i]["cluster_size"] = 1
+
+    if len(valid_idx) < 2:
+        # Não há embeddings suficientes para clusterizar
+        for i in valid_idx:
+            items[i]["cluster_id"]   = 0
+            items[i]["cluster_size"] = len(valid_idx)
+        return items
+
+    X = np.array([embeddings_raw[i] for i in valid_idx], dtype=np.float32)
+
+    clustering = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=0.35,
+        metric="cosine",
+        linkage="average",
+    )
+    labels = clustering.fit_predict(X)
+
+    for pos, idx in enumerate(valid_idx):
+        items[idx]["cluster_id"] = int(labels[pos])
+
+    # Calcular tamanho de cada cluster
+    cluster_counts: dict[int, int] = {}
+    for i in valid_idx:
+        cid = items[i]["cluster_id"]
+        cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+
+    for i in valid_idx:
+        items[i]["cluster_size"] = cluster_counts[items[i]["cluster_id"]]
+
+    n_clusters = len(set(labels))
+    log(f"[cluster] {len(valid_idx)} itens → {n_clusters} clusters "
+        f"(+{len(invalid_idx)} solos sem embedding)")
+    return items
+
+
+def _rank_clusters(items: list[dict], pesos_fontes: dict[str, float]) -> list[int]:
+    """
+    Ranqueia clusters por (tamanho × peso_médio_fontes).
+
+    Desempate 1: cluster com item mais recente (campo published/updated).
+                 Se não tiver, usa índice de chegada como proxy
+                 (menor índice = mais recente, pois RSS retorna newest-first).
+    Desempate 2: ordem alfabética do título-âncora (item de maior peso).
+
+    Retorna lista de cluster_ids ordenados do mais para o menos relevante.
+    """
+    if not items:
+        return []
+
+    # Agrupar por cluster_id, preservando índice original como proxy de data
+    clusters: dict[int, list[tuple[int, dict]]] = {}
+    for idx, item in enumerate(items):
+        cid = item.get("cluster_id", -1)
+        clusters.setdefault(cid, []).append((idx, item))
+
+    scores = []
+    for cid, pairs in clusters.items():
+        idxs         = [idx for idx, _ in pairs]
+        cluster_itms = [item for _, item in pairs]
+
+        weights  = [pesos_fontes.get(i.get("source", ""), _PESO_DEFAULT) for i in cluster_itms]
+        avg_w    = sum(weights) / len(weights)
+        score    = len(cluster_itms) * avg_w
+
+        # Desempate por data — tenta campos published/updated; fallback: min_idx
+        best_ts: float | None = None
+        for item in cluster_itms:
+            for campo in ("published", "updated"):
+                val = item.get(campo)
+                if not val:
+                    continue
+                try:
+                    if isinstance(val, str):
+                        ts = datetime.fromisoformat(val).timestamp()
+                        if best_ts is None or ts > best_ts:
+                            best_ts = ts
+                except Exception:
+                    pass
+
+        # Se nenhum campo de data disponível, usa min_idx (menor = mais recente)
+        min_idx = min(idxs)
+
+        # Título-âncora = item de maior peso no cluster
+        anchor = max(cluster_itms, key=lambda i: pesos_fontes.get(i.get("source", ""), _PESO_DEFAULT))
+        anchor_title = anchor.get("title", "")
+
+        scores.append({
+            "cid":          cid,
+            "score":        score,
+            "best_ts":      best_ts,
+            "min_idx":      min_idx,
+            "anchor_title": anchor_title,
+        })
+
+    def _sort_key(s: dict):
+        # Score desc; depois data desc (best_ts negate) ou min_idx asc; depois título asc
+        if s["best_ts"] is not None:
+            date_key = -s["best_ts"]
+        else:
+            date_key = float(s["min_idx"])  # menor índice = mais recente = melhor
+        return (-s["score"], date_key, s["anchor_title"])
+
+    scores.sort(key=_sort_key)
+    return [s["cid"] for s in scores]
+
+
+def _build_clustered_news_text(
+    items: list[dict],
+    ranked_cluster_ids: list[int],
+    max_destaques: int = 10,
+) -> tuple[str, str]:
+    """
+    Monta duas strings a partir dos clusters ranqueados.
+
+    news_text_destaques: top max_destaques clusters, formato TEMA N com todas as
+                         fontes do cluster listadas.
+    news_text_radar:     clusters restantes, uma linha por item.
+                         Vazia se não sobrar nenhum cluster.
+    """
+    # Agrupar por cluster_id
+    clusters: dict[int, list[dict]] = {}
+    for item in items:
+        cid = item.get("cluster_id", -1)
+        clusters.setdefault(cid, []).append(item)
+
+    destaque_ids = ranked_cluster_ids[:max_destaques]
+    radar_ids    = ranked_cluster_ids[max_destaques:]
+
+    # ── Destaques ──
+    destaques_parts: list[str] = []
+    for tema_num, cid in enumerate(destaque_ids, 1):
+        cluster_itms = clusters.get(cid, [])
+        if not cluster_itms:
+            continue
+
+        # Ordenar por peso decrescente — item de maior peso = âncora
+        sorted_itms = sorted(
+            cluster_itms,
+            key=lambda i: PESOS_FONTES.get(i.get("source", ""), _PESO_DEFAULT),
+            reverse=True,
+        )
+        anchor = sorted_itms[0]
+        lines  = [f"TEMA {tema_num}: {anchor.get('title', '')}"]
+        for item in sorted_itms:
+            source  = item.get("source", "")
+            title   = item.get("title", "")
+            snippet = item.get("snippet", "")[:200]
+            lines.append(f"  [{source}] {title} — {snippet}")
+
+        destaques_parts.append("\n".join(lines))
+
+    news_text_destaques = "\n\n".join(destaques_parts)
+
+    # ── Radar ──
+    radar_lines: list[str] = []
+    for cid in radar_ids:
+        for item in clusters.get(cid, []):
+            source = item.get("source", "")
+            title  = item.get("title", "")
+            url    = item.get("url", "")
+            radar_lines.append(f"- [{source}] {title} — {url}")
+
+    news_text_radar = "\n".join(radar_lines)
+
+    return news_text_destaques, news_text_radar
+
+
 # ── Fluxo briefing nomeado ────────────────────────────────────
 def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
     perfil = briefing_cfg["_perfil"]
@@ -324,7 +550,13 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
     if not novas:
         log("[AVISO] Todas as notícias são continuações — briefing focará em acompanhamento")
 
-    news_text_novas        = format_items_long(novas[:20])
+    # ── Clusterizar e ranquear notícias novas ─────────────────
+    novas_para_cluster = novas[:20]
+    novas_clusterizadas = _cluster_items(novas_para_cluster)
+    ranked_ids = _rank_clusters(novas_clusterizadas, PESOS_FONTES)
+    news_text_destaques, news_text_radar = _build_clustered_news_text(
+        novas_clusterizadas, ranked_ids, max_destaques=10,
+    )
     news_text_continuacoes = format_items_short(continuacoes[:15])
 
     # ── Síntese via template ──────────────────────────────────
@@ -333,7 +565,8 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         log(f"[ERRO] Briefing '{briefing_name}' sem template_prompt definido no perfis.yml")
         sys.exit(1)
 
-    # Dict com todas as variáveis possíveis — cada template puxa o que declara
+    # Dict com todas as variáveis possíveis — cada template puxa o que declara.
+    # news_text mantido como alias de news_text_destaques para compat com briefing_executivo.
     template_vars = {
         "data":                    date_human,
         "perfil_descricao":        perfil.get("descricao", ""),
@@ -343,7 +576,9 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         "area":                    perfil.get("area", ""),
         "palavras_chave":          ", ".join(perfil.get("palavras_chave", [])),
         "tom":                     perfil.get("tom", ""),
-        "news_text":               news_text_novas,
+        "news_text":               news_text_destaques,   # alias — compat briefing_executivo
+        "news_text_destaques":     news_text_destaques,
+        "news_text_radar":         news_text_radar,
         "news_text_continuacoes":  news_text_continuacoes,
     }
 
