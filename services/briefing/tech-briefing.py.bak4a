@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""
+Alfred Tech Briefing v3 — briefing configurável por perfil.
+
+Uso:
+    python tech-briefing.py [briefing_name]
+    python tech-briefing.py matinal_tech
+    python tech-briefing.py vespertino_mercado
+
+Sem argumento: usa default 'matinal_tech'.
+Briefing inválido: lista os disponíveis e sai com erro.
+"""
+
+import asyncio
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import feedparser
+import yaml
+
+# ── Shared libs ───────────────────────────────────────────────
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from _shared.lib_alfred import (
+    log, slugify, ollama_generate, searxng_search,
+    deduplicate_by_url_and_title, vault_write,
+)
+from _shared.perfis import get_briefing, list_all
+
+import edge_tts
+
+SCRIPT_DIR   = Path(__file__).parent
+CONFIG_FILE  = SCRIPT_DIR / "config.yml"
+VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
+
+
+# ── Config ────────────────────────────────────────────────────
+def load_config() -> dict:
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# ── Extração de título (mantida da v2) ────────────────────────
+NOMES_SECAO = {
+    "manchete do dia", "manchete", "destaques", "destaque",
+    "tendências", "tendencias", "vale ficar de olho",
+    "leitura recomendada", "leituras recomendadas",
+    "análise", "analise", "resumo", "briefing",
+    "tech briefing", "briefing matinal", "briefing de tecnologia",
+    "notícias", "noticias", "headlines", "top stories",
+}
+
+
+def extrair_titulo_manchete(briefing: str) -> str:
+    """Extrai o título real da manchete. Estratégia v2 mantida."""
+    lines = briefing.strip().split("\n")
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        clean = re.sub(r"[*_\[\]()\"']", "", line).strip()
+        if len(clean) < 10:
+            continue
+        if clean.lower().rstrip(":").strip() in NOMES_SECAO:
+            continue
+        if clean.startswith(">") or clean.startswith("-"):
+            continue
+        if ". " in clean:
+            clean = clean[:clean.index(". ")]
+        elif clean.endswith("."):
+            clean = clean[:-1]
+        return clean[:100]
+
+    encontrou_manchete = False
+    for line in lines:
+        line = line.strip()
+        if re.match(r"^#+\s*manchete", line, re.IGNORECASE):
+            encontrou_manchete = True
+            continue
+        if encontrou_manchete and line:
+            clean = re.sub(r"[*_\[\]()\"']", "", line).strip()
+            if len(clean) > 10 and clean.lower().rstrip(":") not in NOMES_SECAO:
+                if ". " in clean:
+                    clean = clean[:clean.index(". ")]
+                return clean[:100]
+
+    return "Tech Briefing"
+
+
+# ── RSS ───────────────────────────────────────────────────────
+def fetch_rss(feed_config: dict) -> list[dict]:
+    """
+    Busca um feed RSS. Aceita chaves com nome/name e max/max_items
+    (compatível tanto com fontes.csv quanto com perfis.yml).
+    """
+    name      = feed_config.get("name") or feed_config.get("nome") or "RSS"
+    url       = feed_config.get("url", "")
+    max_items = feed_config.get("max_items") or feed_config.get("max") or 5
+
+    try:
+        feed = feedparser.parse(url)
+        items = []
+        for entry in feed.entries[:max_items]:
+            summary = entry.get("summary", entry.get("description", ""))
+            summary = re.sub(r"<[^>]+>", "", summary)[:400]
+            items.append({
+                "title":   entry.get("title", ""),
+                "url":     entry.get("link", ""),
+                "snippet": summary,
+                "source":  name,
+            })
+        log(f"[RSS] {name}: {len(items)} itens")
+        return items
+    except Exception as e:
+        log(f"[RSS] Erro em {name}: {e}")
+        return []
+
+
+# ── Perfil context ────────────────────────────────────────────
+def _build_perfil_context(perfil: dict) -> str:
+    """
+    Monta bloco de contexto do perfil para injetar no synthesis_prompt.
+    Funciona tanto para pedro_dev quanto para attanotech (campos opcionais).
+    """
+    lines = [f"Descrição: {perfil.get('descricao', '')}"]
+    if perfil.get("interesses_quentes"):
+        lines.append("Priorize: " + ", ".join(perfil["interesses_quentes"]))
+    if perfil.get("interesses_mornos"):
+        lines.append("Mencione se relevante: " + ", ".join(perfil["interesses_mornos"]))
+    if perfil.get("excluir"):
+        lines.append("Evite: " + ", ".join(perfil["excluir"]))
+    if perfil.get("area"):
+        lines.append(f"Área: {perfil['area']}")
+    if perfil.get("palavras_chave"):
+        lines.append("Foco temático: " + ", ".join(perfil["palavras_chave"]))
+    if perfil.get("tom"):
+        lines.append(f"Tom desejado: {perfil['tom']}")
+    return "\n".join(lines)
+
+
+# ── TTS ───────────────────────────────────────────────────────
+async def generate_tts(text: str, voice: str, output_path: Path):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(str(output_path))
+
+
+# ── Main ──────────────────────────────────────────────────────
+def main():
+    # ── 1. Parse argumento ────────────────────────────────────
+    briefing_name = sys.argv[1] if len(sys.argv) > 1 else "matinal_tech"
+
+    # ── 2. Carregar briefing do perfis.yml ────────────────────
+    try:
+        briefing_cfg = get_briefing(briefing_name)
+    except KeyError:
+        disponiveis = list_all()["briefings"]
+        log(f"[ERRO] Briefing '{briefing_name}' não encontrado.")
+        log(f"[ERRO] Briefings disponíveis: {', '.join(disponiveis)}")
+        sys.exit(1)
+
+    perfil = briefing_cfg["_perfil"]
+    fontes = briefing_cfg["_fontes"]
+
+    today     = datetime.now()
+    date_str  = today.strftime("%Y-%m-%d")
+    time_str  = today.strftime("%H:%M")
+    date_human = today.strftime("%d/%m/%Y")
+    timestamp  = today.strftime("%Y-%m-%d_%H%M")
+
+    log(f"=== Briefing '{briefing_name}' (perfil: {briefing_cfg['perfil']}) — {date_human} {time_str} ===")
+
+    # ── 3. Carregar prompts do config.yml ─────────────────────
+    config = load_config()
+
+    # ── 4. Coletar de cada fonte conforme o tipo ──────────────
+    all_items: list[dict] = []
+
+    for fonte in fontes:
+        tipo = fonte.get("tipo", "")
+
+        if tipo == "searxng":
+            for q in fonte.get("queries", []):
+                results = searxng_search(
+                    q["q"],
+                    categories=q.get("cat", "news,it"),
+                    max_results=10,
+                )
+                all_items.extend(results)
+                log(f"[SearXNG] '{q['q']}': {len(results)} resultados")
+
+        elif tipo == "rss":
+            for feed in fonte.get("feeds", []):
+                items = fetch_rss(feed)
+                all_items.extend(items)
+
+        else:
+            log(f"[AVISO] Tipo de fonte desconhecido: {tipo!r} — pulando")
+
+    log(f"[Total] {len(all_items)} itens coletados")
+
+    # ── 5. Deduplicar e limitar ───────────────────────────────
+    max_items = briefing_cfg.get("max_items", config.get("max_items", 15))
+    unique = deduplicate_by_url_and_title(all_items)[: max_items * 2]
+    log(f"[Dedup] {len(unique)} itens únicos")
+
+    if not unique:
+        log("[ERRO] Nenhuma notícia coletada. Abortando.")
+        sys.exit(1)
+
+    # ── 6. Formatar para o prompt ─────────────────────────────
+    news_text = "\n\n".join(
+        f"[{i+1}] {item['title']}\n"
+        f"Fonte: {item['source']}\n"
+        f"URL: {item['url']}\n"
+        f"{item['snippet']}"
+        for i, item in enumerate(unique[:20])
+    )
+
+    # ── 7. Síntese com Ollama — perfil injetado ───────────────
+    perfil_ctx = _build_perfil_context(perfil)
+    synthesis_prompt = (
+        config.get("synthesis_prompt", "Resuma as notícias.")
+        + f"\n\nCONTEXTO DO PERFIL:\n{perfil_ctx}"
+        + f"\n\nDATA: {date_human}\n\nNOTÍCIAS:\n{news_text}"
+    )
+
+    log("[Ollama] Gerando briefing escrito...")
+    briefing_text = ollama_generate(synthesis_prompt, timeout=300)
+
+    if not briefing_text:
+        log("[ERRO] Ollama não retornou síntese. Abortando.")
+        sys.exit(1)
+
+    log(f"[Ollama] Briefing gerado ({len(briefing_text)} chars)")
+
+    # ── 8. Extrair título e montar nome do arquivo ─────────────
+    titulo_manchete = extrair_titulo_manchete(briefing_text)
+    titulo_slug     = slugify(titulo_manchete)
+    filename_base   = f"{timestamp}_{briefing_name}_{titulo_slug}" if titulo_slug else f"{timestamp}_{briefing_name}"
+
+    log(f"[Título] {titulo_manchete}")
+    log(f"[Slug]   {titulo_slug}")
+
+    # ── 9. Salvar markdown ────────────────────────────────────
+    briefing_dir = VAULT_ALFRED / "briefings"
+    briefing_dir.mkdir(parents=True, exist_ok=True)
+
+    # Se LLM colocou título na 1ª linha, remove-o do corpo
+    briefing_body = briefing_text
+    first_line  = briefing_text.strip().split("\n")[0].strip()
+    first_clean = re.sub(r"[*_#\[\]()\"']", "", first_line).strip()
+    if first_clean.lower().rstrip(":") not in NOMES_SECAO and len(first_clean) > 10:
+        briefing_body = "\n".join(briefing_text.strip().split("\n")[1:]).strip()
+
+    md_content = "\n".join([
+        "---",
+        f'title: "{titulo_manchete}"',
+        f"date: {date_str}",
+        f'time: "{time_str}"',
+        f"briefing: {briefing_name}",
+        f"perfil: {briefing_cfg['perfil']}",
+        f"type: briefing",
+        f"sources: {len(unique)}",
+        f"tags: [briefing, {briefing_name}]",
+        "---",
+        "",
+        f"# {titulo_manchete}",
+        "",
+        f"> {briefing_name} · {date_human} às {time_str} · {len(unique)} fontes",
+        "",
+        briefing_body,
+        "",
+        "---",
+        "",
+        "## Fontes coletadas",
+        "",
+    ])
+
+    for i, item in enumerate(unique[:20], 1):
+        md_content += f"{i}. [{item['title']}]({item['url']}) — *{item['source']}*\n"
+
+    md_path = briefing_dir / f"{filename_base}.md"
+    md_path.write_text(md_content, encoding="utf-8")
+    log(f"[Vault] Markdown salvo: {md_path.name}")
+
+    # ── 10. Áudio — só se "audio" in formato ─────────────────
+    mp3_path = None
+    if "audio" in briefing_cfg.get("formato", []):
+        log("[Ollama] Gerando versão para áudio...")
+        audio_prompt = (
+            config.get("audio_prompt", "Reescreva para áudio.")
+            + f"\n\nBRIEFING:\n{briefing_text}"
+        )
+        audio_text = ollama_generate(audio_prompt, timeout=180)
+
+        if not audio_text:
+            log("[AVISO] Falha na versão áudio, usando texto original limpo.")
+            audio_text = re.sub(r"[#*\[\]\(\)]", "", briefing_text)
+
+        # Voz: usa a do briefing (perfis.yml) ou cai no config.yml
+        voice    = briefing_cfg.get("tts_voice") or config.get("tts_voice", "pt-BR-FranciscaNeural")
+        mp3_path = briefing_dir / f"{filename_base}.mp3"
+
+        log(f"[TTS] Gerando áudio com voz {voice}...")
+        asyncio.run(generate_tts(audio_text, voice, mp3_path))
+        log(f"[TTS] Áudio salvo: {mp3_path.name}")
+    else:
+        log("[Áudio] Formato não inclui áudio — pulando TTS.")
+
+    # ── 11. Notificação desktop ───────────────────────────────
+    audio_nota = "Áudio disponível." if mp3_path else "Somente markdown."
+    try:
+        subprocess.run([
+            "notify-send", "--icon=dialog-information", "--urgency=normal",
+            f"Alfred — {briefing_name}",
+            f"{titulo_manchete}\n{len(unique)} fontes · {audio_nota}",
+        ], timeout=5, capture_output=True)
+    except Exception:
+        pass
+
+    log("=== Briefing concluído ===")
+    log(f"  Briefing: {briefing_name}")
+    log(f"  Título:   {titulo_manchete}")
+    log(f"  Markdown: {md_path.name}")
+    if mp3_path:
+        log(f"  Áudio:    {mp3_path.name}")
+
+    print(f"BRIEFING_FILE={md_path}")
+
+
+if __name__ == "__main__":
+    main()

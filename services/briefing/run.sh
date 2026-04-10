@@ -19,4 +19,4 @@ if [[ ! -d "venv" ]]; then
     venv/bin/pip install --quiet -r requirements.txt
 fi
 
-exec venv/bin/python tech-briefing.py
+exec venv/bin/python tech-briefing.py "$@"

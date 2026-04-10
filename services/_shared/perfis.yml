@@ -24,33 +24,57 @@ perfis:
     tom: "técnico, direto, humor seco britânico"
 
   attanotech:
+    nome: "AttanoTech"
     descricao: "Consultoria de TI, ME/EPP, atende interior de SP"
     area: "Consultoria de tecnologia e projetos/implantações de TI"
     servicos:
-      - consultoria em TI
+      - consultoria em tecnologia da informação
       - desenvolvimento de software
       - implantação de sistemas
+      - suporte técnico em TI
       - infraestrutura de redes
-      - cloud computing
+      - cloud computing e migração
       - segurança da informação
+      - treinamento em tecnologia
+      - manutenção de equipamentos de informática
+      - outsourcing de TI
     palavras_chave:
       - tecnologia da informação
       - desenvolvimento de software
+      - sistemas de informação
       - consultoria TI
-      - infraestrutura
-      - cloud
+      - infraestrutura de rede
       - segurança cibernética
+      - cloud computing
+      - suporte técnico
+      - licenciamento de software
+      - transformação digital
+      - inteligência artificial
+      - automação
     regiao_alvo: [SP, MG, PR]
     porte: "ME/EPP"
     valor_max: 5000000
     tom: "executivo, foco em oportunidades concretas"
+    palavras_excluidas:
+      - gêneros alimentícios
+      - merenda escolar
+      - combustível
+      - medicamentos
+      - material hospitalar
+      - material de construção
+      - roçagem
+      - capinação
+      - jardinagem
+      - pavimentação
+      - veículo automotor
+      - material de limpeza
 
 # ── Coleções de fontes reutilizáveis ──────────────────────────
 fontes:
   searxng_tech_geral:
     tipo: searxng
     queries:
-      - { q: "Desenvolvimento e Engenharia de Software", cat: "news,it" }
+      - { q: "TechDrop", cat: "news,it" }
       - { q: "Cloud e Infraestrutura", cat: "news,it" }
       - { q: "Cibersegurança", cat: "news,it" }
       - { q: "Open Source", cat: "news,it" }
@@ -79,13 +103,6 @@ fontes:
     feeds:
       - { nome: "Tecnoblog", url: "https://tecnoblog.net/feed/", max: 5 }
 
-  pncp_licitacoes_ti:
-    tipo: pncp
-    palavras: [tecnologia informação, software, consultoria TI, infraestrutura rede, suporte técnico, cloud computing, segurança informação, desenvolvimento sistemas]
-    modalidades: [pregao, dispensa, concorrencia]
-    dias_retroativos: 7
-    max_items: 50
-
 # ── Definições de briefings ───────────────────────────────────
 briefings:
   matinal_tech:
@@ -95,26 +112,20 @@ briefings:
     max_items: 15
     formato: [markdown, audio]
     tts_voice: "pt-BR-FranciscaNeural"
-    template_prompt: "briefing_tecnico"
+    template_prompt: briefing_tecnico
+    template_audio: audio_tecnico
 
   vespertino_mercado:
     perfil: attanotech
     fontes: [searxng_tech_brasil, rss_tech_brasil]
     horario: "18:00"
     max_items: 10
-    formato: [markdown]
-    template_prompt: "briefing_executivo"
+    formato: [markdown, audio]
+    tts_voice: "pt-BR-AntonioNeural"
+    template_prompt: briefing_executivo
+    template_audio: audio_executivo
 
-# ── Definições de scanners ────────────────────────────────────
-scanners:
-  licitacoes_attanotech:
-    perfil: attanotech
-    fontes: [pncp_licitacoes_ti]
-    score_minimo: 30
-    max_relatorio: 15
-    filtros:
-      somente_abertas: true
-      ano_corrente_obrigatorio: true
+scanners: {}
 
 # ── Defaults globais ──────────────────────────────────────────
 defaults:
