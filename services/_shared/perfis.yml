@@ -107,7 +107,7 @@ fontes:
 briefings:
   matinal_tech:
     perfil: pedro_dev
-    fontes: [searxng_tech_geral, rss_tech_internacional, rss_tech_brasil]
+    fontes: [rss_tech_internacional, rss_tech_brasil]
     horario: "07:00"
     max_items: 15
     formato: [markdown, audio]

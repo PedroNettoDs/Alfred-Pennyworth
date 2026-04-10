@@ -346,7 +346,7 @@ def _cluster_items(items: list[dict]) -> list[dict]:
 
     clustering = AgglomerativeClustering(
         n_clusters=None,
-        distance_threshold=0.35,
+        distance_threshold=0.50,
         metric="cosine",
         linkage="average",
     )
