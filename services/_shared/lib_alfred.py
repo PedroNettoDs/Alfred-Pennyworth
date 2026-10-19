@@ -32,7 +32,7 @@ DEFAULT_MODEL_EMBED = os.getenv("MODEL_EMBED", "nomic-embed-text-v2-moe:latest")
 
 
 # ── 1. load_env ───────────────────────────────────────────────
-def load_env(env_path: Optional[Path] = None) -> dict:
+def load_env(env_path: Optional[Path] = None, override: bool = True) -> dict:
     """
     Carrega o .env da raiz do projeto para os.environ.
 
@@ -44,7 +44,8 @@ def load_env(env_path: Optional[Path] = None) -> dict:
       - Faz split no PRIMEIRO `=` (valores podem conter `=`)
       - NÃO suporta comentário inline (KEY=valor # comentário) — propositalmente,
         pra manter consistência com o bug documentado no README
-      - Sobrescreve variáveis já existentes em os.environ
+      - Sobrescreve variáveis já existentes em os.environ (override=True, default);
+        com override=False, o que já está no ambiente vence o arquivo
 
     Retorna: dict com as variáveis carregadas (útil pra debug).
     """
@@ -69,6 +70,8 @@ def load_env(env_path: Optional[Path] = None) -> dict:
             # Remover aspas envolventes se houver
             if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
+            if not override and key in os.environ:
+                continue
             os.environ[key] = value
             loaded[key] = value
 
@@ -96,11 +99,30 @@ def slugify(text: str, max_len: int = 60) -> str:
 
 
 # ── 4. ollama_generate ────────────────────────────────────────
+def _ollama_think_default() -> Optional[bool]:
+    """
+    Lê OLLAMA_THINK do ambiente: "false"/"0" → False, "true"/"1" → True,
+    vazio/ausente → None (campo não é enviado — compatível com modelos sem thinking).
+    Modelos como gemma4/qwen3 gastam o orçamento de tokens "pensando" se não
+    for desligado, e devolvem resposta vazia em prompts curtos.
+    """
+    raw = os.getenv("OLLAMA_THINK", "").strip().lower()
+    if raw in ("false", "0", "no", "off"):
+        return False
+    if raw in ("true", "1", "yes", "on"):
+        return True
+    return None
+
+
 def ollama_generate(
     prompt: str,
     model: Optional[str] = None,
     timeout: int = 180,
     base_url: Optional[str] = None,
+    fmt: Optional[object] = None,
+    think: Optional[bool] = None,
+    options: Optional[dict] = None,
+    system: Optional[str] = None,
 ) -> str:
     """
     Wrapper do endpoint /api/generate do Ollama.
@@ -109,22 +131,75 @@ def ollama_generate(
     :param model: Nome do modelo (default: MODEL_CHAT do .env)
     :param timeout: Timeout em segundos
     :param base_url: URL do Ollama (default: OLLAMA_BASE_URL do .env)
+    :param fmt: "json" ou um JSON Schema (dict) para saída estruturada
+    :param think: True/False força o campo "think"; None usa OLLAMA_THINK do .env
+    :param options: dict de opções do Ollama (num_ctx, temperature, num_predict...).
+                    OLLAMA_NUM_CTX do .env entra como num_ctx se não vier em options.
+    :param system: system prompt opcional
     :return: Resposta do modelo (string vazia em caso de erro)
     """
     model = model or os.getenv("MODEL_CHAT", DEFAULT_MODEL_CHAT)
     base_url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
 
+    payload: dict = {"model": model, "prompt": prompt, "stream": False}
+    if system:
+        payload["system"] = system
+    if fmt:
+        payload["format"] = fmt
+
+    think_val = think if think is not None else _ollama_think_default()
+    if think_val is not None:
+        payload["think"] = think_val
+
+    opts = dict(options or {})
+    num_ctx_env = os.getenv("OLLAMA_NUM_CTX", "").strip()
+    if "num_ctx" not in opts and num_ctx_env.isdigit():
+        opts["num_ctx"] = int(num_ctx_env)
+    if opts:
+        payload["options"] = opts
+
     try:
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                f"{base_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
-            )
+            resp = client.post(f"{base_url}/api/generate", json=payload)
             resp.raise_for_status()
             return resp.json().get("response", "").strip()
     except Exception as e:
         log(f"[ollama_generate] Erro: {e}")
         return ""
+
+
+# ── 4b. ollama_generate_json ──────────────────────────────────
+def ollama_generate_json(
+    prompt: str,
+    model: Optional[str] = None,
+    timeout: int = 120,
+    schema: Optional[dict] = None,
+    options: Optional[dict] = None,
+) -> Optional[object]:
+    """
+    Chama ollama_generate com format=json (ou JSON Schema) e devolve o objeto
+    parseado (dict ou list). Em falha de parse tenta extrair o primeiro
+    {...} ou [...] da resposta. Retorna None se nada aproveitável.
+    """
+    raw = ollama_generate(
+        prompt, model=model, timeout=timeout,
+        fmt=schema or "json", options=options,
+    )
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    for pattern in (r"\{.*\}", r"\[.*\]"):
+        m = re.search(pattern, raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                continue
+    log(f"[ollama_generate_json] Resposta não é JSON: {raw[:120]!r}")
+    return None
 
 
 # ── 5. ollama_embed ───────────────────────────────────────────
@@ -345,5 +420,6 @@ if __name__ == "__main__":
     log(f"OLLAMA: {DEFAULT_OLLAMA_URL}")
     log(f"SEARXNG: {DEFAULT_SEARXNG_URL}")
     log(f"MODEL_CHAT: {DEFAULT_MODEL_CHAT}")
+    log(f"OLLAMA_THINK: {_ollama_think_default()}")
     log(f"slugify('Olá Mundo!'): {slugify('Olá Mundo!')}")
     log("OK")

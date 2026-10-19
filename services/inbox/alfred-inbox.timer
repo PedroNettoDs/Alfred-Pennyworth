@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer — Alfred Inbox Assistant (07:30 e 18:30)
+Requires=alfred-inbox.service
+
+[Timer]
+OnCalendar=*-*-* 07:30:00
+OnCalendar=*-*-* 18:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

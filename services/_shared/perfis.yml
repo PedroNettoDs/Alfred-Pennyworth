@@ -101,6 +101,54 @@ briefings:
 
 scanners: {}
 
+# ── Inbox Assistant — caixas de e-mail monitoradas ────────────
+# Lê o Thunderbird local (cópias offline), classifica cada e-mail com o
+# Ollama, monta a "edição do dia" com as newsletters (mesmo pipeline do
+# briefing) e cria pendências "vou / não vou" para eventos e contatos.
+inbox:
+  pedro_hotmail:
+    perfil: pedro_dev
+    backend: thunderbird          # thunderbird | imap
+    conta: "outlook.office365.com" # substring do hostname/nome da conta no Thunderbird (vazio = todas)
+    pastas: [INBOX]
+    janela_horas: 36              # só e-mails mais recentes que isso entram no ciclo
+    max_emails: 80                # limite de segurança por ciclo
+    so_nao_lidos: false           # true = ignora e-mails já lidos no Thunderbird
+
+    # Classificação — atalhos determinísticos antes do LLM (domínio ou endereço, substring)
+    remetentes_noticia:           # sempre tratados como "noticia"
+      - tldr.tech
+      - hnrss.org
+      - substack.com
+      - news.ycombinator.com
+      - theverge.com
+      - arstechnica.com
+      - infoq.com
+    remetentes_ignorar:           # nunca entram no ciclo (promoções conhecidas)
+      - promo.kabum.com.br
+      - mail.vivo.com.br
+      - r.mercadopago.com.br
+      - lojareversa.com.br
+      - melhoramigo.gringo.com.vc
+    confianca_minima: 0.55        # abaixo disso o e-mail vai pra "outro"
+
+    jornal:
+      formato: [markdown, audio]
+      tts_voice: "pt-BR-FranciscaNeural"
+      template_prompt: jornal_email
+      template_audio: audio_jornal
+      max_noticias: 18            # itens que entram no clustering
+      max_por_email: 6            # notícias extraídas por newsletter
+      min_noticias: 2             # abaixo disso não gera edição
+      pesos_fontes: {}            # opcional: {"TLDR": 0.9} — chave = nome do remetente
+
+    pendencias:
+      tts_voice: "pt-BR-AntonioNeural"
+      template_pergunta: pergunta_evento
+      template_audio: audio_pergunta_evento
+      lembrar_a_cada_horas: 12    # re-notifica pendências aguardando
+      expirar_apos_evento: true   # marca como expirada se a data do evento passou
+
 # ── Defaults globais ──────────────────────────────────────────
 defaults:
   vault_alfred_subfolders:
@@ -109,3 +157,5 @@ defaults:
     licitacoes: "licitacoes"
     decisions: "decisions"
     logs: "logs"
+    jornal: "jornal"
+    pendencias: "pendencias"

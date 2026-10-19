@@ -1,0 +1,8 @@
+httpx
+pyyaml
+edge-tts
+scikit-learn
+numpy
+icalendar
+fastapi
+uvicorn

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Alfred Tech Briefing v3.2 — templates, título via Ollama, modo ad-hoc.
+Alfred Tech Briefing v3.3 — templates, título via Ollama, modo ad-hoc.
+Clustering, TTS e título vivem em services/_shared (compartilhados com o inbox).
 
 Uso:
     python tech-briefing.py                    → default matinal_tech
@@ -19,8 +20,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import feedparser
-import numpy as np
-from sklearn.cluster import AgglomerativeClustering
 import yaml
 
 # ── Shared libs ───────────────────────────────────────────────
@@ -31,8 +30,10 @@ from _shared.lib_alfred import (
 )
 from _shared.perfis import get_briefing, list_all
 from _shared.lib_templates import render_template
+from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text
+from _shared.lib_titulo import generate_title_via_llm, extrair_titulo_manchete, NOMES_SECAO
+from _shared.lib_tts import generate_tts
 
-import edge_tts
 
 SCRIPT_DIR   = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
@@ -60,98 +61,27 @@ PESOS_FONTES: dict[str, float] = {
 _PESO_DEFAULT = 0.5
 
 
+# ── Clustering / TTS / título: migrados para services/_shared ──
+# lib_cluster.py, lib_tts.py e lib_titulo.py. Wrappers finos abaixo
+# preservam os nomes usados no fluxo deste script.
+def _cluster_items(items: list[dict]) -> list[dict]:
+    return cluster_items(items)
+
+
+def _rank_clusters(items: list[dict], pesos_fontes: dict[str, float]) -> list[int]:
+    return rank_clusters(items, pesos_fontes)
+
+
+def _build_clustered_news_text(
+    items: list[dict], ranked_cluster_ids: list[int], max_destaques: int = 10,
+) -> tuple[str, str]:
+    return build_clustered_news_text(items, ranked_cluster_ids, PESOS_FONTES, max_destaques)
+
+
 # ── Config ────────────────────────────────────────────────────
 def load_config() -> dict:
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-# ── Extração de título — heurística (fallback) ────────────────
-# Mantida como fallback interno de generate_title_via_llm. NÃO REMOVER.
-NOMES_SECAO = {
-    "manchete do dia", "manchete", "destaques", "destaque",
-    "tendências", "tendencias", "vale ficar de olho",
-    "leitura recomendada", "leituras recomendadas",
-    "análise", "analise", "resumo", "briefing",
-    "tech briefing", "briefing matinal", "briefing de tecnologia",
-    "notícias", "noticias", "headlines", "top stories",
-    "sobre o tema", "pontos principais", "conexões interessantes",
-    "para saber mais", "panorama do dia", "movimentos relevantes",
-    "oportunidades sinalizadas", "para acompanhar",
-}
-
-
-def extrair_titulo_manchete(briefing: str) -> str:
-    """Extrai título por heurística. Usado como fallback do generate_title_via_llm."""
-    lines = briefing.strip().split("\n")
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            continue
-        clean = re.sub(r"[*_\[\]()\"']", "", line).strip()
-        if len(clean) < 10:
-            continue
-        if clean.lower().rstrip(":").strip() in NOMES_SECAO:
-            continue
-        if clean.startswith(">") or clean.startswith("-"):
-            continue
-        if ". " in clean:
-            clean = clean[:clean.index(". ")]
-        elif clean.endswith("."):
-            clean = clean[:-1]
-        return clean[:100]
-
-    encontrou_manchete = False
-    for line in lines:
-        line = line.strip()
-        if re.match(r"^#+\s*manchete", line, re.IGNORECASE):
-            encontrou_manchete = True
-            continue
-        if encontrou_manchete and line:
-            clean = re.sub(r"[*_\[\]()\"']", "", line).strip()
-            if len(clean) > 10 and clean.lower().rstrip(":") not in NOMES_SECAO:
-                if ". " in clean:
-                    clean = clean[:clean.index(". ")]
-                return clean[:100]
-
-    return "Tech Briefing"
-
-
-# ── Título via Ollama (JSON) ───────────────────────────────────
-def generate_title_via_llm(briefing_md: str) -> str:
-    """
-    Segunda chamada Ollama: extrai título do briefing como JSON.
-    Fallback pra extrair_titulo_manchete() em caso de falha no parse.
-    """
-    prompt = (
-        "Leia o briefing abaixo e extraia apenas o título principal (manchete) "
-        "da notícia ou tema mais importante. Responda em JSON válido:\n\n"
-        '{"titulo": "título curto aqui, sem markdown"}\n\n'
-        "Regras:\n"
-        "- Máximo 80 caracteres\n"
-        "- Sem markdown, sem aspas extras, sem prefixos\n"
-        "- Em português brasileiro\n"
-        "- Deve ser uma frase informativa e específica\n\n"
-        f"BRIEFING:\n{briefing_md[:2000]}"
-    )
-
-    raw = ollama_generate(prompt, timeout=60)
-    try:
-        match = re.search(r"\{.*?\}", raw, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-            titulo = (data.get("titulo") or "").strip()
-            if titulo and len(titulo) > 5:
-                log(f"[titulo] Via JSON: {titulo[:60]}")
-                return titulo[:100]
-    except Exception as e:
-        log(f"[titulo] Falha no parse JSON ({e}) — usando fallback heurístico")
-
-    log("[titulo] Usando fallback extrair_titulo_manchete()")
-    return extrair_titulo_manchete(briefing_md)
 
 
 # ── RSS ───────────────────────────────────────────────────────
@@ -177,12 +107,6 @@ def fetch_rss(feed_config: dict) -> list[dict]:
     except Exception as e:
         log(f"[RSS] Erro em {name}: {e}")
         return []
-
-
-# ── TTS ───────────────────────────────────────────────────────
-async def generate_tts(text: str, voice: str, output_path: Path):
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(str(output_path))
 
 
 # ── Memória deslizante de 24h ─────────────────────────────────
@@ -293,214 +217,6 @@ def strip_acompanhamento_section(text: str) -> str:
         text,
         flags=re.DOTALL | re.IGNORECASE,
     ).strip()
-
-
-# ── Clustering e ranqueamento de notícias ─────────────────────
-
-def _cluster_items(items: list[dict]) -> list[dict]:
-    """
-    Agrupa items por similaridade semântica de título via AgglomerativeClustering.
-
-    Adiciona 'cluster_id' (int) e 'cluster_size' (int) a cada item.
-    Items com embedding vazio recebem cluster_id=-1, cluster_size=1.
-    Listas com menos de 2 items pulam o clustering (cluster_id=0).
-    """
-    if not items:
-        return items
-
-    if len(items) < 2:
-        items[0]["cluster_id"]   = 0
-        items[0]["cluster_size"] = 1
-        return items
-
-    # Montar textos: título curto → concatena primeiras 15 palavras do snippet
-    textos = []
-    for item in items:
-        title = item.get("title", "")
-        if len(title.split()) < 4:
-            snippet_words = item.get("snippet", "").split()[:15]
-            text = (title + " " + " ".join(snippet_words)).strip()
-        else:
-            text = title
-        textos.append(text)
-
-    log(f"[cluster] Gerando {len(textos)} embeddings...")
-    embeddings_raw = ollama_embed_batch(textos)
-
-    valid_idx   = [i for i, e in enumerate(embeddings_raw) if e]
-    invalid_idx = [i for i, e in enumerate(embeddings_raw) if not e]
-
-    # Itens sem embedding → cluster solo
-    for i in invalid_idx:
-        items[i]["cluster_id"]   = -1
-        items[i]["cluster_size"] = 1
-
-    if len(valid_idx) < 2:
-        # Não há embeddings suficientes para clusterizar
-        for i in valid_idx:
-            items[i]["cluster_id"]   = 0
-            items[i]["cluster_size"] = len(valid_idx)
-        return items
-
-    X = np.array([embeddings_raw[i] for i in valid_idx], dtype=np.float32)
-
-    clustering = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=0.50,
-        metric="cosine",
-        linkage="average",
-    )
-    labels = clustering.fit_predict(X)
-
-    for pos, idx in enumerate(valid_idx):
-        items[idx]["cluster_id"] = int(labels[pos])
-
-    # Calcular tamanho de cada cluster
-    cluster_counts: dict[int, int] = {}
-    for i in valid_idx:
-        cid = items[i]["cluster_id"]
-        cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
-
-    for i in valid_idx:
-        items[i]["cluster_size"] = cluster_counts[items[i]["cluster_id"]]
-
-    n_clusters = len(set(labels))
-    log(f"[cluster] {len(valid_idx)} itens → {n_clusters} clusters "
-        f"(+{len(invalid_idx)} solos sem embedding)")
-    return items
-
-
-def _rank_clusters(items: list[dict], pesos_fontes: dict[str, float]) -> list[int]:
-    """
-    Ranqueia clusters por (tamanho × peso_médio_fontes).
-
-    Desempate 1: cluster com item mais recente (campo published/updated).
-                 Se não tiver, usa índice de chegada como proxy
-                 (menor índice = mais recente, pois RSS retorna newest-first).
-    Desempate 2: ordem alfabética do título-âncora (item de maior peso).
-
-    Retorna lista de cluster_ids ordenados do mais para o menos relevante.
-    """
-    if not items:
-        return []
-
-    # Agrupar por cluster_id, preservando índice original como proxy de data
-    clusters: dict[int, list[tuple[int, dict]]] = {}
-    for idx, item in enumerate(items):
-        cid = item.get("cluster_id", -1)
-        clusters.setdefault(cid, []).append((idx, item))
-
-    scores = []
-    for cid, pairs in clusters.items():
-        idxs         = [idx for idx, _ in pairs]
-        cluster_itms = [item for _, item in pairs]
-
-        weights  = [pesos_fontes.get(i.get("source", ""), _PESO_DEFAULT) for i in cluster_itms]
-        avg_w    = sum(weights) / len(weights)
-        score    = len(cluster_itms) * avg_w
-
-        # Desempate por data — tenta campos published/updated; fallback: min_idx
-        best_ts: float | None = None
-        for item in cluster_itms:
-            for campo in ("published", "updated"):
-                val = item.get(campo)
-                if not val:
-                    continue
-                try:
-                    if isinstance(val, str):
-                        ts = datetime.fromisoformat(val).timestamp()
-                        if best_ts is None or ts > best_ts:
-                            best_ts = ts
-                except Exception:
-                    pass
-
-        # Se nenhum campo de data disponível, usa min_idx (menor = mais recente)
-        min_idx = min(idxs)
-
-        # Título-âncora = item de maior peso no cluster
-        anchor = max(cluster_itms, key=lambda i: pesos_fontes.get(i.get("source", ""), _PESO_DEFAULT))
-        anchor_title = anchor.get("title", "")
-
-        scores.append({
-            "cid":          cid,
-            "score":        score,
-            "best_ts":      best_ts,
-            "min_idx":      min_idx,
-            "anchor_title": anchor_title,
-        })
-
-    def _sort_key(s: dict):
-        # Score desc; depois data desc (best_ts negate) ou min_idx asc; depois título asc
-        if s["best_ts"] is not None:
-            date_key = -s["best_ts"]
-        else:
-            date_key = float(s["min_idx"])  # menor índice = mais recente = melhor
-        return (-s["score"], date_key, s["anchor_title"])
-
-    scores.sort(key=_sort_key)
-    return [s["cid"] for s in scores]
-
-
-def _build_clustered_news_text(
-    items: list[dict],
-    ranked_cluster_ids: list[int],
-    max_destaques: int = 10,
-) -> tuple[str, str]:
-    """
-    Monta duas strings a partir dos clusters ranqueados.
-
-    news_text_destaques: top max_destaques clusters, formato TEMA N com todas as
-                         fontes do cluster listadas.
-    news_text_radar:     clusters restantes, uma linha por item.
-                         Vazia se não sobrar nenhum cluster.
-    """
-    # Agrupar por cluster_id
-    clusters: dict[int, list[dict]] = {}
-    for item in items:
-        cid = item.get("cluster_id", -1)
-        clusters.setdefault(cid, []).append(item)
-
-    destaque_ids = ranked_cluster_ids[:max_destaques]
-    radar_ids    = ranked_cluster_ids[max_destaques:]
-
-    # ── Destaques ──
-    destaques_parts: list[str] = []
-    for tema_num, cid in enumerate(destaque_ids, 1):
-        cluster_itms = clusters.get(cid, [])
-        if not cluster_itms:
-            continue
-
-        # Ordenar por peso decrescente — item de maior peso = âncora
-        sorted_itms = sorted(
-            cluster_itms,
-            key=lambda i: PESOS_FONTES.get(i.get("source", ""), _PESO_DEFAULT),
-            reverse=True,
-        )
-        anchor = sorted_itms[0]
-        lines  = [f"NOTÍCIA: {anchor.get('title', '')} | URL: {anchor.get('url', '')}"]
-        for item in sorted_itms:
-            source  = item.get("source", "")
-            title   = item.get("title", "")
-            url     = item.get("url", "")
-            snippet = item.get("snippet", "")[:300]
-            lines.append(f"  [{source}] {title} | {url}\n  Contexto: {snippet}")
-
-        destaques_parts.append("\n".join(lines))
-
-    news_text_destaques = "\n\n".join(destaques_parts)
-
-    # ── Radar ──
-    radar_lines: list[str] = []
-    for cid in radar_ids:
-        for item in clusters.get(cid, []):
-            source = item.get("source", "")
-            title  = item.get("title", "")
-            url    = item.get("url", "")
-            radar_lines.append(f"- [{source}] {title} — {url}")
-
-    news_text_radar = "\n".join(radar_lines)
-
-    return news_text_destaques, news_text_radar
 
 
 # ── Extração de tópicos do briefing gerado ───────────────────

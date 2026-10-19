@@ -21,6 +21,9 @@ briefings:        # configuração de cada briefing agendado
   vespertino_mercado: # 18:00 · perfil attanotech · RSS + SearXNG brasil
 
 scanners: {}      # reservado para scanners futuros
+
+inbox:            # caixas de e-mail do Inbox Assistant
+  pedro_hotmail:  # Thunderbird · perfil pedro_dev · jornal + pendências
 ```
 
 ### `perfis.py`
@@ -28,6 +31,7 @@ Loader com cache em memória. Expõe funções tipadas:
 - `get_perfil(nome)` → dict com campos do perfil
 - `get_briefing(nome)` → dict com `_perfil` e `_fontes` já resolvidos
 - `get_scanner(nome)` → igual para scanners
+- `get_inbox(nome)` → inbox com `_perfil` resolvido (`python3 perfis.py inbox pedro_hotmail`)
 - `list_all()` → sumário de tudo (útil para debug: `python3 perfis.py list`)
 
 Faz validação leve de referências cruzadas na carga — se um briefing apontar para um perfil inexistente, falha com mensagem clara.
@@ -58,11 +62,31 @@ Wrapper HTTP para o ChromaDB (API v2, com fallback v1). Operações:
 
 Distância coseno: `0.0` = idênticos, `0.25` = limiar de "similar" (similaridade ≥ 75%), `1.0` = ortogonais. Se ChromaDB estiver offline, todas as funções retornam `None`/`False`/`[]` e logam aviso — nunca travam o serviço chamador.
 
+### `lib_mail.py`
+Leitura de e-mails sem rede e sem senha, direto dos arquivos do Thunderbird (cópias offline):
+- `find_thunderbird_profile()` → descobre o perfil (snap `~/snap/thunderbird/current/.config/thunderbird`, deb `~/.thunderbird`, flatpak) ou usa `THUNDERBIRD_PROFILE`
+- `list_accounts(profile)` → contas a partir do `prefs.js` (hostname, diretório, mbox × maildir)
+- `fetch_messages(accounts, pastas, desde, conta)` → mensagens normalizadas em dict (`subject`, `from_*`, `text`, `links`, `ics`, `is_bulk`, `read`...)
+- `parse_message(msg)` → HTML→texto com extração de links, anexos `.ics` → eventos (`icalendar` com fallback regex), flags `X-Mozilla-Status`
+- `imap_fetch(host, user, password)` → backend IMAP opcional (Outlook/Hotmail exige OAuth2, não funciona por aqui)
+
+Divide o mbox pelo separador real do Thunderbird (`From - <data>`), evitando os falsos cortes do `mailbox.mbox`.
+
+### `lib_cluster.py`
+`cluster_items()`, `rank_clusters()`, `build_clustered_news_text()` — extraídos do `tech-briefing.py` para serem usados também pelo inbox. Comportamento idêntico ao original; `pesos_fontes` virou parâmetro.
+
+### `lib_tts.py`
+`generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open).
+
+### `lib_titulo.py`
+`generate_title_via_llm()` e `extrair_titulo_manchete()` — título/manchete de um markdown, com fallback heurístico.
+
 ### `lib_templates.py`
 Sistema de templates para prompts LLM:
 - Templates ficam em `prompts/*.md` com frontmatter YAML (`name`, `description`, `variables`)
 - `load_template(name)` → carrega e faz cache do template
 - `render_template(name, values)` → substitui `{variavel}` pelo valor; variáveis extras geram aviso; variáveis faltando levantam `ValueError`
+- Chaves literais no corpo (exemplos JSON) precisam ser escritas como `{{` e `}}` — o corpo passa por `str.format_map`
 - `SafeDict` garante que chaves extras não crasham o `.format_map()` — útil para templates com exemplos JSON usando `{{}}`
 
 ### `prompts/`
@@ -76,6 +100,13 @@ Templates de prompt versionados como arquivos de texto:
 | `audio_tecnico.md` | Roteiro de áudio para o briefing matinal — estilo reportagem descontraída |
 | `audio_executivo.md` | Roteiro de áudio para o briefing vespertino — estilo noticiário executivo |
 | `audio_adhoc.md` | Roteiro de áudio para modo ad-hoc — estilo podcast de curiosidades |
+| `email_classificar.md` | Inbox: classifica um e-mail (noticia / evento / contato / transacional / promocao / pessoal / outro) — JSON |
+| `email_noticias_extrair.md` | Inbox: extrai as notícias individuais de uma newsletter — JSON (só URLs que existem no e-mail) |
+| `email_evento_extrair.md` | Inbox: dados estruturados de convite/contato (data, local, link, o que pedem) — JSON |
+| `jornal_email.md` | Inbox: edição do dia a partir das newsletters (regra anti-alucinação igual ao briefing) |
+| `audio_jornal.md` | Inbox: roteiro de áudio da edição do dia — podcast matinal |
+| `pergunta_evento.md` | Inbox: texto em que Alfred apresenta o evento/contato e pergunta "vou ou não vou?" |
+| `audio_pergunta_evento.md` | Inbox: recado de voz curto (30-60s) com a mesma pergunta |
 
 ## Como importar nos serviços
 
@@ -87,7 +118,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import log, ollama_generate, searxng_search
 from _shared.lib_chromadb import ensure_collection, upsert_document
 from _shared.lib_templates import render_template
-from _shared.perfis import get_briefing, get_scanner
+from _shared.perfis import get_briefing, get_scanner, get_inbox
+from _shared.lib_mail import find_thunderbird_profile, list_accounts, fetch_messages
+from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text
+from _shared.lib_tts import tts_save, tocar_audio
+from _shared.lib_titulo import generate_title_via_llm
 ```
 
 ## Variáveis de ambiente relevantes
@@ -100,3 +135,6 @@ from _shared.perfis import get_briefing, get_scanner
 | `SEARXNG_URL` | `http://localhost:8888` | Endpoint do SearXNG |
 | `CHROMADB_URL` | `http://localhost:8000` | Endpoint do ChromaDB |
 | `VAULT_ALFRED` | `""` | Caminho do vault Obsidian |
+| `OLLAMA_THINK` | `""` | `false` desliga o thinking (gemma4/qwen3); vazio não envia o campo |
+| `OLLAMA_NUM_CTX` | `""` | `options.num_ctx` enviado ao Ollama (ex.: 8192) |
+| `THUNDERBIRD_PROFILE` | `""` | Vazio = descoberta automática do perfil |

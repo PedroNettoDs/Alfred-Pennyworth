@@ -1,0 +1,76 @@
+{
+  "name": "Alfred Inbox — Ciclo diário",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "30 7,18 * * *" } ] }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "07:30 e 18:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "c1", "name": "base_url", "value": "http://172.17.0.1:7072", "type": "string" },
+            { "id": "c2", "name": "token", "value": "COLE_AQUI_O_SHELL_EXECUTOR_TOKEN", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.base_url }}/ciclo",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $json.token }}" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ dry_run: false, notificar: true }) }}",
+        "options": { "timeout": 1500000 }
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "POST /ciclo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": { "fieldToSplitOut": "pendencias_novas", "options": {} },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Uma por pendência",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "mode": "list", "value": "SUBSTITUA_PELO_ID_DO_WORKFLOW_AGUARDAR_RESPOSTA" },
+        "mode": "each",
+        "options": { "waitForSubWorkflow": false }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Aguardar resposta (sub-workflow)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [880, 0]
+    }
+  ],
+  "connections": {
+    "07:30 e 18:30": { "main": [ [ { "node": "Config", "type": "main", "index": 0 } ] ] },
+    "Config": { "main": [ [ { "node": "POST /ciclo", "type": "main", "index": 0 } ] ] },
+    "POST /ciclo": { "main": [ [ { "node": "Uma por pendência", "type": "main", "index": 0 } ] ] },
+    "Uma por pendência": { "main": [ [ { "node": "Aguardar resposta (sub-workflow)", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "alfred": "Importe primeiro alfred-inbox-aguardar-resposta.json, copie o ID dele e cole no nó 'Aguardar resposta'. Edite o nó Config com o SHELL_EXECUTOR_TOKEN do .env." }
+}

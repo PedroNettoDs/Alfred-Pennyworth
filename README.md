@@ -18,6 +18,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 5. [Tools do Open WebUI](#5-tools-do-open-webui)
 6. [System Prompt do Alfred](#6-system-prompt-do-alfred)
 7. [Serviços systemd](#7-serviços-systemd)
+7b. [Inbox Assistant — Thunderbird → jornal + pendências](#7b-inbox-assistant--thunderbird--jornal--pendências)
 8. [Scripts Utilitários](#8-scripts-utilitários)
 9. [Referência Rápida](#9-referência-rápida)
 10. [Troubleshooting](#10-troubleshooting)
@@ -69,6 +70,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | Ollama           | 11434 | Host (nativo) | Servidor de LLMs; serve llama3.1:8b e nomic-embed       |
 | Shell Executor   | 7070  | Host (systemd)| API REST que executa comandos no host sob whitelist       |
 | Researcher       | 7071  | Host (systemd)| Orquestra busca web → síntese LLM → escrita no vault     |
+| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou" (CLI + API para o N8N) |
 
 ### Comunicação entre Serviços
 
@@ -95,6 +97,8 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | `llama3.1:8b`                | ~5 GB          | Raciocínio principal, uso de tools, síntese     |
 | `nomic-embed-text-v2-moe:latest` | ~1 GB      | Geração de embeddings para RAG no WebUI         |
 | `gemma3:12b`                 | ~8 GB          | Disponível como alternativa para tarefas pesadas|
+
+> **Nota (outubro/2026):** a máquina atual tem `gemma4:12b` / `gemma4:e4b` (chat) e `bge-m3` (embeddings) — configure `MODEL_CHAT`/`MODEL_EMBED` no `.env` conforme o `ollama list`. Modelos com *thinking* (gemma4, qwen3) exigem `OLLAMA_THINK=false` no `.env`, senão gastam os tokens pensando e devolvem resposta vazia.
 
 Baixar os modelos:
 
@@ -140,6 +144,14 @@ Alfred-Pennyworth/
 │   │   ├── run.sh                     # Script de inicialização manual
 │   │   └── venv/                      # Ambiente virtual Python (NÃO versionado)
 │   │
+│   ├── inbox/
+│   │   ├── core.py                    # Pipeline: Thunderbird → classificar → jornal + pendências
+│   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, ouvir)
+│   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N
+│   │   ├── n8n/                       # Workflows importáveis (ciclo + aguardar resposta)
+│   │   ├── alfred-inbox.{service,timer}, alfred-inbox-api.service  # units de usuário
+│   │   └── about.md
+│   │
 │   ├── scripts/
 │   │   ├── chromadb-indexer.py    # Indexação de .md no ChromaDB (placeholder)
 │   │   ├── sync-knowledge.py      # Sync incremental vault → Knowledge Base do WebUI
@@ -156,6 +168,7 @@ Alfred-Pennyworth/
 │   ├── alfred_researcher.py        # Aciona o Research Service
 │   ├── alfred_shell_executor.py    # Executa comandos via Shell Executor
 │   ├── alfred_system_monitor.py    # Relatório de sistema (CPU/RAM/GPU/Docker)
+│   ├── alfred_pendencias.py        # Fila "vou / não vou" + jornal do dia (Inbox Assistant)
 │   ├── alfred_vault_reader.py      # Leitura do vault do Pedro (somente leitura)
 │   └── alfred_vault_writer.py      # Escrita e busca no vault do Alfred
 │
@@ -304,6 +317,7 @@ sudo systemctl restart alfred-researcher
 | Alfred Vault Reader       | `alfred_vault_reader.py`     | Busca e leitura do vault do Pedro (somente leitura)         | `vault_path` (padrão: `/vaults/pedro`)      |
 | Alfred Vault Writer       | `alfred_vault_writer.py`     | Salva notas e pesquisas no vault do Alfred                  | `vault_path` (padrão: `/vaults/alfred`)     |
 | Alfred Researcher         | `alfred_researcher.py`       | Aciona o Research Service: busca → síntese → vault → sync  | `researcher_url`, `token`                   |
+| Alfred Pendências e Jornal | `alfred_pendencias.py`      | Lista/responde convites e contatos aguardando "vou / não vou"; devolve a edição do dia do jornal | `vault_path` (padrão: `/vaults/alfred`) |
 
 ### Como importar
 
@@ -382,6 +396,29 @@ sudo systemctl restart alfred-researcher
 sudo journalctl -fu alfred-executor
 sudo journalctl -fu alfred-researcher
 ```
+
+---
+
+## 7b. Inbox Assistant — Thunderbird → jornal + pendências
+
+O Alfred lê os e-mails que o **Thunderbird** já baixou (cópias offline do perfil — sem senha, sem rede, funciona com Outlook/Gmail via OAuth2), classifica cada um com o Ollama e faz duas coisas:
+
+1. **Edição do dia do jornal** — as newsletters viram itens de notícia (título, resumo, URL só se existir no e-mail) e passam pelo **mesmo pipeline do briefing** (`lib_cluster` → template `jornal_email.md` → Ollama → título → `.md` + `.mp3` com edge-tts) em `VAULT_ALFRED/jornal/`.
+2. **Pendências "vou / não vou"** — convites a eventos e contatos profissionais (recrutador, proposta, retorno de processo seletivo) geram um texto explicativo + um recado de voz em que Alfred pergunta se Pedro vai. A pergunta fica **aguardando** em `VAULT_ALFRED/pendencias/pendencias.yml` até a resposta, que pode vir por uma pergunta gráfica que fica ociosa esperando o clique (notify-send com botões → kdialog → zenity), pelo terminal (`perguntar` ou `responder`), pelo chat (tool `alfred_pendencias`) ou pelo N8N. "Vou" cria uma tarefa em `tasks.yml`.
+
+```bash
+cd services/inbox
+./run.sh scan            # classifica e mostra — nada gravado
+./run.sh                 # ciclo completo
+./run.sh pendencias      # fila aguardando resposta
+./run.sh perguntar       # Alfred pergunta uma a uma no terminal e espera vou/nao
+./run.sh responder <id> vou
+./run.sh serve           # API HTTP :7072 para o N8N
+```
+
+Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE`, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
+
+**Divisão de papéis com o N8N:** o Python é o motor (ler mbox, clustering, TTS, templates) exposto como API; o N8N orquestra (cron, `Wait` aguardando o "vou/não vou" via `resumeUrl`, e — próximo passo — WhatsApp via Evolution API). Os workflows em `services/inbox/n8n/` são o ponto de partida.
 
 ---
 
@@ -546,11 +583,17 @@ SHELL_EXECUTOR_TOKEN=abc123def456
 
 ### Poder 1 — Scanner de Notícias Tech
 
-Workflow N8N que escaneia notícias de tecnologia a cada 6 horas, sintetiza os destaques com Ollama e salva um relatório diário no vault do Alfred.
+Briefing matinal/vespertino (RSS + SearXNG → clustering → Ollama → vault + áudio) em `services/briefing/`, e **edição do dia do jornal** a partir das newsletters do e-mail em `services/inbox/`.
 
-**Pipeline:** N8N (cron a cada 6h) → SearXNG (busca por categoria `news`) → Ollama (síntese em PT-BR) → Vault Alfred (`research/noticias/YYYY-MM-DD.md`)
+**Status:** ✅ Implementado (briefing via systemd timer; jornal por e-mail via Inbox Assistant)
 
-**Status:** 🔲 Planejado
+---
+
+### Poder 1b — Inbox Assistant (Thunderbird)
+
+Classificação dos e-mails do Thunderbird, jornal diário das newsletters e fila de convites/contatos aguardando "vou / não vou" (texto + áudio), com API para o N8N.
+
+**Status:** ✅ Implementado — ver [seção 7b](#7b-inbox-assistant--thunderbird--jornal--pendências). Workflows N8N escritos, ainda não validados num N8N em execução.
 
 ---
 
@@ -569,6 +612,8 @@ Scraper de portais públicos de licitação (ComprasNet, Portal de Compras SP) q
 Integração com WhatsApp via Evolution API para leitura de mensagens recebidas, extração de compromissos com LLM e criação automática de eventos no Google Calendar ou notas no Obsidian.
 
 **Pipeline:** Evolution API (Docker) → N8N (webhook) → Ollama (extração de entidades: data, hora, compromisso) → Google Calendar API / Obsidian (criação de evento ou nota)
+
+**Próximo passo concreto:** reaproveitar o Inbox Assistant — o sub-workflow `services/inbox/n8n/alfred-inbox-aguardar-resposta.json` já tem o ponto onde entra o envio pelo WhatsApp (título + links vou/não vou + áudio via `GET /pendencias/{id}/audio`); mensagens e áudios recebidos (transcrição com Whisper/gemma4 áudio) passam pelo mesmo `classificar()` → pendência "o que eu quero responder?".
 
 **Status:** 🔲 Planejado
 

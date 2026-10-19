@@ -57,6 +57,11 @@ def _validate(data: dict):
             if fonte_ref not in fontes:
                 erros.append(f"scanner '{nome}' referencia fonte inexistente: {fonte_ref}")
 
+    for nome, inbox in (data.get("inbox") or {}).items():
+        perfil_ref = inbox.get("perfil")
+        if perfil_ref and perfil_ref not in perfis:
+            erros.append(f"inbox '{nome}' referencia perfil inexistente: {perfil_ref}")
+
     if erros:
         raise ValueError("perfis.yml tem erros:\n  - " + "\n  - ".join(erros))
 
@@ -96,6 +101,16 @@ def get_scanner(nome: str) -> dict:
     return scanner
 
 
+def get_inbox(nome: str) -> dict:
+    data = load()
+    inboxes = data.get("inbox") or {}
+    if nome not in inboxes:
+        raise KeyError(f"Inbox não encontrada: {nome}")
+    inbox = dict(inboxes[nome])
+    inbox["_perfil"] = get_perfil(inbox["perfil"]) if inbox.get("perfil") else {}
+    return inbox
+
+
 def list_all() -> dict:
     """Retorna um sumário de tudo que está definido (útil pra debug/CLI)."""
     data = load()
@@ -104,6 +119,7 @@ def list_all() -> dict:
         "fontes": list(data.get("fontes", {}).keys()),
         "briefings": list(data.get("briefings", {}).keys()),
         "scanners": list(data.get("scanners", {}).keys()),
+        "inbox": list((data.get("inbox") or {}).keys()),
     }
 
 
@@ -131,6 +147,12 @@ if __name__ == "__main__":
         b.pop("_fontes", None)
         print(json.dumps(b, indent=2, ensure_ascii=False))
 
+    elif cmd == "inbox" and len(sys.argv) >= 3:
+        import json
+        i = get_inbox(sys.argv[2])
+        i.pop("_perfil", None)
+        print(json.dumps(i, indent=2, ensure_ascii=False))
+
     elif cmd == "scanner" and len(sys.argv) >= 3:
         import json
         s = get_scanner(sys.argv[2])
@@ -144,4 +166,5 @@ if __name__ == "__main__":
         print("  python3 perfis.py perfil <nome>")
         print("  python3 perfis.py briefing <nome>")
         print("  python3 perfis.py scanner <nome>")
+        print("  python3 perfis.py inbox <nome>")
         sys.exit(1)

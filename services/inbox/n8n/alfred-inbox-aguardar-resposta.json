@@ -1,0 +1,92 @@
+{
+  "name": "Alfred Inbox — Aguardar resposta (vou / não vou)",
+  "nodes": [
+    {
+      "parameters": { "inputSource": "passthrough" },
+      "id": "b1000000-0000-4000-8000-000000000001",
+      "name": "Recebe pendência",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "d1", "name": "base_url", "value": "http://172.17.0.1:7072", "type": "string" },
+            { "id": "d2", "name": "token", "value": "COLE_AQUI_O_SHELL_EXECUTOR_TOKEN", "type": "string" },
+            { "id": "d3", "name": "id", "value": "={{ $('Recebe pendência').item.json.id }}", "type": "string" },
+            { "id": "d4", "name": "titulo", "value": "={{ $('Recebe pendência').item.json.titulo }}", "type": "string" },
+            { "id": "d5", "name": "vou", "value": "={{ $execution.resumeUrl }}?resposta=vou", "type": "string" },
+            { "id": "d6", "name": "nao_vou", "value": "={{ $execution.resumeUrl }}?resposta=nao_vou", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000002",
+      "name": "Links de resposta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.base_url }}/pendencias/{{ $json.id }}/links",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $json.token }}" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ vou: $json.vou, nao_vou: $json.nao_vou }) }}",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000003",
+      "name": "Registrar links na pendência",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "notes": "Aqui entra o próximo passo do projeto: enviar titulo + links (vou / nao_vou) + áudio (GET /pendencias/{id}/audio) pelo WhatsApp (Evolution API)."
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "GET",
+        "limitWaitTime": true,
+        "resumeAmount": 7,
+        "resumeUnit": "days",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000004",
+      "name": "Aguardando Pedro (ocioso)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [660, 0],
+      "webhookId": "b1000000-0000-4000-8000-00000000aaaa"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Links de resposta').item.json.base_url }}/pendencias/{{ $('Links de resposta').item.json.id }}/responder",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $('Links de resposta').item.json.token }}" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ resposta: $json.query.resposta, nota: 'via N8N' }) }}",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000005",
+      "name": "POST /responder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0]
+    }
+  ],
+  "connections": {
+    "Recebe pendência": { "main": [ [ { "node": "Links de resposta", "type": "main", "index": 0 } ] ] },
+    "Links de resposta": { "main": [ [ { "node": "Registrar links na pendência", "type": "main", "index": 0 } ] ] },
+    "Registrar links na pendência": { "main": [ [ { "node": "Aguardando Pedro (ocioso)", "type": "main", "index": 0 } ] ] },
+    "Aguardando Pedro (ocioso)": { "main": [ [ { "node": "POST /responder", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "alfred": "Sub-workflow chamado uma vez por pendência. Fica parado no nó Wait até alguém abrir o link vou/nao_vou (até 7 dias). Edite o nó 'Links de resposta' com o SHELL_EXECUTOR_TOKEN." }
+}
