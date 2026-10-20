@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Alfred — limpeza da caixa",
+  "description": "Executa os lotes de limpeza APROVADOS no Alfred: move as mensagens para a Lixeira da própria conta (nunca apaga de forma permanente).",
+  "version": "1.0.0",
+  "author": "Alfred-Pennyworth",
+  "browser_specific_settings": {
+    "gecko": { "id": "limpeza@alfred-pennyworth.local", "strict_min_version": "128.0" }
+  },
+  "permissions": ["accountsRead", "messagesRead", "messagesMove", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "scripts": ["executor.js", "background.js"] },
+  "options_ui": { "page": "options.html", "open_in_tab": false }
+}

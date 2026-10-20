@@ -1,0 +1,92 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "120363012345678901@g.us",
+      "fromMe": false,
+      "id": "ACB980C382A582DDEB61E0476411110A",
+      "participant": "123456789012345@lid",
+      "participantAlt": "5514977776666@s.whatsapp.net",
+      "addressingMode": "lid"
+    },
+    "pushName": "Juliana",
+    "message": {
+      "conversation": "Vocês já chegaram na praça?",
+      "messageContextInfo": {
+        "threadId": [],
+        "deviceListMetadataVersion": 2,
+        "messageSecret": {
+          "0": 217,
+          "1": 234,
+          "2": 251,
+          "3": 12,
+          "4": 29,
+          "5": 46,
+          "6": 63,
+          "7": 80,
+          "8": 97,
+          "9": 114,
+          "10": 131,
+          "11": 148,
+          "12": 165,
+          "13": 182,
+          "14": 199,
+          "15": 216,
+          "16": 233,
+          "17": 250,
+          "18": 11,
+          "19": 28,
+          "20": 45,
+          "21": 62,
+          "22": 79,
+          "23": 96,
+          "24": 113,
+          "25": 130,
+          "26": 147,
+          "27": 164,
+          "28": 181,
+          "29": 198,
+          "30": 215,
+          "31": 232
+        },
+        "deviceListMetadata": {
+          "senderKeyIndexes": [],
+          "recipientKeyIndexes": [],
+          "recipientKeyHash": {
+            "0": 217,
+            "1": 234,
+            "2": 251,
+            "3": 12,
+            "4": 29,
+            "5": 46,
+            "6": 63,
+            "7": 80,
+            "8": 97,
+            "9": 114
+          },
+          "recipientTimestamp": {
+            "low": 1792411200,
+            "high": 0,
+            "unsigned": true
+          }
+        }
+      }
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1792413480,
+    "source": "ios",
+    "status": "DELIVERY_ACK",
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": []
+    },
+    "instanceId": "8acc06c7-6d9b-4aee-9331-1f9d2924e74b"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook-async",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514999990000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

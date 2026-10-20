@@ -1,11 +1,14 @@
 """
 title: Alfred Pendências e Jornal
-description: Fila de convites/contatos que aguardam "vou / não vou" (gerada pelo Inbox Assistant a partir do Thunderbird) e a última edição do jornal diário. Lê e escreve em VAULT_ALFRED/pendencias/ e VAULT_ALFRED/jornal/.
+description: Fila de convites/contatos que aguardam "vou / não vou" (Inbox Assistant, Thunderbird), mensagens de WhatsApp que aguardam "o que você quer responder?" (Evolution API) e a última edição do jornal diário. Lê e escreve em VAULT_ALFRED/pendencias/ e VAULT_ALFRED/jornal/; respostas de WhatsApp são enviadas pela API do inbox (:7072).
 author: Alfred Pennyworth
-version: 1.0.0
+version: 1.1.0
 """
 
+import json
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -19,6 +22,18 @@ class Tools:
         vault_path: str = Field(
             default="/vaults/alfred",
             description="Caminho do vault do Alfred (dentro do container: /vaults/alfred)",
+        )
+        noticias_path: str = Field(
+            default="/vaults/alfred/Noticias",
+            description="Cofre de notícias (VAULT_NOTICIAS). O jornal é procurado em <noticias_path>/jornal e, se vazio, em <vault_path>/jornal",
+        )
+        inbox_api_url: str = Field(
+            default="http://172.17.0.1:7072",
+            description="API do Inbox Assistant (services/inbox/run.sh serve). Usada para enviar respostas de WhatsApp pela Evolution API",
+        )
+        inbox_api_token: str = Field(
+            default="",
+            description="SHELL_EXECUTOR_TOKEN do .env (Bearer da API do inbox)",
         )
 
     def __init__(self):
@@ -62,16 +77,37 @@ class Tools:
         f.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return tid
 
+    def _api(self, metodo: str, rota: str, body: Optional[dict] = None) -> dict:
+        """Chama a API do Inbox Assistant. Levanta RuntimeError com mensagem legível em falha."""
+        url = self.valves.inbox_api_url.rstrip("/") + rota
+        dados = json.dumps(body or {}).encode("utf-8")
+        req = urllib.request.Request(url, data=dados, method=metodo, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.valves.inbox_api_token}",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            try:
+                detalhe = json.loads(e.read().decode("utf-8")).get("detail")
+            except Exception:
+                detalhe = e.reason
+            raise RuntimeError(f"API do inbox respondeu {e.code}: {detalhe}")
+        except Exception as e:
+            raise RuntimeError(f"API do inbox inacessível em {url}: {e}")
+
     # ── tools ─────────────────────────────────────────────────
     def listar_pendencias(self, status: Optional[str] = "aguardando") -> str:
         """
-        Lista convites para eventos e contatos profissionais que aguardam a decisão de Pedro.
+        Lista o que aguarda a decisão de Pedro: convites para eventos, contatos profissionais
+        (e-mail, "vou / não vou") e mensagens de WhatsApp ("o que você quer responder?").
 
         Use quando Pedro perguntar "tenho algum convite?", "o que está pendente?",
-        "quais eventos chegaram?", "tem algo esperando resposta?".
+        "quais eventos chegaram?", "tem algo esperando resposta?", "quem me mandou WhatsApp?".
 
-        :param status: "aguardando" (padrão), "todas", "vou", "nao_vou", "expirada"
-        :return: Lista formatada com id, tipo, data e título
+        :param status: "aguardando" (padrão), "todas", "vou", "nao_vou", "respondida", "expirada"
+        :return: Lista formatada com id, tipo, data/contato e título
         """
         pend = self._load()["pendencias"]
         if status not in (None, "", "todas"):
@@ -81,6 +117,16 @@ class Tools:
         linhas = []
         for p in pend:
             ev = p.get("evento") or {}
+            if p.get("tipo") == "whatsapp":
+                wa = p.get("whatsapp") or {}
+                linhas.append(
+                    f"• [{p['id']}] (whatsapp, {p.get('status')}) **{wa.get('contato') or p.get('titulo')}** "
+                    f"({wa.get('numero') or '?'}) · {wa.get('tipo_msg')} · {wa.get('categoria')} · urgência {wa.get('urgencia')}"
+                    + (f"\n  ❝ {(wa.get('texto') or '')[:300]} ❞" if wa.get("texto") else "")
+                    + (f"\n  {ev.get('resumo')}" if ev.get("resumo") else "")
+                    + (f"\n  resposta enviada: {p.get('resposta_texto')}" if p.get("resposta_texto") else "")
+                )
+                continue
             quando = ev.get("data_inicio") or "data não informada"
             local = ev.get("local") or ("online" if ev.get("online") else "")
             linhas.append(
@@ -89,7 +135,8 @@ class Tools:
                 + (f"\n  {ev.get('resumo')}" if ev.get("resumo") else "")
             )
         return f"{len(pend)} pendência(s):\n" + "\n".join(linhas) + \
-               "\n\nPara decidir: responder_pendencia(id, 'vou' ou 'nao_vou')."
+               "\n\nPara decidir: responder_pendencia(id, 'vou' ou 'nao_vou'); pendência de WhatsApp: " \
+               "responder_pendencia(id, '<texto da resposta>') — Alfred envia ao contato."
 
     def ver_pendencia(self, pendencia_id: str) -> str:
         """
@@ -114,15 +161,28 @@ class Tools:
 
     def responder_pendencia(self, pendencia_id: str, resposta: str, nota: Optional[str] = "") -> str:
         """
-        Registra a decisão de Pedro sobre um convite/contato. "vou" cria uma tarefa em tasks.yml.
+        Registra a decisão de Pedro sobre uma pendência.
+        - Convite/contato de e-mail: "vou" (cria tarefa em tasks.yml), "nao_vou" ou "ignorar".
+        - Mensagem de WhatsApp: `resposta` é o TEXTO LIVRE que Alfred deve enviar ao contato
+          pelo WhatsApp (ou "ignorar" para não responder). Envie exatamente o que Pedro ditou.
 
-        Use quando Pedro disser "vou", "não vou", "aceito", "recuso", "ignora esse" sobre uma pendência.
+        Use quando Pedro disser "vou", "não vou", "aceito", "recuso", "ignora esse" sobre um convite,
+        ou "responde pro Carlos que ...", "manda pra ela: ..." sobre uma mensagem de WhatsApp.
 
         :param pendencia_id: ID da pendência
-        :param resposta: "vou", "nao_vou" (ou "não vou") ou "ignorar"
+        :param resposta: "vou" | "nao_vou" | "ignorar" — ou, para WhatsApp, o texto da resposta
         :param nota: Observação opcional de Pedro (ex.: "só a palestra da tarde")
         :return: Confirmação
         """
+        data = self._load()
+        p = next((x for x in data["pendencias"] if x.get("id") == pendencia_id), None)
+        if not p:
+            return f"Pendência não encontrada: {pendencia_id}"
+        if p.get("status") != "aguardando":
+            return f"Pendência {pendencia_id} já está com status '{p.get('status')}'."
+        if p.get("tipo") == "whatsapp":
+            return self._responder_whatsapp(data, p, resposta or "", nota or "")
+
         r = (resposta or "").strip().lower().replace("-", "_").replace(" ", "_")
         if r in ("vou", "sim", "aceito", "yes"):
             r = "vou"
@@ -132,13 +192,6 @@ class Tools:
             r = "ignorada"
         else:
             return f"Resposta inválida: {resposta!r}. Use 'vou', 'nao_vou' ou 'ignorar'."
-
-        data = self._load()
-        p = next((x for x in data["pendencias"] if x.get("id") == pendencia_id), None)
-        if not p:
-            return f"Pendência não encontrada: {pendencia_id}"
-        if p.get("status") != "aguardando":
-            return f"Pendência {pendencia_id} já está com status '{p.get('status')}'."
 
         now = datetime.now().astimezone()
         p["status"] = r
@@ -169,6 +222,40 @@ class Tools:
         return f"Anotado: {rotulo} para \"{p.get('titulo')}\"." + \
                (f" Tarefa #{task_id} criada em tasks.yml." if task_id else "")
 
+    def _responder_whatsapp(self, data: dict, p: dict, texto: str, nota: str) -> str:
+        """Texto livre → API do inbox (que grava e envia pela Evolution API). Sem API: só registra no YAML."""
+        texto = texto.strip()
+        if not texto:
+            return "Diga o texto da resposta (ou 'ignorar')."
+        wa = p.get("whatsapp") or {}
+        contato = wa.get("contato") or p.get("titulo")
+        try:
+            e = self._api("POST", f"/pendencias/{p['id']}/responder-texto", {"texto": texto, "enviar": True, "nota": nota})
+            envio = (e.get("whatsapp") or {}).get("envio") or {}
+            if e.get("status") == "ignorada":
+                return f"Anotado: não respondo a {contato}."
+            if envio.get("simulado"):
+                return f"Resposta registrada para {contato} (envio SIMULADO — EVOLUTION_URL não configurada):\n“{texto}”"
+            return f"Enviado a {contato} pelo WhatsApp:\n“{texto}”"
+        except RuntimeError as err:
+            # fallback: registra no YAML; o envio fica pendente (run.sh responder-texto reenviará)
+            now = datetime.now().astimezone()
+            ignorar = texto.lower().rstrip(".!") in ("ignorar", "ignora", "não responder", "nao responder")
+            p["status"] = "ignorada" if ignorar else "aguardando"
+            p["resposta_texto"] = None if ignorar else texto
+            p["nota"] = nota.strip() or None
+            if ignorar:
+                p["resposta"] = "ignorada"
+                p["respondido_em"] = now.isoformat(timespec="minutes")
+            else:
+                p.setdefault("whatsapp", {})["envio"] = {"ok": False, "erro": f"API indisponível ({err})",
+                                                         "solicitado_em": now.isoformat(timespec="minutes")}
+            self._save(data)
+            if ignorar:
+                return f"Anotado: não respondo a {contato} (API do inbox indisponível, registrado só no vault)."
+            return (f"Guardei a resposta para {contato}, mas NÃO consegui enviar: {err}. "
+                    f"Reenvie com: services/inbox/run.sh responder-texto {p['id']} \"{texto}\"")
+
     def jornal_de_hoje(self) -> str:
         """
         Devolve a última edição do jornal diário montado a partir das newsletters do e-mail.
@@ -177,10 +264,12 @@ class Tools:
 
         :return: Markdown da última edição (ou aviso se não houver)
         """
-        d = self._vault() / "jornal"
-        if not d.is_dir():
-            return "Nenhuma edição do jornal foi gerada ainda."
-        mds = sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        mds = []
+        for d in (Path(self.valves.noticias_path) / "jornal", self._vault() / "jornal"):
+            if d.is_dir():
+                mds = sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if mds:
+                break
         if not mds:
             return "Nenhuma edição do jornal foi gerada ainda."
         txt = mds[0].read_text(encoding="utf-8")
@@ -192,3 +281,52 @@ class Tools:
         if mp3.exists():
             txt += f"\n\n*(Áudio disponível: {mp3.name})*"
         return txt
+
+    # ── limpeza pós-podcast (services/inbox/LIMPEZA.md) ──────
+    def listar_limpezas(self) -> str:
+        """
+        Mostra os pedidos de limpeza da caixa de e-mail ("posso apagar estes N e-mails?") que aguardam
+        a decisão de Pedro, com os e-mails de cada lote e o motivo.
+
+        Use quando Pedro perguntar "o que você quer apagar?", "tem limpeza pendente?", "quais e-mails vão pra lixeira?".
+
+        :return: Lotes aguardando, com id, quantidade e amostra dos e-mails
+        """
+        try:
+            lotes = self._api("GET", "/limpeza/lotes?status=aguardando").get("lotes") or []
+        except RuntimeError as e:
+            return str(e)
+        if not lotes:
+            return "Nenhum pedido de limpeza aguardando."
+        partes = []
+        for l in lotes:
+            amostra = "\n".join(f"  • {i['date'][:10]} {i['from']} — {(i.get('subject') or '')[:70]} ({i['motivo']})"
+                                for i in l["itens"][:15])
+            mais = f"\n  … e mais {l['total'] - 15}" if l["total"] > 15 else ""
+            partes.append(f"[{l['id']}] {l['total']} e-mail(s) → Lixeira\n{amostra}{mais}")
+        return "\n\n".join(partes) + \
+            "\n\nSó aprove se Pedro disser claramente que sim: responder_limpeza(id, 'aprovar' | 'recusar')."
+
+    def responder_limpeza(self, lote_id: str, decisao: str, nota: Optional[str] = "") -> str:
+        """
+        Registra a decisão de Pedro sobre um pedido de limpeza. 'aprovar' libera a extensão do Thunderbird
+        para MOVER os e-mails do lote para a Lixeira. Chame com 'aprovar' SOMENTE quando Pedro tiver
+        confirmado explicitamente esse lote nesta conversa ("pode apagar", "aprovo a limpeza X");
+        na dúvida, pergunte antes.
+
+        :param lote_id: ID do lote (ex.: limpeza-20261019-2210)
+        :param decisao: "aprovar" ou "recusar"
+        :param nota: observação opcional
+        :return: Confirmação
+        """
+        d = (decisao or "").strip().lower()
+        if d not in ("aprovar", "recusar"):
+            return "Decisão inválida: use 'aprovar' ou 'recusar'."
+        try:
+            r = self._api("POST", f"/limpeza/{lote_id}/{d}", {"nota": nota or "via Open WebUI"})
+        except RuntimeError as e:
+            return str(e)
+        if d == "recusar":
+            return f"Limpeza {lote_id} recusada — nada será apagado."
+        return (f"Limpeza {lote_id} aprovada: {r.get('total')} e-mail(s) irão para a Lixeira na próxima passada "
+                f"da extensão do Thunderbird.")

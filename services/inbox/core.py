@@ -106,7 +106,7 @@ SCHEMA_EVENTO = {
 }
 OPTS_JSON = {"temperature": 0.1, "num_predict": 1200}
 ACIONAVEIS = ("noticia", "evento", "contato")
-STATUS_FINAIS = ("vou", "nao_vou", "expirada", "ignorada")
+STATUS_FINAIS = ("vou", "nao_vou", "expirada", "ignorada", "respondida", "respondida_manual")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -120,10 +120,25 @@ def vault() -> Path:
     return Path(v)
 
 
+def vault_noticias() -> Path:
+    """Cofre de notícias (jornal diário + podcast semanal). Sem VAULT_NOTICIAS → o próprio VAULT_ALFRED."""
+    v = os.getenv("VAULT_NOTICIAS", "").strip()
+    return Path(v) if v else vault()
+
+
 def jornal_dir() -> Path:
-    d = vault() / "jornal"
+    d = vault_noticias() / "jornal"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def ultimo_jornal_md() -> Optional[Path]:
+    """Última edição: VAULT_NOTICIAS/jornal, com fallback para o antigo VAULT_ALFRED/jornal."""
+    for d in (vault_noticias() / "jornal", vault() / "jornal"):
+        mds = sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True) if d.is_dir() else []
+        if mds:
+            return mds[0]
+    return None
 
 
 def pend_dir() -> Path:
@@ -159,13 +174,15 @@ def _now() -> datetime:
 #  Memória de message-ids processados
 # ══════════════════════════════════════════════════════════════
 
-def load_seen() -> dict:
-    if not SEEN_FILE.exists():
+def load_seen(path: Optional[Path] = None) -> dict:
+    """Ids já processados → timestamp. `path` permite outro arquivo (ex.: whatsapp_seen.json)."""
+    path = path or SEEN_FILE
+    if not path.exists():
         return {}
     try:
-        data = json.loads(SEEN_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
-        log(f"[seen] Erro lendo {SEEN_FILE}: {e} — começando vazio")
+        log(f"[seen] Erro lendo {path}: {e} — começando vazio")
         return {}
     if not isinstance(data, dict):
         return {}
@@ -180,9 +197,10 @@ def load_seen() -> dict:
     return kept
 
 
-def save_seen(seen: dict):
-    SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SEEN_FILE.write_text(json.dumps(seen, indent=2, ensure_ascii=False), encoding="utf-8")
+def save_seen(seen: dict, path: Optional[Path] = None):
+    path = path or SEEN_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(seen, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -267,7 +285,7 @@ def classificar(m: dict, cfg: dict) -> dict:
         "assunto":   m["subject"] or "(sem assunto)",
         "data":      m["date_iso"] or "desconhecida",
         "dicas":     "; ".join(dicas) or "nenhum",
-        "corpo":     (m["text"] or "(corpo vazio)")[:2500],
+        "corpo":     _corpo_prompt(m, 2500) or "(corpo vazio)",
     })
     data = ollama_generate_json(prompt, model=_modelo_classificacao(), timeout=120,
                                 schema=SCHEMA_CLASSIFICACAO, options={**OPTS_JSON, "num_predict": 400})
@@ -300,19 +318,44 @@ _LINK_RUIM = re.compile(r"unsubscribe|descadastr|cancelar|optout|opt-out|prefere
                         r"youtube\.com/@|apps\.apple\.com|play\.google\.com", re.I)
 
 
+# links de redirecionamento escondem o destino na URL — então filtra também pelo texto-âncora
+_ANCORA_RUIM = re.compile(r"^(instagram|facebook|youtube|linkedin|tiktok|twitter|x|whatsapp\b.*|custom|"
+                          r"cancel\w* (sua )?inscri\w*|descadastr\w*|unsubscribe|"
+                          r"(visualizar|ver) (este e-mail|no navegador).*|vers[aã]o on-?line|p[aá]gina web)$", re.I)
+
+
+def _link_ruim(t: str, u: str) -> bool:
+    return bool(_LINK_RUIM.search(u) or _ANCORA_RUIM.match((t or "").strip()))
+
+
 _LINK_MAX_LEN = 300   # URLs de rastreamento gigantes só gastam contexto
 
 
-def _links_texto(m: dict, max_links: int = 40) -> tuple[str, set[str]]:
-    linhas, permitidas = [], set()
+def _links_texto(m: dict, max_links: int = 40) -> tuple[str, dict[str, str]]:
+    """
+    Lista LINKS do prompt + {o que o LLM pode devolver → URL real}.
+    URLs de rastreamento gigantes (t.rdsv2.net/ls/click?upn=...) entram com um apelido curto
+    ("link3") em vez de serem descartadas — senão o e-mail fica sem nenhum link de inscrição.
+    """
+    linhas, permitidas = [], {}
     for t, u in m.get("links", []):
-        if _LINK_RUIM.search(u) or len(u) > _LINK_MAX_LEN:
+        if _link_ruim(t, u) or u in permitidas:
             continue
-        linhas.append(f"{t or '(sem texto)'} → {u}")
-        permitidas.add(u)
+        mostra = u
+        if len(u) > _LINK_MAX_LEN:
+            mostra = f"link{len(linhas) + 1}"
+            permitidas[mostra] = u
+        linhas.append(f"{t or '(sem texto)'} → {mostra}")
+        permitidas[u] = u
         if len(linhas) >= max_links:
             break
     return ("\n".join(linhas) or "(nenhum)"), permitidas
+
+
+def _corpo_prompt(m: dict, limite: int) -> str:
+    """Corpo sem as URLs longas inline (texto plano de newsletter) — sobra contexto pro conteúdo."""
+    from _shared.lib_mail import compactar_urls
+    return compactar_urls(m.get("text") or "")[:limite]
 
 
 def extrair_noticias(m: dict, jcfg: dict) -> list[dict]:
@@ -324,7 +367,7 @@ def extrair_noticias(m: dict, jcfg: dict) -> list[dict]:
         "assunto":   m["subject"],
         "data":      m["date_iso"],
         "max_itens": max_itens,
-        "corpo":     (m["text"] or "")[:6000],
+        "corpo":     _corpo_prompt(m, 6000),
         "links":     links_txt,
     })
     data = ollama_generate_json(prompt, timeout=240, schema=SCHEMA_NOTICIAS, options=OPTS_JSON)
@@ -349,8 +392,7 @@ def extrair_noticias(m: dict, jcfg: dict) -> list[dict]:
         if len(titulo) < 5:
             continue
         url = str(it.get("url") or "").strip()
-        if url and url not in permitidas:
-            url = ""  # anti-alucinação: só URLs que existem no e-mail
+        url = permitidas.get(url, "")  # anti-alucinação: só URLs que existem no e-mail (apelido → URL real)
         out.append({
             "title":     titulo[:160],
             "url":       url,
@@ -443,6 +485,19 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
     md_path = jd / f"{base}.md"
     md_path.write_text(md, encoding="utf-8")
     log(f"[jornal] Markdown salvo: {md_path.name}")
+    # Metadados para o podcast semanal (semanal.py): e-mails e notícias desta edição
+    try:
+        (jd / f"{base}.json").write_text(json.dumps({
+            "data": date_str,
+            "emails": [{"message_id": e["message_id"], "from": f"{e['from_name']} <{e['from_addr']}>",
+                        "from_name": e["from_name"] or e["from_domain"], "subject": e["subject"],
+                        "date": e["date_iso"], "pasta": e.get("folder", ""), "conta": e.get("account", "")}
+                       for e in emails_noticia],
+            "noticias": [{k: it.get(k, "") for k in ("title", "url", "snippet", "source", "published", "email_id")}
+                         for it in unique],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        log(f"[jornal] Falha ao gravar metadados JSON: {e}")
 
     mp3_path: Optional[Path] = None
     if "audio" in (jcfg.get("formato") or []):
@@ -540,7 +595,7 @@ def extrair_evento(m: dict, cat: dict) -> Optional[dict]:
         "assunto":    m["subject"],
         "data_email": m["date_iso"] or "desconhecida",
         "data_hoje":  now.strftime("%Y-%m-%d (%A)"),
-        "corpo":      (m["text"] or "")[:5000],
+        "corpo":      _corpo_prompt(m, 5000),
         "links":      links_txt,
         "ics":        ics_txt,
     })
@@ -569,8 +624,7 @@ def extrair_evento(m: dict, cat: dict) -> Optional[dict]:
         "resumo":         str(data.get("resumo") or cat.get("resumo") or "").strip()[:600],
         "requer_decisao": data.get("requer_decisao") if isinstance(data.get("requer_decisao"), bool) else True,
     }
-    if not ev["link"] or ev["link"] not in permitidas:
-        ev["link"] = _link_de_acao(m, permitidas)
+    ev["link"] = permitidas.get(ev["link"], "") or _link_de_acao(m, permitidas)
     for k in ("data_inicio", "data_fim", "prazo_resposta"):
         if ev[k] is not None and not isinstance(ev[k], str):
             ev[k] = str(ev[k])
@@ -593,12 +647,12 @@ def extrair_evento(m: dict, cat: dict) -> Optional[dict]:
 _ACAO_RE = re.compile(r"inscr|regist|confirm|particip|rsvp|garant|vaga|reserv|agend|detalhe|saiba|evento|meetup", re.I)
 
 
-def _link_de_acao(m: dict, permitidas: set[str]) -> str:
+def _link_de_acao(m: dict, permitidas: dict[str, str]) -> str:
     """
     Quando o LLM não devolve um link válido: o link cujo texto-âncora parece ação, senão o primeiro.
     Aqui o limite de tamanho não se aplica (ele só existe pra poupar contexto do prompt).
     """
-    candidatos = [(t, u) for t, u in m.get("links", []) if not _LINK_RUIM.search(u)]
+    candidatos = [(t, u) for t, u in m.get("links", []) if not _link_ruim(t, u)]
     for t, u in candidatos:
         if _ACAO_RE.search(t or ""):
             return u
@@ -750,21 +804,42 @@ def criar_pendencia(m: dict, ev: dict, cfg: dict, inbox_name: str) -> dict:
     return entry
 
 
+def _tem_gui() -> bool:
+    return bool(shutil.which("kdialog") or shutil.which("zenity") or shutil.which("notify-send"))
+
+
+def _iniciar_aguardador(comando: str, pid: str):
+    """Processo destacado (sobrevive à API) que fica ocioso na pergunta gráfica até Pedro clicar."""
+    try:
+        subprocess.Popen(
+            [sys.executable, str(SCRIPT_DIR / "inbox-assistant.py"), comando, pid],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+    except Exception as e:
+        log(f"[pendencias] Não foi possível iniciar o aguardador de resposta: {e}")
+
+
 def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
-    """Notificação desktop com botões Vou / Não vou / Ouvir (processo destacado, fica ocioso aguardando)."""
+    """Notificação desktop com botões (processo destacado, fica ocioso aguardando):
+    e-mail → Vou / Não vou / Ouvir · WhatsApp → Enviar (rascunho editável) / Não enviar / Agenda / Ouvir."""
+    if entry.get("tipo") == "whatsapp":
+        wa = entry.get("whatsapp") or {}
+        if aguardar_resposta and _tem_gui():
+            _iniciar_aguardador("_aguardar-whatsapp", entry["id"])
+        else:
+            _notify("Alfred — WhatsApp",
+                    f"{wa.get('contato') or entry['titulo']}: {(wa.get('texto') or '')[:120]}\n"
+                    f"Responda: run.sh responder-texto {entry['id']} \"...\"")
+        if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and entry.get("arquivos", {}).get("mp3"):
+            tocar_audio(vault() / entry["arquivos"]["mp3"])
+        return
     quando = entry.get("evento", {}).get("data_inicio") or "data não informada"
     _notify(f"Alfred — {'Convite' if entry['tipo'] == 'evento' else 'Contato profissional'}",
             f"{entry['titulo']}\n{quando}\nResponda: run.sh responder {entry['id']} vou | nao-vou")
     if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and entry.get("arquivos", {}).get("mp3"):
         tocar_audio(vault() / entry["arquivos"]["mp3"])
-    if aguardar_resposta and (shutil.which("kdialog") or shutil.which("zenity") or shutil.which("notify-send")):
-        try:
-            subprocess.Popen(
-                [sys.executable, str(SCRIPT_DIR / "inbox-assistant.py"), "_aguardar-resposta", entry["id"]],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-            )
-        except Exception as e:
-            log(f"[pendencias] Não foi possível iniciar o aguardador de resposta: {e}")
+    if aguardar_resposta and _tem_gui():
+        _iniciar_aguardador("_aguardar-resposta", entry["id"])
 
 
 def _add_task(title: str, due_date: Optional[str], tags: list[str]) -> Optional[int]:
@@ -801,6 +876,9 @@ def responder(pid: str, resposta: str, nota: str = "") -> dict:
     entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
     if not entry:
         raise KeyError(f"Pendência não encontrada: {pid}")
+    if entry.get("tipo") == "whatsapp" and r != "ignorada":
+        raise ValueError(f"{pid} é uma pendência de WhatsApp: responda com texto livre "
+                         f"(responder-texto {pid} \"...\") ou 'ignorar'")
 
     now = _now()
     entry["status"] = r
@@ -973,6 +1051,8 @@ def ciclo(
     for m in novos:
         seen[m["message_id"]] = datetime.now().isoformat(timespec="minutes")
     save_seen(seen)
+    import limpeza  # categorias → logs/inbox_categorias.json (base da limpeza pós-podcast)
+    limpeza.registrar_classificacoes(resumo["classificacao"])
 
     resumo["manutencao"] = expirar_e_lembrar(cfg)
     resumo["pendencias_aguardando"] = listar_pendencias("aguardando")

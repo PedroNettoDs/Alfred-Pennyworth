@@ -1,0 +1,21 @@
+[Unit]
+Description=Alfred — podcast semanal (jornal da semana → diálogo em 2 vozes + manifesto)
+After=network-online.target
+# Disparado por alfred-semanal.timer. Unit de USUÁRIO: instale em ~/.config/systemd/user/
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
+ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh semanal
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=default.target
+
+# INSTALAÇÃO (sem sudo) — NÃO instalado automaticamente:
+#   cp alfred-semanal.service alfred-semanal.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alfred-semanal.timer
+#   journalctl --user -fu alfred-semanal

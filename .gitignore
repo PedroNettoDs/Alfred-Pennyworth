@@ -37,3 +37,6 @@ Thumbs.db
 *~
 *.tmp
 *.bak
+
+# ── Pacote gerado da extensão do Thunderbird ──────────────────
+*.xpi

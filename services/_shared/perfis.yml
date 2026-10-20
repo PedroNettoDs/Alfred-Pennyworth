@@ -142,12 +142,60 @@ inbox:
       min_noticias: 2             # abaixo disso não gera edição
       pesos_fontes: {}            # opcional: {"TLDR": 0.9} — chave = nome do remetente
 
+    # Podcast semanal (services/inbox/semanal.py) — lê as edições da semana em VAULT_NOTICIAS/jornal
+    podcast:
+      formato: [markdown, audio]
+      vozes:                      # duas vozes edge-tts em diálogo
+        ALFRED: "pt-BR-AntonioNeural"
+        LUCIA:  "pt-BR-FranciscaNeural"
+      template_segmento: podcast_semanal_segmento
+      template_moldura: podcast_semanal_moldura
+      max_temas: 7                # temas da semana (clusters) que viram segmento
+      min_noticias: 3             # abaixo disso não gera episódio
+      palavras_por_tema: 220      # ~1,5 min por tema → episódio de 10-13 min
+      pausa_ms: 350               # silêncio entre falas
+      vinheta: ""                 # opcional: .mp3 tocado no início e no fim
+
     pendencias:
       tts_voice: "pt-BR-AntonioNeural"
       template_pergunta: pergunta_evento
       template_audio: audio_pergunta_evento
       lembrar_a_cada_horas: 12    # re-notifica pendências aguardando
       expirar_apos_evento: true   # marca como expirada se a data do evento passou
+
+    # Limpeza pós-podcast (services/inbox/LIMPEZA.md) — sempre pergunta antes; executa só via extensão
+    # do Thunderbird, que MOVE para a Lixeira. contato/evento/pessoal e pendências aguardando nunca entram.
+    limpeza:
+      ativo: true
+      dias_minimos: 30            # promocao/transacional/ignorado mais antigos que isso viram candidatos
+      categorias: [promocao, transacional, ignorado]
+      usar_manifestos: true       # e-mails já usados num episódio (VAULT_NOTICIAS/podcast/manifestos)
+      max_por_lote: 200
+      expirar_lote_dias: 7        # pergunta sem resposta expira
+
+# ── WhatsApp — mensagens recebidas via Evolution API ──────────
+# Texto e áudio (transcrito localmente com gemma4) passam pelo mesmo
+# tratamento do e-mail: classificação → pendência "o que você quer
+# responder?" (texto + áudio) → a resposta de Pedro volta pelo WhatsApp.
+# Instância, chave e número de Pedro ficam no .env (EVOLUTION_*, WHATSAPP_*).
+whatsapp:
+  pedro_whatsapp:
+    perfil: pedro_dev
+    grupos: ignorar               # ignorar | mencao (só se Pedro for mencionado) | todos
+    pessoal_vira_pendencia: true  # false = só "profissional" vira pendência
+    so_se_requer_resposta: true   # false = toda mensagem relevante vira pendência, mesmo "ok, obrigado"
+    confianca_minima: 0.5         # abaixo disso a categoria vira "outro" (sem pendência)
+    atraso_minutos: 20            # espera isso sem resposta de Pedro na conversa antes de resumir/avisar (0 = na hora)
+    agrupar_minutos: 30           # novas mensagens do mesmo contato entram na pendência aberta
+    audio_max_segundos: 600       # transcreve no máximo isso (gemma4 ouve em fatias de 30 s)
+    contatos_ignorar: []          # substrings de número ou nome que nunca viram pendência
+    contatos_sempre: []           # substrings de número ou nome que viram pendência sem passar pelo LLM
+
+    pendencias:
+      tts_voice: "pt-BR-AntonioNeural"
+      template_pergunta: pergunta_whatsapp
+      template_audio: audio_pergunta_whatsapp
+      lembrar_a_cada_horas: 6
 
 # ── Defaults globais ──────────────────────────────────────────
 defaults:

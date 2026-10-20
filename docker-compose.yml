@@ -74,6 +74,62 @@ services:
     networks:
       - alfred-net
 
+  # ── Evolution API (WhatsApp) ────────────────────────────────
+  # Pareia um número de WhatsApp por QR code e entrega as mensagens recebidas
+  # por webhook (texto e áudio em base64) ao Inbox Assistant (:7072) ou ao N8N.
+  # Pareamento e webhook: services/inbox/about.md → "Poder 3 — WhatsApp".
+  # Porta só em 127.0.0.1: a API é autenticada por uma chave única (EVOLUTION_API_KEY).
+  evolution-api:
+    # :latest de 2026-05-06 (reporta v2.3.7) — validada com WhatsApp real em 2026-10-19. A tag :v2.3.7 do
+    # Docker Hub é outro build (2025-12); revalide os payloads (tests/payloads/evolution_v237_*) antes de trocar.
+    image: evoapicloud/evolution-api@sha256:966625532d9076a2381e973a271307d107e6f070450de3abeeea8bd18be07252
+    container_name: alfred-evolution
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT_EVOLUTION}:8080"
+    environment:
+      - SERVER_URL=http://localhost:${PORT_EVOLUTION}
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
+      - LANGUAGE=pt-BR
+      - CONFIG_SESSION_PHONE_CLIENT=Alfred
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - DEL_INSTANCE=false
+      - QRCODE_LIMIT=30
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@evolution-postgres:5432/evolution?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=alfred
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=false
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=false
+      - DATABASE_SAVE_DATA_LABELS=false
+      - DATABASE_SAVE_DATA_HISTORIC=false
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
+      - WEBHOOK_GLOBAL_ENABLED=false
+      - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+    volumes:
+      - ./data/evolution/instances:/evolution/instances
+    depends_on:
+      - evolution-postgres
+    networks:
+      - alfred-net
+
+  evolution-postgres:
+    image: postgres:16-alpine
+    container_name: alfred-evolution-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=${EVOLUTION_POSTGRES_PASSWORD}
+      - POSTGRES_DB=evolution
+    volumes:
+      - ./data/evolution/postgres:/var/lib/postgresql/data
+    networks:
+      - alfred-net
+
 networks:
   alfred-net:
     driver: bridge

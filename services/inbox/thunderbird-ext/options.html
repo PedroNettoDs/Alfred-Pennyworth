@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Alfred — limpeza</title>
+<style>body{font:14px system-ui;margin:12px;max-width:560px} label{display:block;margin:8px 0} input[type=text],input[type=password]{width:100%} .aviso{color:#b00} pre{white-space:pre-wrap;background:#f4f4f4;padding:6px}</style>
+</head>
+<body>
+  <h3>Alfred — limpeza da caixa</h3>
+  <p>A extensão só executa lotes que você APROVOU no Alfred e só move para a Lixeira da conta.</p>
+  <label>URL do Alfred <input type="text" id="urlAlfred"></label>
+  <label>Token (SHELL_EXECUTOR_TOKEN) <input type="password" id="token"></label>
+  <fieldset><legend>Contas em que a extensão pode mexer</legend><div id="contas"></div></fieldset>
+  <label><input type="checkbox" id="modoTeste"> Modo teste — só mensagens em pastas cujo caminho contém
+    <input type="text" id="pastaTeste" style="width:140px"></label>
+  <label class="aviso"><input type="checkbox" id="executarDeVerdade"> Executar de verdade (desmarcado = só simula e relata ao Alfred)</label>
+  <label>Verificar a cada (min) <input type="number" id="intervaloMin" min="1" style="width:70px"></label>
+  <button id="salvar">Salvar</button> <button id="agora">Verificar agora</button>
+  <pre id="saida"></pre>
+  <script src="options.js"></script>
+</body>
+</html>

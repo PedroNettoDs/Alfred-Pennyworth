@@ -1,0 +1,97 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "5514999990000@s.whatsapp.net",
+      "fromMe": true,
+      "id": "3EB0C0FFEE00000000000012",
+      "remoteJidAlt": "5514999990000@s.whatsapp.net",
+      "participant": "",
+      "addressingMode": "lid"
+    },
+    "pushName": "Pedro Netto",
+    "message": {
+      "conversation": "ignorar",
+      "messageContextInfo": {
+        "threadId": [],
+        "deviceListMetadataVersion": 2,
+        "messageSecret": {
+          "0": 217,
+          "1": 234,
+          "2": 251,
+          "3": 12,
+          "4": 29,
+          "5": 46,
+          "6": 63,
+          "7": 80,
+          "8": 97,
+          "9": 114,
+          "10": 131,
+          "11": 148,
+          "12": 165,
+          "13": 182,
+          "14": 199,
+          "15": 216,
+          "16": 233,
+          "17": 250,
+          "18": 11,
+          "19": 28,
+          "20": 45,
+          "21": 62,
+          "22": 79,
+          "23": 96,
+          "24": 113,
+          "25": 130,
+          "26": 147,
+          "27": 164,
+          "28": 181,
+          "29": 198,
+          "30": 215,
+          "31": 232
+        },
+        "deviceListMetadata": {
+          "senderKeyIndexes": [],
+          "recipientKeyIndexes": [],
+          "recipientKeyHash": {
+            "0": 217,
+            "1": 234,
+            "2": 251,
+            "3": 12,
+            "4": 29,
+            "5": 46,
+            "6": 63,
+            "7": 80,
+            "8": 97,
+            "9": 114
+          },
+          "recipientTimestamp": {
+            "low": 1792411200,
+            "high": 0,
+            "unsigned": true
+          }
+        }
+      }
+    },
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": [],
+      "stanzaId": "3EB05F4E8EF5B8E031816C",
+      "participant": "5514999990000@s.whatsapp.net",
+      "quotedMessage": {
+        "conversation": "🎩 *Alfred* — …\nref: __REF__"
+      }
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1792413360,
+    "source": "android",
+    "status": "SERVER_ACK",
+    "instanceId": "8acc06c7-6d9b-4aee-9331-1f9d2924e74b"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook-async",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514999990000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

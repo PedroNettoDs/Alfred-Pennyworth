@@ -333,6 +333,31 @@ def _normalize_text(text: str) -> str:
     return "\n".join(out).strip()
 
 
+_TRACK_PARAM = re.compile(r"^(utm_\w+|_cio_id|mc_[ce]id|_hs(enc|mi)|fbclid|gclid|mkt_tok|trk\w*|ref_?src)$", re.I)
+
+
+def limpar_url(url: str) -> str:
+    """Remove parâmetros de rastreamento (utm_*, _cio_id, mc_cid...) — a URL continua funcionando."""
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    try:
+        p = urlsplit(url)
+        q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACK_PARAM.match(k)]
+        return urlunsplit((p.scheme, p.netloc, p.path, urlencode(q), p.fragment))
+    except Exception:
+        return url
+
+
+_URL_NO_TEXTO = re.compile(r"[\(\[<]?\s*https?://\S+?\s*[\)\]>]|https?://\S+")
+
+
+def compactar_urls(text: str, max_len: int = 80) -> str:
+    """Corpo para prompt: URLs longas (rastreamento) viram '[link]' — os links reais vão na lista LINKS."""
+    def _sub(mt):
+        s = mt.group(0)
+        return s if len(s) <= max_len else "[link]"
+    return _URL_NO_TEXTO.sub(_sub, text or "")
+
+
 def html_to_text(src: str) -> tuple[str, list[tuple[str, str]]]:
     p = _HTMLText()
     try:
@@ -543,6 +568,7 @@ def parse_message(msg, folder: str = "", account: str = "", max_text: int = 1200
     seen_urls: set[str] = set()
     uniq_links: list[tuple[str, str]] = []
     for t, u in links:
+        u = limpar_url(u)
         if u in seen_urls:
             continue
         seen_urls.add(u)

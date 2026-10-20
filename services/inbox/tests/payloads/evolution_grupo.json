@@ -1,0 +1,24 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "120363012345678901@g.us",
+      "fromMe": false,
+      "id": "3EB0A1B2C3D4E5F60003",
+      "participant": "5514977776666@s.whatsapp.net"
+    },
+    "pushName": "Juliana",
+    "message": {
+      "conversation": "Gente, alguém vai no churrasco sábado?"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1792411920,
+    "source": "ios"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514900000000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

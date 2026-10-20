@@ -24,6 +24,9 @@ scanners: {}      # reservado para scanners futuros
 
 inbox:            # caixas de e-mail do Inbox Assistant
   pedro_hotmail:  # Thunderbird · perfil pedro_dev · jornal + pendências
+
+whatsapp:         # contas de WhatsApp (Evolution API) do Inbox Assistant
+  pedro_whatsapp: # perfil pedro_dev · grupos, contatos, agrupamento, templates da pergunta
 ```
 
 ### `perfis.py`
@@ -32,6 +35,7 @@ Loader com cache em memória. Expõe funções tipadas:
 - `get_briefing(nome)` → dict com `_perfil` e `_fontes` já resolvidos
 - `get_scanner(nome)` → igual para scanners
 - `get_inbox(nome)` → inbox com `_perfil` resolvido (`python3 perfis.py inbox pedro_hotmail`)
+- `get_whatsapp(nome)` → conta de WhatsApp com `_perfil` resolvido (`python3 perfis.py whatsapp pedro_whatsapp`)
 - `list_all()` → sumário de tudo (útil para debug: `python3 perfis.py list`)
 
 Faz validação leve de referências cruzadas na carga — se um briefing apontar para um perfil inexistente, falha com mensagem clara.
@@ -43,7 +47,7 @@ Funções utilitárias base usadas por todos os serviços:
 |--------|-----------|
 | `log(msg)` | Print com timestamp `[HH:MM:SS]` |
 | `slugify(text)` | Texto → slug seguro para nome de arquivo |
-| `ollama_generate(prompt, model, timeout)` | Chama `/api/generate` do Ollama |
+| `ollama_generate(prompt, model, timeout, fmt, think, options, system, images)` | Chama `/api/generate` do Ollama. `images` = mídias em base64 — imagem **ou áudio** (WAV/MP3) em modelos com capacidade `audio`, como o gemma4 |
 | `ollama_embed(text, model)` | Gera embedding via `/api/embeddings` |
 | `ollama_embed_batch(texts, model)` | Embeddings em lote, reutiliza um único client HTTP |
 | `searxng_search(query, categories, max_results)` | Busca no SearXNG, retorna `[{title, url, snippet, source}]` |
@@ -76,10 +80,20 @@ Divide o mbox pelo separador real do Thunderbird (`From - <data>`), evitando os 
 `cluster_items()`, `rank_clusters()`, `build_clustered_news_text()` — extraídos do `tech-briefing.py` para serem usados também pelo inbox. Comportamento idêntico ao original; `pesos_fontes` virou parâmetro.
 
 ### `lib_tts.py`
-`generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open).
+`generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open; com `bloquear=True` passa ao próximo player se um sair com erro).
 
 ### `lib_titulo.py`
 `generate_title_via_llm()` e `extrair_titulo_manchete()` — título/manchete de um markdown, com fallback heurístico.
+
+### `lib_audio.py`
+Transcrição de áudio 100% local, usada pelo inbox para os áudios do WhatsApp:
+- `transcrever_audio(fonte, mimetype, max_segundos)` → `{texto, metodo, duracao_s, segmentos, cortado, erro}`. `fonte` pode ser caminho, bytes ou base64.
+- Ordem: **gemma4 via Ollama** (o áudio vai em base64 no campo `images` do `/api/generate` — o Ollama usa o mesmo campo para imagem e áudio; só aceita WAV/MP3, por isso tudo passa antes pelo ffmpeg → WAV mono 16 kHz; o gemma4 ouve ~30 s por chamada, então áudios longos são fatiados) → **faster-whisper** se instalado → `""`.
+- `para_wav()`, `duracao_segundos()`, `ffmpeg_disponivel()`. Modelo: `MODEL_TRANSCRIBE` (vazio = `MODEL_CHAT`).
+
+### `lib_whatsapp.py`
+Cliente da Evolution API (WhatsApp) — `enviar_texto(numero, texto, quoted)`, `enviar_audio(numero, arquivo|bytes|base64)`, `baixar_midia(key, message)` (passe o bloco original com `mediaKey`; sem ele a Evolution busca pelo `key.id` — nunca `message: {}`), `estado_instancia()`, `qrcode_instancia()`, `criar_instancia()`, `configurar_webhook(url, headers)`, helpers `jid_para_numero()`, `formatar_numero()`, `numero_pedro()`.
+Com `EVOLUTION_URL` vazio ou `WHATSAPP_DRY_RUN=true` **nada sai da máquina**: os envios são registrados em `logs/whatsapp_enviados.jsonl` e devolvidos como `{"ok": true, "simulado": true}` (`ultimos_envios()` lê o registro — é o que os testes usam).
 
 ### `lib_templates.py`
 Sistema de templates para prompts LLM:
@@ -107,6 +121,9 @@ Templates de prompt versionados como arquivos de texto:
 | `audio_jornal.md` | Inbox: roteiro de áudio da edição do dia — podcast matinal |
 | `pergunta_evento.md` | Inbox: texto em que Alfred apresenta o evento/contato e pergunta "vou ou não vou?" |
 | `audio_pergunta_evento.md` | Inbox: recado de voz curto (30-60s) com a mesma pergunta |
+| `whatsapp_classificar.md` | WhatsApp: classifica uma mensagem curta (profissional / pessoal / grupo / automatico / spam) e diz se requer resposta e a urgência — JSON |
+| `pergunta_whatsapp.md` | WhatsApp: texto em que Alfred resume a mensagem e pergunta "o que você quer responder?" |
+| `audio_pergunta_whatsapp.md` | WhatsApp: recado de voz curto (20-40s) com a mesma pergunta |
 
 ## Como importar nos serviços
 
@@ -123,6 +140,8 @@ from _shared.lib_mail import find_thunderbird_profile, list_accounts, fetch_mess
 from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text
 from _shared.lib_tts import tts_save, tocar_audio
 from _shared.lib_titulo import generate_title_via_llm
+from _shared.lib_audio import transcrever_audio
+from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
 ```
 
 ## Variáveis de ambiente relevantes
@@ -138,3 +157,7 @@ from _shared.lib_titulo import generate_title_via_llm
 | `OLLAMA_THINK` | `""` | `false` desliga o thinking (gemma4/qwen3); vazio não envia o campo |
 | `OLLAMA_NUM_CTX` | `""` | `options.num_ctx` enviado ao Ollama (ex.: 8192) |
 | `THUNDERBIRD_PROFILE` | `""` | Vazio = descoberta automática do perfil |
+| `MODEL_TRANSCRIBE` | `""` | Modelo com entrada de áudio para `lib_audio` (vazio = `MODEL_CHAT`; gemma4 funciona) |
+| `EVOLUTION_URL` / `EVOLUTION_API_KEY` / `EVOLUTION_INSTANCE` | `""` / `""` / `alfred` | Evolution API (`lib_whatsapp`). URL vazia = envios simulados |
+| `WHATSAPP_NUMERO_PEDRO` | `""` | Número de Pedro (DDI + DDD + número, só dígitos) que recebe os resumos |
+| `WHATSAPP_DRY_RUN` | `false` | `true` = simula os envios mesmo com a URL configurada |

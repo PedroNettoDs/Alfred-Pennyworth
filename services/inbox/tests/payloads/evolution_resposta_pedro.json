@@ -1,0 +1,32 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "5514999990000@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0A1B2C3D4E5F60004"
+    },
+    "pushName": "Pedro Netto",
+    "message": {
+      "extendedTextMessage": {
+        "text": "Carlos, bom dia! Mando o orçamento até quinta à tarde, pode contar.",
+        "contextInfo": {
+          "stanzaId": "SIMULADO-PERGUNTA",
+          "participant": "5514900000000@s.whatsapp.net",
+          "quotedMessage": {
+            "conversation": "🎩 *Alfred* — mensagem de *Carlos Fatec* no WhatsApp\n…\nref: __REF__"
+          }
+        }
+      }
+    },
+    "messageType": "extendedTextMessage",
+    "messageTimestamp": 1792412400,
+    "source": "android"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514900000000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

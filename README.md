@@ -19,6 +19,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 6. [System Prompt do Alfred](#6-system-prompt-do-alfred)
 7. [Serviços systemd](#7-serviços-systemd)
 7b. [Inbox Assistant — Thunderbird → jornal + pendências](#7b-inbox-assistant--thunderbird--jornal--pendências)
+7c. [WhatsApp — Evolution API → pendências "o que você quer responder?"](#7c-whatsapp--evolution-api--pendências-o-que-você-quer-responder)
 8. [Scripts Utilitários](#8-scripts-utilitários)
 9. [Referência Rápida](#9-referência-rápida)
 10. [Troubleshooting](#10-troubleshooting)
@@ -70,7 +71,8 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | Ollama           | 11434 | Host (nativo) | Servidor de LLMs; serve llama3.1:8b e nomic-embed       |
 | Shell Executor   | 7070  | Host (systemd)| API REST que executa comandos no host sob whitelist       |
 | Researcher       | 7071  | Host (systemd)| Orquestra busca web → síntese LLM → escrita no vault     |
-| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou" (CLI + API para o N8N) |
+| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N) |
+| Evolution API    | 8080 (127.0.0.1) | Docker  | WhatsApp pareado por QR code; entrega mensagens/áudios por webhook e envia as respostas de Pedro (+ PostgreSQL `evolution-postgres`) |
 
 ### Comunicação entre Serviços
 
@@ -85,6 +87,9 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | Researcher      | Ollama          | `http://localhost:11434`        | HTTP      |
 | Researcher      | Open WebUI API  | `http://localhost:3000`         | HTTP      |
 | Researcher      | Vault (alfred)  | filesystem                      | I/O direto |
+| Evolution API   | Inbox Assistant | `http://172.17.0.1:7072/whatsapp/webhook-async` (ou o Webhook do N8N: `http://n8n:5678/webhook/alfred-whatsapp`) | HTTP (webhook) |
+| Inbox Assistant | Evolution API   | `http://localhost:8080` (`EVOLUTION_URL`; vazio = simulado) | HTTP (`apikey`) |
+| N8N             | Evolution API   | `http://evolution-api:8080`     | HTTP (`apikey`) |
 
 > **Nota:** Containers acessam o host via `172.17.0.1` (gateway padrão da bridge `docker0`). Serviços no host acessam containers via `localhost:<porta-exposta>`.
 
@@ -127,7 +132,8 @@ Alfred-Pennyworth/
 ├── data/                           # Dados persistentes dos containers (NÃO versionado)
 │   ├── open-webui/                 # Bind mount do Open WebUI (usuários, histórico, RAG)
 │   ├── chromadb/                   # Dados do ChromaDB
-│   └── n8n/                        # Workflows e credenciais do N8N
+│   ├── n8n/                        # Workflows e credenciais do N8N
+│   └── evolution/                  # Sessão do WhatsApp (instances/) e PostgreSQL da Evolution API
 │
 ├── docs/
 │   ├── Alfred.png                  # Avatar/ícone do Alfred
@@ -146,9 +152,11 @@ Alfred-Pennyworth/
 │   │
 │   ├── inbox/
 │   │   ├── core.py                    # Pipeline: Thunderbird → classificar → jornal + pendências
-│   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, ouvir)
-│   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N
-│   │   ├── n8n/                       # Workflows importáveis (ciclo + aguardar resposta)
+│   │   ├── whatsapp.py                # Poder 3: webhook Evolution → transcrever → classificar → fila (atraso_minutos) → pendência → responder
+│   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir)
+│   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N e webhook da Evolution
+│   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
+│   │   ├── tests/                     # test_whatsapp.py + payloads da Evolution (texto, áudio .ogg, resposta citada…)
 │   │   ├── alfred-inbox.{service,timer}, alfred-inbox-api.service  # units de usuário
 │   │   └── about.md
 │   │
@@ -168,7 +176,7 @@ Alfred-Pennyworth/
 │   ├── alfred_researcher.py        # Aciona o Research Service
 │   ├── alfred_shell_executor.py    # Executa comandos via Shell Executor
 │   ├── alfred_system_monitor.py    # Relatório de sistema (CPU/RAM/GPU/Docker)
-│   ├── alfred_pendencias.py        # Fila "vou / não vou" + jornal do dia (Inbox Assistant)
+│   ├── alfred_pendencias.py        # Fila "vou / não vou" (e-mail) + "o que você quer responder?" (WhatsApp) + jornal do dia
 │   ├── alfred_vault_reader.py      # Leitura do vault do Pedro (somente leitura)
 │   └── alfred_vault_writer.py      # Escrita e busca no vault do Alfred
 │
@@ -209,6 +217,7 @@ Abra `.env` e preencha os valores. Os campos obrigatórios antes de subir os con
 HOST_IP=172.17.0.1
 VAULT_PEDRO=/caminho/absoluto/para/vault/pedro
 VAULT_ALFRED=/caminho/absoluto/para/vault/alfred
+VAULT_NOTICIAS=/caminho/absoluto/para/vault/alfred/Noticias   # jornal + podcast (cofre próprio)
 WEBUI_SECRET_KEY=<gerar abaixo>
 N8N_BASIC_AUTH_USER=admin
 N8N_BASIC_AUTH_PASSWORD=<senha>
@@ -403,8 +412,10 @@ sudo journalctl -fu alfred-researcher
 
 O Alfred lê os e-mails que o **Thunderbird** já baixou (cópias offline do perfil — sem senha, sem rede, funciona com Outlook/Gmail via OAuth2), classifica cada um com o Ollama e faz duas coisas:
 
-1. **Edição do dia do jornal** — as newsletters viram itens de notícia (título, resumo, URL só se existir no e-mail) e passam pelo **mesmo pipeline do briefing** (`lib_cluster` → template `jornal_email.md` → Ollama → título → `.md` + `.mp3` com edge-tts) em `VAULT_ALFRED/jornal/`.
-2. **Pendências "vou / não vou"** — convites a eventos e contatos profissionais (recrutador, proposta, retorno de processo seletivo) geram um texto explicativo + um recado de voz em que Alfred pergunta se Pedro vai. A pergunta fica **aguardando** em `VAULT_ALFRED/pendencias/pendencias.yml` até a resposta, que pode vir por uma pergunta gráfica que fica ociosa esperando o clique (notify-send com botões → kdialog → zenity), pelo terminal (`perguntar` ou `responder`), pelo chat (tool `alfred_pendencias`) ou pelo N8N. "Vou" cria uma tarefa em `tasks.yml`.
+1. **Edição do dia do jornal** — as newsletters viram itens de notícia (título, resumo, URL só se existir no e-mail) e passam pelo **mesmo pipeline do briefing** (`lib_cluster` → template `jornal_email.md` → Ollama → título → `.md` + `.mp3` com edge-tts) em `VAULT_NOTICIAS/jornal/`.
+   - **Cofre de notícias:** `VAULT_NOTICIAS` (padrão desta máquina: `VAULT_ALFRED/Noticias`, com `.obsidian` próprio — abra como vault separado no Obsidian). Fica dentro do vault do Alfred para o Open WebUI, que só monta `/vaults/alfred`, continuar lendo o jornal (valve `noticias_path` da tool). Vazio = layout antigo (`VAULT_ALFRED/jornal`), que continua sendo lido como fallback.
+   - **Podcast semanal** (`run.sh semanal`, `POST /semanal`): relê as edições da semana, escolhe os temas que mais se repetiram em mais newsletters e gera um episódio de ~10 min em **diálogo de duas vozes** (Alfred + Lúcia, edge-tts + ffmpeg) em `VAULT_NOTICIAS/podcast/episodios/`. Também grava um manifesto `podcast/manifestos/<AAAA-Www>.json` com os e-mails usados, que serve para a limpeza do Thunderbird. Detalhes em [services/inbox/about.md](services/inbox/about.md#podcast-semanal--resumo-semanal-do-alfred-semanalpy).
+2. **Pendências "vou / não vou"** — convites a eventos e contatos profissionais (recrutador, proposta, retorno de processo seletivo) geram um texto explicativo + um recado de voz em que Alfred pergunta se Pedro vai. A pergunta fica **aguardando** em `VAULT_ALFRED/pendencias/pendencias.yml` até a resposta, que pode vir por uma pergunta gráfica que fica ociosa esperando o clique (notificação com botões via D-Bus → kdialog → zenity), pelo terminal (`perguntar` ou `responder`), pelo chat (tool `alfred_pendencias`) ou pelo N8N. "Vou" cria uma tarefa em `tasks.yml`.
 
 ```bash
 cd services/inbox
@@ -418,7 +429,33 @@ cd services/inbox
 
 Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE`, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
 
-**Divisão de papéis com o N8N:** o Python é o motor (ler mbox, clustering, TTS, templates) exposto como API; o N8N orquestra (cron, `Wait` aguardando o "vou/não vou" via `resumeUrl`, e — próximo passo — WhatsApp via Evolution API). Os workflows em `services/inbox/n8n/` são o ponto de partida.
+**Divisão de papéis com o N8N:** o Python é o motor (ler mbox, clustering, TTS, templates) exposto como API; o N8N orquestra (cron, `Wait` aguardando o "vou/não vou" via `resumeUrl`, e o WhatsApp via Evolution API). Os workflows em `services/inbox/n8n/` são o ponto de partida.
+
+---
+
+## 7c. WhatsApp — Evolution API → pendências "o que você quer responder?"
+
+Mensagens e **áudios** recebidos no WhatsApp passam pelo mesmo tratamento do e-mail. A Evolution API (container `alfred-evolution`, número pareado por QR code) entrega cada mensagem por webhook ao Inbox Assistant, que:
+
+1. **transcreve o áudio localmente** — ffmpeg converte o OGG/Opus do WhatsApp em WAV e o **gemma4** transcreve via Ollama (o áudio vai em base64 no campo `images` do `/api/generate`; fatias de 30 s); fallback `faster-whisper` se instalado;
+2. **classifica** com o mesmo padrão do e-mail (`whatsapp_classificar.md`, JSON Schema): `profissional` / `pessoal` / `grupo` / `automatico` / `spam` + "requer resposta?" + urgência;
+3. **espera ~20 min** (`atraso_minutos` em `perfis.yml → whatsapp:`): se Pedro responder a conversa direto pelo celular nesse tempo, nada é gerado; mensagens seguidas do contato viram uma pendência só;
+4. para contatos relevantes cria uma **pendência `whatsapp`** em `VAULT_ALFRED/pendencias/pendencias.yml` (mesmo esquema, `status: aguardando`, campo `resposta_texto`) com um texto explicativo (`pergunta_whatsapp.md`) e um recado de voz (`audio_pergunta_whatsapp.md` → edge-tts) em que Alfred resume a mensagem e pergunta **"o que você quer responder?"**;
+5. avisa Pedro no WhatsApp (resumo com `ref: <id>` + áudio) — pelo N8N (`services/inbox/n8n/alfred-whatsapp.json`) ou pelo próprio Python (`/whatsapp/webhook-async`) — e **no PC**: notificação com a sugestão de resposta escrita pelo Alfred e os botões **Enviar** (abre o rascunho para editar e confirmar) / **Não enviar** / **Agenda** (tarefa em `tasks.yml` + lembrete no PC + evento no Google Agenda já preenchido) / **Ouvir**;
+6. **a resposta de Pedro é enviada ao contato**: ele responde *citando* a mensagem do Alfred (ou pelo botão Enviar no PC, `./run.sh responder-texto <id> "texto"`, o chat: "responde pro Carlos que…", ou `POST /pendencias/{id}/responder-texto`). `ignorar` fecha sem enviar; se Pedro responder o contato direto no celular, a pendência fecha sozinha.
+
+```bash
+docker compose up -d evolution-postgres evolution-api       # .env: EVOLUTION_API_KEY, EVOLUTION_POSTGRES_PASSWORD, WHATSAPP_NUMERO_PEDRO
+cd services/inbox
+./run.sh whatsapp qrcode                                   # cria a instância e abre o QR (WhatsApp → Aparelhos conectados)
+./run.sh serve                                             # API :7072
+./run.sh whatsapp webhook http://172.17.0.1:7072/whatsapp/webhook-async   # ou a URL do Webhook do N8N
+./run.sh whatsapp status                                   # instância "open", fila
+./run.sh responder-texto <id> "Carlos, mando até quinta."  # resposta → WhatsApp do contato
+venv/bin/python -m unittest tests.test_whatsapp -v         # 37 testes offline (inclui o formato real da Evolution v2.3.7)
+```
+
+Sem `EVOLUTION_URL` no `.env` (ou com `WHATSAPP_DRY_RUN=true`) **nenhuma mensagem sai da máquina**: os envios ficam em `logs/whatsapp_enviados.jsonl`. Pareamento, formatos de payload, configuração (`perfis.yml → whatsapp:`) e limitações: [`services/inbox/about.md`](services/inbox/about.md#whatsapp-poder-3--evolution-api).
 
 ---
 
@@ -609,13 +646,16 @@ Scraper de portais públicos de licitação (ComprasNet, Portal de Compras SP) q
 
 ### Poder 3 — WhatsApp + Agendamento
 
-Integração com WhatsApp via Evolution API para leitura de mensagens recebidas, extração de compromissos com LLM e criação automática de eventos no Google Calendar ou notas no Obsidian.
+Integração com WhatsApp via Evolution API: mensagens e áudios recebidos (transcrição local com gemma4) passam pelo mesmo tratamento do e-mail e viram uma pendência em que Alfred resume a mensagem e pergunta "o que você quer responder?" (texto + áudio); a resposta de Pedro é enviada de volta pelo WhatsApp.
 
-**Pipeline:** Evolution API (Docker) → N8N (webhook) → Ollama (extração de entidades: data, hora, compromisso) → Google Calendar API / Obsidian (criação de evento ou nota)
+**Pipeline:** Evolution API (Docker) → webhook → Inbox Assistant (`whatsapp.py`: transcrever → classificar → pendência + áudio) → N8N ou Python avisa Pedro → resposta citada / CLI / chat / API → Evolution API `sendText`
 
-**Próximo passo concreto:** reaproveitar o Inbox Assistant — o sub-workflow `services/inbox/n8n/alfred-inbox-aguardar-resposta.json` já tem o ponto onde entra o envio pelo WhatsApp (título + links vou/não vou + áudio via `GET /pendencias/{id}/audio`); mensagens e áudios recebidos (transcrição com Whisper/gemma4 áudio) passam pelo mesmo `classificar()` → pendência "o que eu quero responder?".
+**Status:** ✅ Implementado e **validado com WhatsApp real em 2026-10-19** (instância no próprio número de Pedro, Evolution API "v2.3.7", sem N8N): texto e áudio viram pendência, resumo + áudio chegam a Pedro, a resposta citada é entregue ao contato, `ignorar` e resposta direta pelo celular fecham a pendência, e a notificação no PC (Enviar / Não enviar / Agenda / Ouvir) envia o rascunho. Depois da validação: **espera de ~20 min antes de resumir** (`atraso_minutos: 20` em `perfis.yml → whatsapp:`) — resumo, áudio e avisos só saem se Pedro não responder a conversa nesse tempo; se ele responder direto pelo celular antes, nada é gerado (testado offline, ainda não com WhatsApp real — ver [espera](services/inbox/about.md#espera-antes-de-resumir-atraso_minutos)). Falta validar o workflow N8N (stack Docker fora do ar nesta máquina) — ver [validação](services/inbox/about.md#validação-com-whatsapp-real-2026-10-19).
 
-**Status:** 🔲 Planejado
+**Próximos passos:**
+- **Agendamento** — extrair compromissos (data, hora, local) das mensagens relevantes e criar eventos no calendário / notas no Obsidian.
+- **Comandos para o Alfred pelo WhatsApp** — hoje tudo o que Pedro escreve citando o resumo vai para o contato: na validação real, "Pode agendar para terça-feira às 18:00 (coloque na minha agenda também)" foi entregue inteiro à Attano Tech. Separar instrução para o Alfred do texto ao contato (ex.: trecho marcado `[Alfred: põe na agenda]` é executado e removido antes do envio) e aceitar mensagens diretas ao Alfred na conversa "Você", sem citação ("Alfred, agenda reunião com a Attano terça 18h", "me lembra amanhã de mandar o orçamento") → função específica (agenda, tarefa, lembrete, pesquisa).
+- Usar os nós "Evolution: texto/áudio para Pedro" do `alfred-whatsapp.json` também no sub-workflow "aguardar resposta" do e-mail (links vou/não vou pelo WhatsApp).
 
 ---
 

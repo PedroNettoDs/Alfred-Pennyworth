@@ -123,6 +123,7 @@ def ollama_generate(
     think: Optional[bool] = None,
     options: Optional[dict] = None,
     system: Optional[str] = None,
+    images: Optional[list[str]] = None,
 ) -> str:
     """
     Wrapper do endpoint /api/generate do Ollama.
@@ -136,6 +137,9 @@ def ollama_generate(
     :param options: dict de opções do Ollama (num_ctx, temperature, num_predict...).
                     OLLAMA_NUM_CTX do .env entra como num_ctx se não vier em options.
     :param system: system prompt opcional
+    :param images: lista de mídias em base64. O Ollama usa este mesmo campo para
+                   imagens E áudio (WAV/MP3) em modelos com capacidade "audio",
+                   como o gemma4 — é assim que o inbox transcreve áudios do WhatsApp.
     :return: Resposta do modelo (string vazia em caso de erro)
     """
     model = model or os.getenv("MODEL_CHAT", DEFAULT_MODEL_CHAT)
@@ -144,6 +148,8 @@ def ollama_generate(
     payload: dict = {"model": model, "prompt": prompt, "stream": False}
     if system:
         payload["system"] = system
+    if images:
+        payload["images"] = list(images)
     if fmt:
         payload["format"] = fmt
 

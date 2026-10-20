@@ -78,7 +78,10 @@ def tocar_audio(path: Path, bloquear: bool = False) -> bool:
     for cmd in candidatos:
         try:
             if bloquear:
-                subprocess.run(cmd, timeout=600, capture_output=True)
+                r = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
+                if r.returncode != 0:   # ex.: ffplay sem dispositivo de áudio → tenta o próximo player
+                    log(f"[audio] {cmd[0]} saiu com {r.returncode}: {(r.stderr or '').strip()[:160]}")
+                    continue
             else:
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)

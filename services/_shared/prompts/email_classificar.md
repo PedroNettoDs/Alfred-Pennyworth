@@ -26,6 +26,8 @@ REGRAS:
 - Notificações automáticas de redes sociais e plataformas (curtidas, visualizações, "alguém comentou") são "transacional".
 - Em dúvida entre "noticia" e "promocao": se tem pelo menos 2 itens informativos distintos (artigos, notícias, novidades) é "noticia".
 - Em dúvida entre "evento" e "noticia": se o e-mail inteiro gira em torno de UM evento com data, é "evento".
+- NÃO é "evento": onboarding/tutorial de plataforma ("o que fazer depois de criar sua conta"), material de estudo ou trilha de certificação sem sessão ao vivo marcada, e confirmação de inscrição que Pedro JÁ fez ("inscrição confirmada", "seu ingresso") — estes são "promocao" ou "transacional".
+- Inscrição aberta num programa/bolsa/formação gratuita com prazo (seleção, edital) é "evento", inclusive os lembretes "último dia para se inscrever".
 
 Responda APENAS com JSON válido neste formato:
 {{"categoria": "noticia|evento|contato|transacional|promocao|pessoal|outro", "confianca": 0.0, "resumo": "uma frase objetiva em português sobre o que é o e-mail", "motivo": "por que essa categoria, em poucas palavras"}}

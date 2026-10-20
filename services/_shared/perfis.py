@@ -62,6 +62,13 @@ def _validate(data: dict):
         if perfil_ref and perfil_ref not in perfis:
             erros.append(f"inbox '{nome}' referencia perfil inexistente: {perfil_ref}")
 
+    for nome, wa in (data.get("whatsapp") or {}).items():
+        perfil_ref = wa.get("perfil")
+        if perfil_ref and perfil_ref not in perfis:
+            erros.append(f"whatsapp '{nome}' referencia perfil inexistente: {perfil_ref}")
+        if wa.get("grupos") not in (None, "ignorar", "mencao", "todos"):
+            erros.append(f"whatsapp '{nome}': grupos deve ser ignorar | mencao | todos")
+
     if erros:
         raise ValueError("perfis.yml tem erros:\n  - " + "\n  - ".join(erros))
 
@@ -111,6 +118,16 @@ def get_inbox(nome: str) -> dict:
     return inbox
 
 
+def get_whatsapp(nome: str) -> dict:
+    data = load()
+    contas = data.get("whatsapp") or {}
+    if nome not in contas:
+        raise KeyError(f"WhatsApp não encontrado em perfis.yml: {nome}")
+    wa = dict(contas[nome])
+    wa["_perfil"] = get_perfil(wa["perfil"]) if wa.get("perfil") else {}
+    return wa
+
+
 def list_all() -> dict:
     """Retorna um sumário de tudo que está definido (útil pra debug/CLI)."""
     data = load()
@@ -120,6 +137,7 @@ def list_all() -> dict:
         "briefings": list(data.get("briefings", {}).keys()),
         "scanners": list(data.get("scanners", {}).keys()),
         "inbox": list((data.get("inbox") or {}).keys()),
+        "whatsapp": list((data.get("whatsapp") or {}).keys()),
     }
 
 
@@ -153,6 +171,12 @@ if __name__ == "__main__":
         i.pop("_perfil", None)
         print(json.dumps(i, indent=2, ensure_ascii=False))
 
+    elif cmd == "whatsapp" and len(sys.argv) >= 3:
+        import json
+        w = get_whatsapp(sys.argv[2])
+        w.pop("_perfil", None)
+        print(json.dumps(w, indent=2, ensure_ascii=False))
+
     elif cmd == "scanner" and len(sys.argv) >= 3:
         import json
         s = get_scanner(sys.argv[2])
@@ -167,4 +191,5 @@ if __name__ == "__main__":
         print("  python3 perfis.py briefing <nome>")
         print("  python3 perfis.py scanner <nome>")
         print("  python3 perfis.py inbox <nome>")
+        print("  python3 perfis.py whatsapp <nome>")
         sys.exit(1)

@@ -3,10 +3,14 @@
 #   ./run.sh                 → ciclo completo
 #   ./run.sh scan            → só classifica (dry-run)
 #   ./run.sh jornal          → só a edição do dia
+#   ./run.sh semanal [--semana AAAA-Www] → podcast semanal (VAULT_NOTICIAS/podcast)
 #   ./run.sh pendencias      → fila vou/não vou
 #   ./run.sh responder ID vou|nao-vou
 #   ./run.sh ouvir ID
-#   ./run.sh serve           → API HTTP (FastAPI) na porta PORT_INBOX, para o N8N
+#   ./run.sh responder-texto ID "texto"   → pendência de WhatsApp (envia pela Evolution API)
+#   ./run.sh whatsapp status|qrcode|webhook URL|simular payload.json|notificar ID|fila|processar-fila
+#   ./run.sh limpeza [candidatos|propor|lotes|ver ID|aprovar ID|recusar ID] → limpeza pós-podcast (LIMPEZA.md)
+#   ./run.sh serve           → API HTTP (FastAPI) na porta PORT_INBOX, para o N8N / Evolution
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../../.env"

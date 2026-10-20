@@ -1,0 +1,23 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "5511900001111@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0A1B2C3D4E5F60007"
+    },
+    "pushName": "",
+    "message": {
+      "conversation": "🎁 PARABÉNS! Você foi sorteado. Clique no link para resgatar seu prêmio: http://bit.ly/xxxx"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1792412700,
+    "source": "unknown"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514900000000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

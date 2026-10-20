@@ -1,0 +1,23 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "5514988887777@s.whatsapp.net",
+      "fromMe": true,
+      "id": "3EB0A1B2C3D4E5F60006"
+    },
+    "pushName": "Pedro Netto",
+    "message": {
+      "conversation": "Carlos, já te mando, só fechando os números."
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1792412520,
+    "source": "android"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514999990000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

@@ -1,0 +1,181 @@
+{
+  "name": "Alfred WhatsApp — mensagem recebida → pendência → resposta",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alfred-whatsapp",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000001",
+      "name": "Webhook Evolution",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "c1000000-0000-4000-8000-00000000bbbb",
+      "notes": "Configure na Evolution: POST /webhook/set/alfred → url http://n8n:5678/webhook/alfred-whatsapp, base64 true, events [MESSAGES_UPSERT]. Responde 200 na hora (onReceived): o processamento (LLM + TTS) leva ~1 min."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "e1", "name": "base_url", "value": "http://172.17.0.1:7072", "type": "string" },
+            { "id": "e2", "name": "token", "value": "COLE_AQUI_O_SHELL_EXECUTOR_TOKEN", "type": "string" },
+            { "id": "e3", "name": "evolution_url", "value": "http://evolution-api:8080", "type": "string" },
+            { "id": "e4", "name": "evolution_apikey", "value": "COLE_AQUI_A_EVOLUTION_API_KEY", "type": "string" },
+            { "id": "e5", "name": "instance", "value": "alfred", "type": "string" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0],
+      "notes": "evolution_url é o nome do serviço no docker-compose (mesma rede alfred-net). base_url é o host visto do container."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.base_url }}/whatsapp/webhook",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $json.token }}" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Webhook Evolution').item.json.body) }}",
+        "options": { "timeout": 600000 }
+      },
+      "id": "c1000000-0000-4000-8000-000000000003",
+      "name": "POST /whatsapp/webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "notes": "O Python faz tudo: transcreve o áudio, classifica, cria a pendência (texto + mp3) OU — se a mensagem é de Pedro citando uma pergunta do Alfred — registra a resposta e envia ao contato. Devolve {acao, notificacao:{numero, texto, audio_url}}."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.notificacao && $json.notificacao.numero ? true : false }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000004",
+      "name": "Tem algo para avisar Pedro?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [660, 0],
+      "notes": "notificacao existe quando: pendencia_criada (resumo + áudio + 'responda citando esta mensagem'), agrupada (mais uma mensagem do mesmo contato) ou resposta_registrada (confirmação de envio). Vazio = ignorada/duplicada/spam."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.evolution_url }}/message/sendText/{{ $('Config').item.json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "apikey", "value": "={{ $('Config').item.json.evolution_apikey }}" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.notificacao.numero, text: $json.notificacao.texto }) }}",
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000005",
+      "name": "Evolution: texto para Pedro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, -100],
+      "notes": "O texto termina com 'ref: <id da pendência>'. Quando Pedro responder CITANDO esta mensagem, o webhook volta com a citação e o Python casa o ref → POST /pendencias/{id}/responder-texto → envia ao contato."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "f2",
+              "leftValue": "={{ $('POST /whatsapp/webhook').item.json.notificacao.audio_url ? true : false }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000006",
+      "name": "Tem áudio da pergunta?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, -100]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').item.json.base_url }}{{ $('POST /whatsapp/webhook').item.json.notificacao.audio_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.token }}" } ] },
+        "options": { "response": { "response": { "responseFormat": "file", "outputPropertyName": "data" } } }
+      },
+      "id": "c1000000-0000-4000-8000-000000000007",
+      "name": "GET /pendencias/{id}/audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, -200],
+      "notes": "Baixa o .mp3 da pergunta (recado de voz do Alfred) como binário."
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "binaryPropertyName": "data",
+        "destinationKey": "audio_b64",
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000008",
+      "name": "mp3 → base64",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [1560, -200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.evolution_url }}/message/sendWhatsAppAudio/{{ $('Config').item.json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "apikey", "value": "={{ $('Config').item.json.evolution_apikey }}" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $('POST /whatsapp/webhook').item.json.notificacao.numero, audio: $json.audio_b64, encoding: true }) }}",
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000009",
+      "name": "Evolution: áudio para Pedro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, -200],
+      "notes": "encoding: true → a Evolution converte o mp3 em OGG/Opus e entrega como mensagem de voz."
+    }
+  ],
+  "connections": {
+    "Webhook Evolution": { "main": [ [ { "node": "Config", "type": "main", "index": 0 } ] ] },
+    "Config": { "main": [ [ { "node": "POST /whatsapp/webhook", "type": "main", "index": 0 } ] ] },
+    "POST /whatsapp/webhook": { "main": [ [ { "node": "Tem algo para avisar Pedro?", "type": "main", "index": 0 } ] ] },
+    "Tem algo para avisar Pedro?": { "main": [ [ { "node": "Evolution: texto para Pedro", "type": "main", "index": 0 } ], [] ] },
+    "Evolution: texto para Pedro": { "main": [ [ { "node": "Tem áudio da pergunta?", "type": "main", "index": 0 } ] ] },
+    "Tem áudio da pergunta?": { "main": [ [ { "node": "GET /pendencias/{id}/audio", "type": "main", "index": 0 } ], [] ] },
+    "GET /pendencias/{id}/audio": { "main": [ [ { "node": "mp3 → base64", "type": "main", "index": 0 } ] ] },
+    "mp3 → base64": { "main": [ [ { "node": "Evolution: áudio para Pedro", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "alfred": "Fluxo: Evolution (messages.upsert) → Webhook → POST /whatsapp/webhook (Python transcreve/classifica/cria a pendência OU registra a resposta citada de Pedro e envia ao contato) → se houver `notificacao`, manda a Pedro o texto (com 'ref: <id>') e o áudio da pergunta. A resposta de Pedro é uma mensagem CITANDO a do Alfred: ela entra por este mesmo webhook e o Python chama responder_texto() → sendText ao contato. Edite o nó Config (token, evolution_apikey, instance)."
+  }
+}

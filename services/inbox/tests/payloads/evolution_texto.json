@@ -1,0 +1,24 @@
+{
+  "event": "messages.upsert",
+  "instance": "alfred",
+  "data": {
+    "key": {
+      "remoteJid": "5514988887777@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0A1B2C3D4E5F60001"
+    },
+    "pushName": "Carlos Fatec",
+    "message": {
+      "conversation": "Pedro, bom dia! Conseguiu ver o orçamento do servidor novo do laboratório? Preciso fechar com a diretoria até sexta."
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1792411800,
+    "instanceId": "550e8400-e29b-41d4-a716-446655440000",
+    "source": "android"
+  },
+  "destination": "http://172.17.0.1:7072/whatsapp/webhook",
+  "date_time": "2026-10-19T09:30:00.000Z",
+  "sender": "5514900000000@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "CHAVE-DE-TESTE"
+}

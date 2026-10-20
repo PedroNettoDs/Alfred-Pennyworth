@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer — Alfred podcast semanal (domingo 19:00, fecha a semana ISO seg–dom)
+Requires=alfred-semanal.service
+
+[Timer]
+OnCalendar=Sun *-*-* 19:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
