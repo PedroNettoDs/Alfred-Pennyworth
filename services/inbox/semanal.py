@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Alfred — podcast semanal ("Resumo semanal do Alfred").
+Alfred — podcast "Resumo do Alfred" (a cada N dias; padrão 3 — perfis.yml podcast.intervalo_dias).
+
+Desde 20/10/2026 o episódio cobre um PERÍODO de N dias terminando hoje (id AAAA-MM-DD_AAAA-MM-DD);
+o modo antigo por semana ISO (`--semana 2026-W43`) continua funcionando. O timer roda todo dia às
+19:00 com `--se-devido`: só gera se o último episódio tiver sido gerado há N dias ou mais.
 
     edições diárias do jornal           seleção                  roteiro (gemma4)            áudio (edge-tts)
     VAULT_NOTICIAS/jornal/AAAA-MM-DD_*  → cluster + rank da   →  abertura + 1 segmento    →  2 vozes (ALFRED/LUCIA),
@@ -63,6 +67,50 @@ def intervalo_semana(semana: str) -> tuple[date, date]:
     return ini, ini + timedelta(days=6)
 
 
+def intervalo_dias(pcfg: dict) -> int:
+    try:
+        return max(1, int(pcfg.get("intervalo_dias", 3)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def periodo_atual(dias: int, hoje: Optional[date] = None) -> tuple[str, date, date]:
+    """Últimos `dias` dias terminando hoje → (id, início, fim)."""
+    fim = hoje or date.today()
+    ini = fim - timedelta(days=dias - 1)
+    return f"{ini:%Y-%m-%d}_{fim:%Y-%m-%d}", ini, fim
+
+
+def ultimo_episodio() -> Optional[dict]:
+    """Manifesto mais recente (por gerado_em) ou None."""
+    d = core.vault_noticias() / "podcast" / "manifestos"
+    melhor = None
+    for f in d.glob("*.json") if d.is_dir() else []:
+        try:
+            m = json.loads(f.read_text(encoding="utf-8"))
+            ts = datetime.fromisoformat(m.get("gerado_em"))
+        except Exception:
+            continue
+        if melhor is None or ts > melhor[0]:
+            melhor = (ts, {**m, "_arquivo": str(f)})
+    return melhor[1] if melhor else None
+
+
+def episodio_devido(dias: int, agora: Optional[datetime] = None) -> tuple[bool, str]:
+    """True se nunca houve episódio ou o último foi gerado há `dias` dias (de calendário) ou mais."""
+    ult = ultimo_episodio()
+    if not ult:
+        return True, "nenhum episódio anterior"
+    agora = agora or datetime.now().astimezone()
+    gerado = datetime.fromisoformat(ult["gerado_em"])
+    if gerado.tzinfo is None:
+        gerado = gerado.astimezone()
+    passados = (agora.date() - gerado.date()).days
+    if passados >= dias:
+        return True, f"último episódio há {passados} dia(s)"
+    return False, f"último episódio há {passados} dia(s) (< {dias}) — {Path(ult['_arquivo']).stem}"
+
+
 def podcast_dir(sub: str) -> Path:
     d = core.vault_noticias() / "podcast" / sub
     d.mkdir(parents=True, exist_ok=True)
@@ -107,7 +155,9 @@ def ler_edicao(md: Path) -> dict:
             emails.append({"message_id": None, "from_name": mm.group(1).strip(), "from": mm.group(1).strip(),
                            "subject": mm.group(2).strip(), "date": mm.group(3), "pasta": "", "conta": ""})
     noticias = []
-    for ln in _secao(texto, "Notícias extraídas").splitlines():
+    # jornal do e-mail: "Notícias extraídas"; briefing por RSS (services/briefing): "Fontes citadas"
+    linhas = _secao(texto, "Notícias extraídas") or _secao(texto, "Fontes citadas") or _secao(texto, "Fontes coletadas")
+    for ln in linhas.splitlines():
         mm = _ITEM_LINHA.match(ln)
         if not mm:
             continue
@@ -118,9 +168,12 @@ def ler_edicao(md: Path) -> dict:
     return {"arquivo": md, "data": dia, "emails": emails, "noticias": noticias}
 
 
-def edicoes_da_semana(ini: date, fim: date) -> list[dict]:
+def edicoes_da_semana(ini: date, fim: date, incluir_briefings: bool = False) -> list[dict]:
+    """Edições do jornal do e-mail no período; com `incluir_briefings`, também os briefings por RSS
+    (VAULT_ALFRED/briefings/AAAA-MM-DD_*.md, gerados por services/briefing)."""
     vistos, out = set(), []
-    for d in (core.jornal_dir(), core.vault() / "jornal"):
+    pastas = [core.jornal_dir(), core.vault() / "jornal"] + ([core.vault() / "briefings"] if incluir_briefings else [])
+    for d in pastas:
         if not d.is_dir():
             continue
         for md in sorted(d.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*.md")):
@@ -203,7 +256,7 @@ def roteiro_segmento(tema: dict, n: int, total: int, semana_humana: str, pcfg: d
     prompt = render_template(pcfg.get("template_segmento", "podcast_semanal_segmento"), {
         "semana": semana_humana, "numero": n, "total": total, "tema": tema["tema"], "noticias": noticias,
         "fontes": ", ".join(tema["fontes"]), "dias": ", ".join(_dia_humano(d) for d in tema["dias"]),
-        "recorrencia": (f'O assunto apareceu em {len(tema["dias"])} dias diferentes: comente que ele "rendeu" na semana.'
+        "recorrencia": (f'O assunto apareceu em {len(tema["dias"])} dias diferentes: comente que ele "rendeu" nesses dias.'
                         if len(tema["dias"]) > 1 else "Apareceu uma vez só: não diga que o assunto rendeu ou se repetiu."),
         "palavras": int(pcfg.get("palavras_por_tema", 220)),
         "interesses": ", ".join(perfil.get("interesses_quentes", [])) or "tecnologia",
@@ -228,11 +281,11 @@ def roteiro_moldura(temas: list[dict], semana_humana: str, periodo: str, n_notic
     abertura = parse_dialogo(partes[0])
     fecho = parse_dialogo(partes[1]) if len(partes) > 1 else []
     if not abertura:
-        abertura = [("ALFRED", f"Bem-vindo ao Resumo semanal do Alfred, {semana_humana}. Comigo, como sempre, a Lúcia."),
+        abertura = [("ALFRED", f"Bem-vindo ao Resumo do Alfred, {semana_humana}. Comigo, como sempre, a Lúcia."),
                     ("LUCIA", f"Olá! Hoje são {len(temas)} temas, tirados de {n_noticias} notícias das suas newsletters.")]
     if not fecho:
         fecho = [("LUCIA", "Os links de tudo que falamos estão nas notas do episódio, no Obsidian."),
-                 ("ALFRED", "Até a próxima semana.")]
+                 ("ALFRED", "Até o próximo episódio.")]
     return abertura, fecho
 
 
@@ -384,17 +437,26 @@ def _buscar_no_thunderbird(pendentes: list[dict], cfg: dict) -> list[dict]:
 # ══════════════════════════════════════════════════════════════
 
 def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None, com_audio: bool = True,
-                  dry_run: bool = False) -> Optional[dict]:
+                  dry_run: bool = False, dias: Optional[int] = None, hoje: Optional[date] = None) -> Optional[dict]:
+    """
+    `semana` ("AAAA-Www") → modo antigo, semana ISO. Sem `semana` → últimos `dias` dias (padrão
+    perfis.yml podcast.intervalo_dias = 3) terminando `hoje`. O id do período nomeia .md/.mp3/manifesto.
+    """
     nome, cfg = core.carregar_cfg(inbox_name)
     pcfg = cfg.get("podcast") or {}
     perfil = cfg.get("_perfil") or {}
-    semana = semana or semana_atual()
-    ini, fim = intervalo_semana(semana)
-    _, num, _ = ini.isocalendar()
-    semana_humana = f"semana {num} de {ini.year}"
+    if semana:
+        ini, fim = intervalo_semana(semana)
+        _, num, _ = ini.isocalendar()
+        semana_humana = f"semana {num} de {ini.year}"
+        sufixo = "resumo-semanal"
+    else:
+        semana, ini, fim = periodo_atual(dias or intervalo_dias(pcfg), hoje)
+        semana_humana = (f"edição de {ini:%d/%m} a {fim:%d/%m}" if ini != fim else f"edição de {fim:%d/%m}")
+        sufixo = "resumo-do-alfred"
     periodo = f"{ini:%d/%m} a {fim:%d/%m/%Y}"
 
-    edicoes = edicoes_da_semana(ini, fim)
+    edicoes = edicoes_da_semana(ini, fim, incluir_briefings=bool(pcfg.get("incluir_briefings", True)))
     itens = deduplicate_by_url_and_title([it for ed in edicoes for it in ed["noticias"]])
     log(f"[semanal] {semana}: {len(edicoes)} edição(ões), {len(itens)} notícia(s) únicas")
     if len(itens) < int(pcfg.get("min_noticias", 3)):
@@ -415,8 +477,8 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
     falas = abertura + [f for seg in segmentos for f in seg] + fecho
 
     titulo = generate_title_via_llm("\n".join(t["tema"] for t in temas),
-                                    fallback=f"Resumo semanal — {semana_humana}")
-    base = f"{semana}_resumo-semanal"
+                                    fallback=f"Resumo do Alfred — {semana_humana}")
+    base = f"{semana}_{sufixo}"
     ep_dir = podcast_dir("episodios")
     md_path, mp3_path = ep_dir / f"{base}.md", ep_dir / f"{base}.mp3"
 
@@ -436,13 +498,13 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
           f"inbox: {nome}", f"edicoes: {len(edicoes)}", f"noticias: {len(itens)}", f"temas: {len(temas)}",
           f"emails: {len(emails)}", f"palavras: {palavras}",
           f"duracao_min: {dur / 60:.1f}" if audio_ok else "duracao_min: 0", f"gerado_em: {agora}",
-          "tags: [podcast, resumo-semanal]", "---", "",
+          f"tags: [podcast, {sufixo}]", "---", "",
           f"# {titulo}", "",
-          f"> Resumo semanal do Alfred · {semana_humana} ({periodo}) · {len(temas)} temas de {len(itens)} notícias"
+          f"> Resumo do Alfred · {semana_humana} ({periodo}) · {len(temas)} temas de {len(itens)} notícias"
           f" em {len(edicoes)} edição(ões) do jornal" + (f" · {dur / 60:.0f} min" if audio_ok else ""), ""]
     if audio_ok:
         md += [f"![[{mp3_path.name}]]", ""]
-    md += ["## Temas da semana", ""]
+    md += ["## Temas do episódio", ""]
     for i, t in enumerate(temas, 1):
         md.append(f"### {i}. {t['tema']}")
         md.append(f"*{', '.join(t['fontes'])} · {', '.join(_dia_humano(d) for d in t['dias'])}*")
@@ -456,7 +518,9 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
     log(f"[semanal] Markdown: {md_path}")
 
     manifesto = {
-        "semana": semana,
+        "semana": semana,                     # id do período (AAAA-Www ou AAAA-MM-DD_AAAA-MM-DD)
+        "periodo_inicio": ini.isoformat(),
+        "periodo_fim": fim.isoformat(),
         "episodio_md": str(md_path),
         "episodio_mp3": str(mp3_path) if audio_ok else None,
         "gerado_em": agora,
@@ -468,17 +532,24 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
     man_path.write_text(json.dumps(manifesto, ensure_ascii=False, indent=2), encoding="utf-8")
     log(f"[semanal] Manifesto: {man_path} ({len(emails)} e-mail(s), {len(nao_resolvidos)} sem message_id)")
 
-    core._notify("Alfred — Resumo semanal", f"{titulo}\n{len(temas)} temas" + (f" · {dur / 60:.0f} min" if audio_ok else ""))
+    core._notify("Alfred — Resumo do Alfred (podcast)", f"{titulo}\n{len(temas)} temas" + (f" · {dur / 60:.0f} min" if audio_ok else ""))
     return {"semana": semana, "titulo": titulo, "md": str(md_path), "mp3": str(mp3_path) if audio_ok else None,
             "manifesto": str(man_path), "duracao_s": round(dur), "temas": len(temas), "noticias": len(itens),
             "edicoes": len(edicoes), "emails": len(emails), "falas": len(falas), "palavras": palavras}
 
 
 def cmd_semanal(args) -> int:
+    if getattr(args, "se_devido", False) and not args.semana:
+        _, cfg = core.carregar_cfg(args.inbox)
+        n = getattr(args, "dias", None) or intervalo_dias(cfg.get("podcast") or {})
+        devido, motivo = episodio_devido(n)
+        log(f"[podcast] {'gerando' if devido else 'ainda não'}: {motivo}")
+        if not devido:
+            return 0
     res = gerar_semanal(semana=args.semana, inbox_name=args.inbox, com_audio=not args.sem_audio,
-                        dry_run=args.dry_run)
+                        dry_run=args.dry_run, dias=getattr(args, "dias", None))
     if not res:
-        return 1
+        return 0 if getattr(args, "se_devido", False) else 1
     if args.json or args.dry_run:
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return 0

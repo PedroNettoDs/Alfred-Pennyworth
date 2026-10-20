@@ -91,3 +91,79 @@ class TestEdicao(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BRIEFING_MD = """---
+title: "Briefing"
+date: 2026-10-20
+type: briefing
+---
+
+# Briefing
+
+## Destaques
+**[Rust 2.0 anunciado](https://rust.example/2)**
+A equipe do Rust anunciou a versão 2.0.
+*([Lobsters](https://rust.example/2))*
+
+---
+
+## Fontes citadas
+
+1. [Rust 2.0 anunciado](https://rust.example/2) — *Lobsters*
+2. [Kubernetes 1.35](https://k8s.example/135) — *Hacker News*
+"""
+
+
+class TestPeriodo(unittest.TestCase):
+    """Podcast a cada N dias (20/10/2026): período, 'se devido' e briefings por RSS como fonte."""
+
+    def setUp(self):
+        import json
+        import shutil
+        from unittest import mock
+        self.json, self.shutil = json, shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="alfred_podcast_"))
+        self.env = mock.patch.dict(os.environ, {"VAULT_ALFRED": str(self.tmp / "alfred"),
+                                                "VAULT_NOTICIAS": str(self.tmp / "noticias")})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_periodo_atual(self):
+        pid, ini, fim = semanal.periodo_atual(3, date(2026, 10, 20))
+        self.assertEqual((pid, ini, fim), ("2026-10-18_2026-10-20", date(2026, 10, 18), date(2026, 10, 20)))
+        self.assertEqual(semanal.intervalo_dias({"intervalo_dias": 3}), 3)
+        self.assertEqual(semanal.intervalo_dias({}), 3)
+        self.assertEqual(semanal.intervalo_dias({"intervalo_dias": 0}), 1)
+
+    def _manifesto(self, gerado_em: str, nome: str = "x"):
+        d = self.tmp / "noticias" / "podcast" / "manifestos"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{nome}.json").write_text(self.json.dumps({"semana": nome, "gerado_em": gerado_em, "emails": []}),
+                                        encoding="utf-8")
+
+    def test_episodio_devido(self):
+        from datetime import datetime
+        agora = datetime.fromisoformat("2026-10-20T19:00:00-03:00")
+        self.assertTrue(semanal.episodio_devido(3, agora)[0])                 # nenhum episódio ainda
+        self._manifesto("2026-10-18T19:00:05-03:00", "a")
+        self.assertFalse(semanal.episodio_devido(3, agora)[0])                # há 2 dias
+        self._manifesto("2026-10-17T19:00:05-03:00", "b")                     # mais antigo não importa
+        self.assertFalse(semanal.episodio_devido(3, agora)[0])
+        self.assertTrue(semanal.episodio_devido(3, datetime.fromisoformat("2026-10-21T19:00:00-03:00"))[0])
+
+    def test_briefing_rss_vira_edicao(self):
+        b = self.tmp / "alfred" / "briefings"
+        b.mkdir(parents=True)
+        (b / "2026-10-20_rust-2.md").write_text(BRIEFING_MD, encoding="utf-8")
+        (b / "2026-10-10_antigo.md").write_text(BRIEFING_MD, encoding="utf-8")
+        self.assertEqual(semanal.edicoes_da_semana(date(2026, 10, 18), date(2026, 10, 20)), [])
+        eds = semanal.edicoes_da_semana(date(2026, 10, 18), date(2026, 10, 20), incluir_briefings=True)
+        self.assertEqual(len(eds), 1)
+        titulos = [n["title"] for n in eds[0]["noticias"]]
+        self.assertEqual(titulos, ["Rust 2.0 anunciado", "Kubernetes 1.35"])
+        self.assertEqual(eds[0]["noticias"][1]["source"], "Hacker News")
+        self.assertEqual(eds[0]["emails"], [])

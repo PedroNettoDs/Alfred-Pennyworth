@@ -144,13 +144,15 @@ inbox:
 
     # Podcast semanal (services/inbox/semanal.py) — lê as edições da semana em VAULT_NOTICIAS/jornal
     podcast:
+      intervalo_dias: 3           # um episódio a cada 3 dias, cobrindo os últimos 3 dias (timer diário + --se-devido)
+      incluir_briefings: true     # além do jornal do e-mail, usa os briefings por RSS (VAULT_ALFRED/briefings)
       formato: [markdown, audio]
       vozes:                      # duas vozes edge-tts em diálogo
         ALFRED: "pt-BR-AntonioNeural"
         LUCIA:  "pt-BR-FranciscaNeural"
       template_segmento: podcast_semanal_segmento
       template_moldura: podcast_semanal_moldura
-      max_temas: 7                # temas da semana (clusters) que viram segmento
+      max_temas: 7                # temas do período (clusters) que viram segmento
       min_noticias: 3             # abaixo disso não gera episódio
       palavras_por_tema: 220      # ~1,5 min por tema → episódio de 10-13 min
       pausa_ms: 350               # silêncio entre falas

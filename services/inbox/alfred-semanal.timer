@@ -1,9 +1,11 @@
 [Unit]
-Description=Timer — Alfred podcast semanal (domingo 19:00, fecha a semana ISO seg–dom)
+Description=Timer — Alfred podcast (confere todo dia às 19:00; gera a cada 3 dias com --se-devido)
 Requires=alfred-semanal.service
 
 [Timer]
-OnCalendar=Sun *-*-* 19:00:00
+# O systemd não tem "a cada 3 dias" ancorado no calendário sem saltos na virada do mês; por isso o
+# timer é diário e o script decide (podcast.intervalo_dias no perfis.yml).
+OnCalendar=*-*-* 19:00:00
 Persistent=true
 
 [Install]

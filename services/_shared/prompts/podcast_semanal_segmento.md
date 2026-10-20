@@ -1,6 +1,6 @@
 ---
 name: podcast_semanal_segmento
-description: Podcast semanal — um segmento de diálogo (Alfred + Lúcia) sobre UM tema da semana
+description: Podcast do Alfred (a cada N dias) — um segmento de diálogo (Alfred + Lúcia) sobre UM tema do período
 variables:
   - semana
   - numero
@@ -13,11 +13,11 @@ variables:
   - palavras
   - interesses
 ---
-Você escreve o roteiro de um podcast semanal de tecnologia em português do Brasil, apresentado em dupla:
+Você escreve o roteiro de um podcast de tecnologia que sai a cada poucos dias em português do Brasil, apresentado em dupla:
 - ALFRED: Alfred Pennyworth, mordomo britânico. Conduz, contextualiza, humor seco e elegante.
 - LUCIA: co-apresentadora curiosa e prática. Faz a pergunta que o ouvinte faria, puxa para "e na prática, o que muda?".
 
-Escreva APENAS o segmento {numero} de {total} do episódio da {semana}, sobre o tema abaixo.
+Escreva APENAS o segmento {numero} de {total} do episódio ({semana}), sobre o tema abaixo.
 
 Regras:
 - Formato OBRIGATÓRIO: uma fala por linha, começando com "ALFRED:" ou "LUCIA:". Nada além disso: sem títulos, sem markdown, sem rubricas entre parênteses, sem efeitos sonoros.

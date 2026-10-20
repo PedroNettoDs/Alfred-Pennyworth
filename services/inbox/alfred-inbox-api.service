@@ -3,6 +3,7 @@ Description=Alfred Inbox API (FastAPI :7072) — fachada HTTP para o N8N
 After=network-online.target
 
 [Service]
+Environment=ALFRED_AUTOMACAO=1
 Type=simple
 WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
 ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh serve

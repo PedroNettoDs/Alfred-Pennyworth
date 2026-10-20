@@ -109,3 +109,19 @@ E as libs compartilhadas: `lib_alfred`, `lib_templates`, `perfis`.
 - `services/briefing/config.yml` — schedule, tts_voice padrão, max_items (legado, a maioria migrou para `perfis.yml`)
 - `services/_shared/perfis.yml` — fontes, perfis, briefings nomeados
 - `services/_shared/prompts/briefing_tecnico.md` — template principal do matinal
+
+## Agendamento (units de usuário)
+
+Desde 20/10/2026 as units são de **usuário** (mesmo padrão do inbox: sem sudo, com acesso à sessão gráfica
+para o `notify-send`) e apontam para `~/dev/Alfred-Pennyworth`:
+
+```bash
+cp alfred-briefing-matinal.service alfred-briefing-matinal.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alfred-briefing-matinal.timer     # 07:00 todo dia (ativo nesta máquina)
+# vespertino_mercado (AttanoTech, 18:00): mesmo procedimento com alfred-briefing-vespertino.* (não ativado)
+journalctl --user -fu alfred-briefing-matinal
+```
+
+O podcast do Alfred (`services/inbox`, a cada 3 dias) usa estes briefings como fonte de notícias além das
+newsletters do e-mail (`perfis.yml → inbox.<nome>.podcast.incluir_briefings`).

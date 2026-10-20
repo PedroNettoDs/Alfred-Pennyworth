@@ -11,7 +11,7 @@ POST /scan         {inbox?, janela_horas?}                 → só classificaç�
 POST /jornal       {inbox?, janela_horas?}                 → só a edição do dia
 GET  /jornal/ultimo                                        → metadados + texto da última edição
 GET  /jornal/ultimo/audio                                  → .mp3
-POST /semanal      {semana?: "AAAA-Www", sem_audio?, dry_run?} → podcast semanal (VAULT_NOTICIAS/podcast/)
+POST /semanal      {dias?: 3, semana?: "AAAA-Www", sem_audio?, dry_run?} → podcast do Alfred (VAULT_NOTICIAS/podcast/)
 GET  /pendencias?status=aguardando|todas|vou|nao_vou
 GET  /pendencias/{id}                                      → entrada + texto explicativo
 GET  /pendencias/{id}/audio                                → .mp3 da pergunta
@@ -181,7 +181,8 @@ def _ultimo_jornal() -> Optional[Path]:
 
 
 class SemanalRequest(BaseModel):
-    semana: Optional[str] = None     # "AAAA-Www"; default = semana ISO de hoje
+    semana: Optional[str] = None     # "AAAA-Www" = modo antigo; vazio = últimos `dias` dias até hoje
+    dias: Optional[int] = None       # default: perfis.yml podcast.intervalo_dias (3)
     inbox: Optional[str] = None
     sem_audio: bool = False
     dry_run: bool = False
@@ -191,7 +192,7 @@ class SemanalRequest(BaseModel):
 def semanal_post(req: SemanalRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
     res = semanal.gerar_semanal(semana=req.semana, inbox_name=req.inbox, com_audio=not req.sem_audio,
-                                dry_run=req.dry_run)
+                                dry_run=req.dry_run, dias=req.dias)
     if not res:
         raise HTTPException(status_code=404, detail="Sem edições do jornal nessa semana")
     return res

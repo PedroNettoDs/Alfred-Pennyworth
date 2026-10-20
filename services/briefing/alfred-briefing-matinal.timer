@@ -1,11 +1,10 @@
 [Unit]
-Description=Timer — Alfred Briefing Matinal (07:00 diário)
-Requires=alfred-briefing-matinal.service
+Description=Timer — Alfred Briefing Matinal (matinal_tech — RSS de tecnologia), 07:00 diário
 
 [Timer]
 OnCalendar=*-*-* 07:00:00
 Persistent=true
-# Persistent=true: se o PC estava desligado às 07:00, roda na próxima inicialização
+# Persistent=true: se o PC estava desligado no horário, roda na próxima inicialização
 
 [Install]
 WantedBy=timers.target

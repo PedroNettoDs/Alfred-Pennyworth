@@ -19,6 +19,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 6. [System Prompt do Alfred](#6-system-prompt-do-alfred)
 7. [Serviços systemd](#7-serviços-systemd)
 7b. [Inbox Assistant — Thunderbird → jornal + pendências](#7b-inbox-assistant--thunderbird--jornal--pendências)
+7d. [Liga / desliga — modo jogo](#7d-liga--desliga--modo-jogo)
 7c. [WhatsApp — Evolution API → pendências "o que você quer responder?"](#7c-whatsapp--evolution-api--pendências-o-que-você-quer-responder)
 8. [Scripts Utilitários](#8-scripts-utilitários)
 9. [Referência Rápida](#9-referência-rápida)
@@ -164,6 +165,7 @@ Alfred-Pennyworth/
 │   │   └── about.md
 │   │
 │   ├── scripts/
+│   │   ├── alfred-switch.sh       # Liga/desliga "modo jogo" (atalho na área de trabalho)
 │   │   ├── chromadb-indexer.py    # Indexação de .md no ChromaDB (placeholder)
 │   │   ├── sync-knowledge.py      # Sync incremental vault → Knowledge Base do WebUI
 │   │   └── webui-indexer.py       # Indexação de .md nas memories do WebUI (placeholder)
@@ -417,7 +419,7 @@ O Alfred lê os e-mails que o **Thunderbird** já baixou (cópias offline do per
 
 1. **Edição do dia do jornal** — as newsletters viram itens de notícia (título, resumo, URL só se existir no e-mail) e passam pelo **mesmo pipeline do briefing** (`lib_cluster` → template `jornal_email.md` → Ollama → título → `.md` + `.mp3` com edge-tts) em `VAULT_NOTICIAS/jornal/`.
    - **Cofre de notícias:** `VAULT_NOTICIAS` (padrão desta máquina: `VAULT_ALFRED/Noticias`, com `.obsidian` próprio — abra como vault separado no Obsidian). Fica dentro do vault do Alfred para o Open WebUI, que só monta `/vaults/alfred`, continuar lendo o jornal (valve `noticias_path` da tool). Vazio = layout antigo (`VAULT_ALFRED/jornal`), que continua sendo lido como fallback.
-   - **Podcast semanal** (`run.sh semanal`, `POST /semanal`): relê as edições da semana, escolhe os temas que mais se repetiram em mais newsletters e gera um episódio de ~10 min em **diálogo de duas vozes** (Alfred + Lúcia, edge-tts + ffmpeg) em `VAULT_NOTICIAS/podcast/episodios/`. Também grava um manifesto `podcast/manifestos/<AAAA-Www>.json` com os e-mails usados, que serve para a limpeza do Thunderbird. Detalhes em [services/inbox/about.md](services/inbox/about.md#podcast-semanal--resumo-semanal-do-alfred-semanalpy).
+   - **Podcast a cada 3 dias** (`run.sh podcast`, `POST /semanal`; timer diário com `--se-devido`): relê as edições do jornal e os briefings por RSS dos últimos 3 dias, escolhe os temas que mais se repetiram em mais newsletters e gera um episódio de ~10 min em **diálogo de duas vozes** (Alfred + Lúcia, edge-tts + ffmpeg) em `VAULT_NOTICIAS/podcast/episodios/`. Também grava um manifesto `podcast/manifestos/<período>.json` com os e-mails usados, que serve para a limpeza do Thunderbird. Detalhes em [services/inbox/about.md](services/inbox/about.md#podcast--resumo-do-alfred-a-cada-3-dias-semanalpy).
 2. **Pendências "vou / não vou"** — convites a eventos e contatos profissionais (recrutador, proposta, retorno de processo seletivo) geram um texto explicativo + um recado de voz em que Alfred pergunta se Pedro vai. A pergunta fica **aguardando** em `VAULT_ALFRED/pendencias/pendencias.yml` até a resposta, que pode vir por uma pergunta gráfica que fica ociosa esperando o clique (notificação com botões via D-Bus → kdialog → zenity), pelo terminal (`perguntar` ou `responder`), pelo chat (tool `alfred_pendencias`) ou pelo N8N. "Vou" cria uma tarefa em `tasks.yml`.
 
 ```bash
@@ -459,6 +461,33 @@ venv/bin/python -m unittest tests.test_whatsapp -v         # 37 testes offline (
 ```
 
 Sem `EVOLUTION_URL` no `.env` (ou com `WHATSAPP_DRY_RUN=true`) **nenhuma mensagem sai da máquina**: os envios ficam em `logs/whatsapp_enviados.jsonl`. Pareamento, formatos de payload, configuração (`perfis.yml → whatsapp:`) e limitações: [`services/inbox/about.md`](services/inbox/about.md#whatsapp-poder-3--evolution-api).
+
+---
+
+## 7d. Liga / desliga — "modo jogo"
+
+Atalho na área de trabalho **"Alfred: ligado (clique para modo jogo)"** (também no menu de aplicativos/KRunner,
+dá para associar um atalho de teclado global). Um clique desliga, outro religa; o nome e o ícone mostram o estado.
+
+```bash
+services/scripts/alfred-switch.sh            # toggle (o que o atalho faz)
+services/scripts/alfred-switch.sh off        # desliga
+services/scripts/alfred-switch.sh on         # religa
+services/scripts/alfred-switch.sh status
+```
+
+| Desligar faz | Religar faz |
+|---|---|
+| para os timers (briefing 07:00, e-mail 07:30/18:30, podcast 19:00, vigia) e qualquer execução em andamento | `docker start` banco + Evolution |
+| para a API do Alfred (:7072) — WhatsApp deixa de ser processado | sobe a API |
+| `docker stop` da Evolution API (WhatsApp) e do banco dela | religa os timers (o vigia confere tudo em seguida) |
+| fecha as notificações que esperam clique (as pendências continuam aguardando) | reabre essas notificações |
+| descarrega os modelos do Ollama da VRAM (GPU livre para jogar) | — |
+
+O estado sobrevive a reinicializações: `logs/alfred_desligado` faz os `run.sh` recusarem qualquer execução vinda
+das units do systemd (elas exportam `ALFRED_AUTOMACAO=1`), e a Evolution parada com `docker stop` não volta sozinha
+(`restart: unless-stopped`). Comandos manuais no terminal continuam funcionando (`ALFRED_FORCAR=1` libera até
+`serve`/`vigia`). Não existe WAHA nesta máquina: a ponte do WhatsApp é a Evolution API.
 
 ---
 

@@ -321,19 +321,26 @@ venv/bin/python tests/gerar_payloads.py [--audio]              # regrava tests/p
 
 Os payloads em `tests/payloads/` seguem o formato do evento `messages.upsert` da Evolution API v2 (texto, áudio OGG/Opus em base64 gerado com edge-tts, grupo, resposta de Pedro citando a pergunta, "ignorar", `fromMe`, spam, pessoal sem pedido). Os `evolution_v237_*.json` reproduzem o **formato real capturado na validação** (conteúdo sintético): `data.contextInfo`, áudio sem base64 com `mediaKey` em bytes JSON, resposta citada na conversa "Você", resposta direta citando o contato, grupo com `@lid`. 50 testes, incluindo a regressão de concorrência, a notificação no PC com a GUI simulada e a fila de espera (`TestFilaAtraso`, relógio mockado em `core._now`: agendada, cancelamento por `fromMe`, mensagens seguidas, criação ao vencer, thread da API, CLI). As outras classes rodam com `atraso_minutos: 0` (fluxo imediato). Os testes nunca chamam a Evolution: `EVOLUTION_URL` fica vazio.
 
-## Podcast semanal — "Resumo semanal do Alfred" (`semanal.py`)
+## Podcast — "Resumo do Alfred", a cada 3 dias (`semanal.py`)
 
-Antes só existia o áudio diário do jornal (monólogo de 2-3 min, `audio_jornal.md`). O episódio semanal relê as edições da semana e conta a semana em **diálogo de duas vozes**: Alfred (`pt-BR-AntonioNeural`) conduz e Lúcia (`pt-BR-FranciscaNeural`) faz as perguntas do ouvinte.
+Antes só existia o áudio diário do jornal (monólogo de 2-3 min, `audio_jornal.md`). O episódio relê as edições do período e conta tudo em **diálogo de duas vozes**: Alfred (`pt-BR-AntonioNeural`) conduz e Lúcia (`pt-BR-FranciscaNeural`) faz as perguntas do ouvinte.
+
+**Desde 20/10/2026 sai a cada 3 dias** (`perfis.yml → podcast.intervalo_dias: 3`), cobrindo os últimos 3 dias. O `alfred-semanal.timer` roda todo dia às 19:00 com `--se-devido`: só gera se o último episódio (o manifesto mais recente, por `gerado_em`) tiver 3 dias de calendário ou mais. O systemd não tem "a cada 3 dias" ancorado no calendário sem saltos na virada do mês, por isso a decisão fica no script. Arquivos: `AAAA-MM-DD_AAAA-MM-DD_resumo-do-alfred.{md,mp3}` e `manifestos/AAAA-MM-DD_AAAA-MM-DD.json` (com `periodo_inicio`/`periodo_fim`; a limpeza lê o conteúdo, não o nome).
+
+**Fontes:** as edições do jornal do e-mail e, com `incluir_briefings: true`, os **briefings por RSS** de `services/briefing` (`VAULT_ALFRED/briefings/AAAA-MM-DD_*.md`, lista "Fontes citadas"). Em 20/10 a caixa de e-mail não tinha nenhuma newsletter nos últimos 4 dias — sem o RSS o episódio ficaria vazio.
 
 ```
-./run.sh semanal                       # semana ISO de hoje (na segunda-feira: a semana anterior)
-./run.sh semanal --semana 2026-W43     # semana específica
-./run.sh semanal --dry-run             # só mostra os temas escolhidos (nada gravado, nada de LLM/TTS)
-./run.sh semanal --sem-audio           # .md + manifesto, sem edge-tts
-curl -X POST :7072/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '{"semana":"2026-W43"}'
+./run.sh podcast                       # últimos 3 dias até hoje (sempre gera)
+./run.sh podcast --se-devido           # o que o timer faz: só se o último tiver 3+ dias
+./run.sh podcast --dias 7              # outro tamanho de período
+./run.sh podcast --semana 2026-W43     # modo antigo: semana ISO
+./run.sh podcast --dry-run             # só mostra os temas escolhidos (nada gravado, nada de LLM/TTS)
+./run.sh podcast --sem-audio           # .md + manifesto, sem edge-tts
+curl -X POST :7072/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '{"dias":3}'
 ```
+(`semanal` continua funcionando como nome do subcomando.)
 
-1. **Seleção:** junta as notícias de todas as edições `AAAA-MM-DD_*` da semana em `VAULT_NOTICIAS/jornal` (e no antigo `VAULT_ALFRED/jornal`), deduplica, agrupa com `lib_cluster` e pontua cada tema: `nº de notícias × peso das fontes × (1 + 0,5 por dia extra em que o assunto apareceu) + 0,3 por newsletter distinta`. Assunto que se repetiu na semana e saiu em várias newsletters sobe. Ficam os `max_temas` melhores.
+1. **Seleção:** junta as notícias de todas as edições `AAAA-MM-DD_*` do período em `VAULT_NOTICIAS/jornal` (e no antigo `VAULT_ALFRED/jornal`, e nos briefings), deduplica, agrupa com `lib_cluster` e pontua cada tema: `nº de notícias × peso das fontes × (1 + 0,5 por dia extra em que o assunto apareceu) + 0,3 por newsletter distinta`. Assunto que se repetiu na semana e saiu em várias newsletters sobe. Ficam os `max_temas` melhores.
 2. **Roteiro em partes:** uma chamada ao LLM para a abertura e o encerramento (`podcast_semanal_moldura.md`) e uma por tema (`podcast_semanal_segmento.md`, ~`palavras_por_tema` palavras, 6-10 falas). Gerar em partes segura a duração: o gemma4 encurta roteiros longos pedidos de uma vez. Um tema com 1 notícia rende ~1 min e um tema rico rende 1,5-2 min. Com 7 temas o episódio fica em ~10-13 min. As falas são lidas linha a linha (`ALFRED:` / `LUCIA:`). Se o diálogo não vier no formato, o segmento cai para narração do Alfred.
 3. **Áudio:** cada fala vira um .mp3 no edge-tts (4 em paralelo, 3 tentativas), e o ffmpeg concatena com `pausa_ms` de silêncio e uma `vinheta` opcional no início e no fim.
 4. **Saídas** em `VAULT_NOTICIAS/podcast/`: `episodios/<AAAA-Www>_resumo-semanal.md` (frontmatter, `![[mp3]]`, temas com links e fontes, wikilinks para as edições usadas, transcrição), o `.mp3` e `manifestos/<AAAA-Www>.json`. Rodar de novo na mesma semana sobrescreve os três.

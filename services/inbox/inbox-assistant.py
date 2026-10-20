@@ -7,7 +7,7 @@ Uso:
     inbox-assistant.py ciclo [--inbox NOME] [--desde HORAS] [--reprocessar] [--max N] [--sem-notificar]
     inbox-assistant.py scan  [--desde HORAS]   → só classifica e mostra (nada é gravado)
     inbox-assistant.py jornal [--desde HORAS]  → só a edição do dia (newsletters)
-    inbox-assistant.py semanal [--semana AAAA-Www] [--sem-audio] [--dry-run] → podcast semanal (VAULT_NOTICIAS/podcast)
+    inbox-assistant.py podcast [--dias 3] [--se-devido] [--semana AAAA-Www] [--sem-audio] [--dry-run] → podcast (VAULT_NOTICIAS/podcast)
     inbox-assistant.py limpeza [candidatos|propor|lotes|ver ID|aprovar ID|recusar ID]  → limpeza pós-podcast (LIMPEZA.md)
     inbox-assistant.py pendencias [--todas]    → fila de "vou / não vou"
     inbox-assistant.py perguntar [--ouvir]     → modo interativo: Alfred pergunta e espera a resposta no terminal
@@ -719,8 +719,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true", help="simular: inclui a pendência inteira na saída")
     sp.add_argument("--imediato", action="store_true", help="simular: ignora atraso_minutos (pendência na hora)")
     sp.add_argument("--todos", action="store_true", help="processar-fila: não espera o prazo vencer")
-    sp = sub.add_parser("semanal", help="podcast semanal: seleciona as notícias da semana, roteiro em diálogo, .md/.mp3/manifesto")
-    sp.add_argument("--semana", default=None, help="semana ISO AAAA-Www (default: a de hoje)")
+    sp = sub.add_parser("semanal", aliases=["podcast"],
+                        help="podcast do Alfred (a cada N dias): notícias do período, roteiro em diálogo, .md/.mp3/manifesto")
+    sp.add_argument("--semana", default=None, help="modo antigo: semana ISO AAAA-Www")
+    sp.add_argument("--dias", type=int, default=None, help="tamanho do período (default: podcast.intervalo_dias = 3)")
+    sp.add_argument("--se-devido", action="store_true",
+                    help="só gera se o último episódio tiver sido gerado há --dias dias ou mais (usado pelo timer)")
     sp.add_argument("--inbox", default=None)
     sp.add_argument("--sem-audio", action="store_true", help="só roteiro e .md (sem edge-tts)")
     sp.add_argument("--dry-run", action="store_true", help="só mostra a seleção de notícias (nada gravado)")
@@ -751,7 +755,7 @@ def main() -> int:
     if args.cmd == "limpeza":
         import limpeza
         return limpeza.cmd_limpeza(args)
-    if args.cmd == "semanal":
+    if args.cmd in ("semanal", "podcast"):
         import semanal
         return semanal.cmd_semanal(args)
     if args.cmd == "pendencias":

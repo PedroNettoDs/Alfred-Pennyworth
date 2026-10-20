@@ -5,6 +5,7 @@ After=network-online.target
 # para notify-send / áudio): instale em ~/.config/systemd/user/
 
 [Service]
+Environment=ALFRED_AUTOMACAO=1
 Type=oneshot
 WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
 ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh ciclo

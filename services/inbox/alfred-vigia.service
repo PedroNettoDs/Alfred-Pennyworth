@@ -3,6 +3,7 @@ Description=Alfred vigia — API, Evolution/WhatsApp, Thunderbird e limpeza dos 
 After=network-online.target docker.service
 
 [Service]
+Environment=ALFRED_AUTOMACAO=1
 Type=oneshot
 WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
 ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh vigia
