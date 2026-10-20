@@ -451,7 +451,7 @@ class TestNotificacaoPC(Base):
     def _clica(self, *escolhas, caixas=()):
         """Roda o aguardador com a GUI simulada: `escolhas` = botões clicados em ordem, `caixas` = textos digitados."""
         esc, cx = list(escolhas), list(caixas)
-        with mock.patch.object(self.cli, "_menu_whatsapp_gui", lambda *a: esc.pop(0) if esc else ""), \
+        with mock.patch.object(self.cli, "_menu_whatsapp_gui", lambda *a, **k: esc.pop(0) if esc else ""), \
              mock.patch.object(self.cli, "_caixa_texto_gui", lambda *a, **k: cx.pop(0) if cx else None), \
              mock.patch.object(self.cli, "_dormir_ate", lambda *a: None), \
              mock.patch.object(self.cli.shutil, "which", lambda nome: None):

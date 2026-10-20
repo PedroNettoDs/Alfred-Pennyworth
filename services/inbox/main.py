@@ -24,6 +24,7 @@ POST /whatsapp/webhook[?notificar=1&async=1]   ← webhook messages.upsert (text
 POST /pendencias/{id}/responder-texto  {texto, enviar?, nota?} → registra e envia pelo WhatsApp (simulado sem EVOLUTION_URL)
 POST /pendencias/{id}/notificar-whatsapp        → manda a Pedro o resumo + áudio da pergunta (via Evolution API)
 GET  /whatsapp/status                            → configuração, estado da instância, fila
+GET/POST /agenda, /agenda/fila, /agenda/{id}/resultado, /agenda/{id}/desfazer, /agenda/alfred.ics (ver bloco Agenda)
 
 Com `atraso_minutos` > 0 (perfis.yml → whatsapp:) o webhook só enfileira (acao=agendada + prazo); uma thread
 de fundo iniciada com a API passa a cada FILA_INTERVALO_S pela fila e cria pendência + áudio + avisos dos
@@ -437,6 +438,83 @@ def limpeza_recusar(lid: str, req: LimpezaNotaRequest, authorization: Optional[s
 def limpeza_resultado(lid: str, req: LimpezaResultadoRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
     return _limpeza_erros(limpeza.registrar_resultado, lid, req.itens, req.executor)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Agenda — compromissos detectados → calendário do Thunderbird (extensão "Alfred — agenda")
+# ══════════════════════════════════════════════════════════════
+# GET  /agenda?status=                 → itens (padrão: todos menos desfeitos/cancelados)
+# POST /agenda                         {texto} → detecta compromisso no texto e anota
+# GET  /agenda/fila                    → para a extensão: [{id, acao: criar|remover, uid, calendario, ics}]
+# POST /agenda/{id}/resultado          {acao, ok, calendario?, erro?}
+# POST /agenda/{id}/desfazer
+# GET  /agenda/alfred.ics              → só 127.0.0.1, sem token: itens que ainda não chegaram ao calendário
+import agenda  # noqa: E402
+from fastapi import Request  # noqa: E402
+from fastapi.responses import Response  # noqa: E402
+
+
+class AgendaTextoRequest(BaseModel):
+    texto: str
+
+
+class AgendaResultadoRequest(BaseModel):
+    acao: str = "criar"
+    ok: bool
+    calendario: Optional[str] = ""
+    erro: Optional[str] = ""
+
+
+@app.get("/agenda")
+def agenda_listar(status: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    itens = agenda.listar(status) if status else [i for i in agenda.listar() if i.get("status") not in ("desfeito", "cancelado")]
+    return {"itens": itens}
+
+
+@app.post("/agenda")
+def agenda_anotar(req: AgendaTextoRequest, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    comp = agenda.detectar_compromisso(req.texto, contexto="Pedro anotando pela API", para_mim=True)
+    if not comp:
+        raise HTTPException(status_code=422, detail="Nenhum compromisso com data encontrado no texto")
+    return agenda.adicionar(comp["titulo"] or req.texto[:60], comp["inicio"], dia_inteiro=comp["dia_inteiro"],
+                            tipo=comp["tipo"], fim=comp["fim"], local=comp["local"],
+                            descricao=f"Anotado pela API: “{req.texto[:600]}”", origem={"canal": "api"})
+
+
+@app.get("/agenda/fila")
+def agenda_fila(authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    return {"itens": agenda.fila_extensao()}
+
+
+@app.post("/agenda/{aid}/resultado")
+def agenda_resultado(aid: str, req: AgendaResultadoRequest, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    try:
+        return agenda.registrar_resultado(aid, req.acao, req.ok, req.calendario or "", req.erro or "")
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/agenda/{aid}/desfazer")
+def agenda_desfazer(aid: str, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    try:
+        return agenda.desfazer(aid)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/agenda/alfred.ics")
+def agenda_ics(request: Request):
+    # A API escuta em 0.0.0.0 (o N8N/Evolution em Docker chegam por 172.17.0.1): o feed sem token
+    # só responde para a própria máquina.
+    host = (request.client.host if request.client else "") or ""
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="feed .ics só para 127.0.0.1")
+    return Response(content=agenda.feed_ics(), media_type="text/calendar; charset=utf-8")
 
 
 if __name__ == "__main__":

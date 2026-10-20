@@ -809,12 +809,20 @@ def _tem_gui() -> bool:
 
 
 def _iniciar_aguardador(comando: str, pid: str):
-    """Processo destacado (sobrevive à API) que fica ocioso na pergunta gráfica até Pedro clicar."""
+    """
+    Processo destacado que fica ocioso na pergunta gráfica até Pedro clicar.
+
+    Sob o systemd (timer oneshot do ciclo/vigia, ou a própria API), um filho comum morre junto quando a
+    unit termina ou reinicia — a notificação sumia sem resposta. Nesse caso o aguardador vira uma unit
+    transitória própria (`systemd-run --user`), que herda a sessão gráfica do gerenciador do usuário.
+    """
+    cmd = [sys.executable, str(SCRIPT_DIR / "inbox-assistant.py"), comando, pid]
+    if os.getenv("INVOCATION_ID") and shutil.which("systemd-run"):
+        nome = re.sub(r"[^A-Za-z0-9_.-]", "-", _ascii(f"alfred-{comando.strip('_')}-{pid}"))[:80]
+        cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit={nome}-{datetime.now():%H%M%S%f}",
+               f"--working-directory={SCRIPT_DIR}", "--"] + cmd
     try:
-        subprocess.Popen(
-            [sys.executable, str(SCRIPT_DIR / "inbox-assistant.py"), comando, pid],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-        )
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except Exception as e:
         log(f"[pendencias] Não foi possível iniciar o aguardador de resposta: {e}")
 
@@ -825,13 +833,14 @@ def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
     if entry.get("tipo") == "whatsapp":
         wa = entry.get("whatsapp") or {}
         if aguardar_resposta and _tem_gui():
+            # o aguardador toca o resumo junto com a notificação (botões Parar / Ouvir de novo)
             _iniciar_aguardador("_aguardar-whatsapp", entry["id"])
         else:
             _notify("Alfred — WhatsApp",
                     f"{wa.get('contato') or entry['titulo']}: {(wa.get('texto') or '')[:120]}\n"
                     f"Responda: run.sh responder-texto {entry['id']} \"...\"")
-        if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and entry.get("arquivos", {}).get("mp3"):
-            tocar_audio(vault() / entry["arquivos"]["mp3"])
+            if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and entry.get("arquivos", {}).get("mp3"):
+                tocar_audio(vault() / entry["arquivos"]["mp3"])
         return
     quando = entry.get("evento", {}).get("data_inicio") or "data não informada"
     _notify(f"Alfred — {'Convite' if entry['tipo'] == 'evento' else 'Contato profissional'}",
@@ -909,7 +918,43 @@ def responder(pid: str, resposta: str, nota: str = "") -> dict:
             md_path.write_text(txt + "\n", encoding="utf-8")
 
     log(f"[pendencias] {pid} → {r}" + (f" (tarefa #{task_id})" if task_id else ""))
+    if r == "vou":
+        _agendar_evento_email(entry)
     return entry
+
+
+def _agendar_evento_email(entry: dict) -> None:
+    """'Vou' num evento de e-mail com data → agenda (calendário do Thunderbird via extensão)."""
+    try:
+        import agenda
+        if not agenda._cfg()["auto_email_vou"]:
+            return
+        ev = entry.get("evento") or {}
+        ini = ev.get("data_inicio")
+        if not ini:
+            return
+        dia_inteiro = len(str(ini)) <= 10
+        inicio = datetime.fromisoformat(str(ini) if not dia_inteiro else f"{ini}T09:00")
+        if inicio.tzinfo is None:
+            inicio = inicio.replace(tzinfo=_now().tzinfo)
+        fim = None
+        if ev.get("data_fim") and not dia_inteiro and len(str(ev["data_fim"])) > 10:
+            fim = datetime.fromisoformat(str(ev["data_fim"]))
+            fim = fim if fim.tzinfo else fim.replace(tzinfo=_now().tzinfo)
+            if fim <= inicio:
+                fim = None
+        if inicio.date() < _now().date():
+            return
+        em = entry.get("email") or {}
+        desc = "\n".join(x for x in [
+            ev.get("resumo") or "", f"Link: {ev['link']}" if ev.get("link") else "",
+            f"E-mail: {em.get('subject', '')} — {em.get('from_name') or em.get('from', '')}",
+            f"Pendência Alfred: {entry['id']}"] if x)
+        agenda.adicionar(entry.get("titulo") or "Evento", inicio, dia_inteiro=dia_inteiro, tipo="evento", fim=fim,
+                         local=ev.get("local") or ("online" if ev.get("online") else ""), descricao=desc,
+                         origem={"canal": "email", "pendencia_id": entry["id"], "assunto": em.get("subject", "")})
+    except Exception as e:
+        log(f"[agenda] não consegui agendar {entry.get('id')}: {e}")
 
 
 def registrar_links_resposta(pid: str, links: dict) -> dict:

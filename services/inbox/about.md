@@ -118,11 +118,52 @@ Importe primeiro o sub-workflow, copie o ID dele para o nó "Aguardar resposta" 
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp alfred-inbox.service alfred-inbox.timer alfred-inbox-api.service ~/.config/systemd/user/
+cp alfred-inbox.service alfred-inbox.timer alfred-inbox-api.service \
+   alfred-semanal.service alfred-semanal.timer alfred-vigia.service alfred-vigia.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now alfred-inbox.timer      # ciclo 07:30 e 18:30
-systemctl --user enable --now alfred-inbox-api        # API para o N8N (opcional)
-journalctl --user -fu alfred-inbox
+systemctl --user enable --now alfred-inbox.timer      # ciclo de e-mail 07:30 e 18:30
+systemctl --user enable --now alfred-semanal.timer    # podcast semanal, domingo 19:00
+systemctl --user enable --now alfred-vigia.timer      # vigia: 2 min após o login e a cada 10 min
+systemctl --user enable --now alfred-inbox-api        # API (WhatsApp, extensões do Thunderbird, N8N)
+journalctl --user -fu alfred-vigia
+```
+
+Tudo sobe sozinho com o computador: Docker (`enabled`) traz a Evolution API (`restart: unless-stopped`), o
+linger do usuário mantém as units de usuário, e `~/.config/autostart/alfred-thunderbird.desktop` abre o
+Thunderbird no login (sem ele aberto não há e-mail novo nem gravação na agenda).
+
+As notificações que esperam clique nascem como **units transitórias** (`systemd-run --user`, nomes
+`alfred-aguardar-*` / `alfred-vigia-qr-*`): um filho comum de uma unit oneshot morria quando o ciclo
+terminava (ou a API reiniciava) e a pergunta sumia da tela sem resposta.
+
+### Vigia (`vigia.py`, `run.sh vigia`)
+
+A cada 10 min confere e conserta o que dá:
+
+| Checagem | Se falhar |
+|----------|-----------|
+| API do inbox (`:7072/health`) | `systemctl --user restart alfred-inbox-api` |
+| containers `alfred-evolution`, `alfred-evolution-db` | `docker start` |
+| conexão do WhatsApp (`connectionState`) | notificação **WhatsApp desconectado** com **[Mostrar QR code]** (gera e abre o QR; escaneie em Aparelhos conectados). Repete no máximo a cada 3 h; avisa quando reconectar |
+| Thunderbird aberto | só informa |
+| áudios de resumo do WhatsApp | apaga os `.mp3` com mais de `audio_reter_dias` (2) — ver abaixo |
+| agenda | avisa se há compromisso esperando a extensão há mais de 30 min |
+
+**Por que o WhatsApp parou em 19/10 às 19:10:** o WhatsApp desvinculou o aparelho (`stream:error 401
+conflict device_removed`) e a Evolution fez logout da instância (`state: close`). Isso acontece quando o
+aparelho é removido em *Aparelhos conectados* no celular ou quando o WhatsApp encerra a sessão vinculada.
+O autostart não resolve: precisa parear de novo pelo QR code. O vigia agora avisa na hora.
+
+### Áudios de resumo do WhatsApp: apagados depois de 2 dias
+
+O `.mp3` de cada pendência de WhatsApp já foi enviado a Pedro pelo WhatsApp, então o arquivo local some
+`audio_reter_dias` depois de criado (`perfis.yml → whatsapp.pedro_whatsapp.audio_reter_dias: 2`). O `.md` e a
+pendência ficam (`arquivos.mp3: null`, `audio_removido_em`). Só arquivos de pendências `tipo: whatsapp` dentro
+de `VAULT_ALFRED/pendencias/` são tocados — áudios de e-mail, jornal e podcast não.
+
+```bash
+./run.sh whatsapp limpar-audios --simular     # lista o que seria apagado
+./run.sh whatsapp limpar-audios --dias 2      # apaga (o vigia faz isso a cada 10 min)
 ```
 
 Se preferir o padrão dos outros serviços (unit de sistema com `User=netto`), lembre que `notify-send` e áudio precisam de `DBUS_SESSION_BUS_ADDRESS` — a unit de usuário já tem isso.
@@ -227,7 +268,10 @@ Cada pendência de WhatsApp abre um processo destacado (`inbox-assistant.py _agu
 | **Enviar** | caixa (`kdialog --textinputbox` → `zenity`) já preenchida com o rascunho; OK → `responder_texto()` → sai pelo WhatsApp citando a mensagem original; Cancelar volta à notificação |
 | **Não enviar** | fecha como `ignorada` (nada é enviado) |
 | **Agenda** | pergunta "Quando?" (sugere o compromisso da mensagem ou amanhã 09:00; aceita `20/10 14:00`, `amanhã 10h`, `terça 15h`, `2026-10-21 09:30`) e faz as três coisas: tarefa em `VAULT_ALFRED/tasks.yml` (`due_date`, tags `whatsapp`), lembrete — a pendência continua aguardando e a notificação volta nesse horário — e abre no navegador o "criar evento" do Google Agenda já preenchido (Pedro clica Salvar; sem credencial nem API, nada vai ao Google antes disso) |
-| **Ouvir** | toca o mp3 da pergunta (`tocar_audio`, agora tenta o próximo player se o `ffplay` falhar) e mostra a notificação de novo |
+| **▶ Ouvir** / **⏹ Parar áudio** | o resumo em áudio **começa a tocar sozinho quando a notificação aparece** (`pendencias.tocar_ao_notificar: true`; `INBOX_AUTOPLAY=false` desliga). Enquanto toca, o botão é **Parar**; depois vira **Ouvir** para repetir. Qualquer outro botão para o áudio |
+
+O Plasma não toca áudio *dentro* da notificação: a dica `sound-file` foi testada e o `plasmashell` não abriu
+nenhum stream no PipeWire. Por isso o aguardador toca o mp3 (ffplay) em paralelo e controla pelos botões.
 
 Se a pendência for respondida por outro caminho (WhatsApp, terminal, chat), a notificação fecha sozinha no próximo clique e não envia nada. Sem servidor de notificações com ações, cai para `kdialog --menu` → `zenity --list`.
 
@@ -307,6 +351,59 @@ curl -X POST :7072/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '
 **Agendamento (proposto, não ativado):** `alfred-semanal.service` + `alfred-semanal.timer` (domingo 19:00, `Persistent=true`). Se o PC estava desligado e o timer só roda na segunda, o default já cai na semana anterior. Para instalar, siga o cabeçalho do `.service`.
 
 **Testes:** `venv/bin/python -m unittest tests.test_semanal -v` (offline: semana ISO, parser de diálogo, leitura de edição antiga, resolução de e-mails).
+
+## Agenda — evento / tarefa / lembrete → calendário do Thunderbird (`agenda.py`)
+
+```
+WhatsApp de um contato ("fechado: reunião quinta 14h")  ─┐
+WhatsApp para você mesmo ("me lembra de pagar o boleto sexta") ─┼─ detectar_compromisso()  prefiltro + gemma4 (JSON Schema, agenda_detectar.md)
+"vou" num convite de e-mail com data                     ─┘
+        ↓ adicionar()  → VAULT_ALFRED/agenda/agenda.yml (status pendente) + tasks.yml (tarefa/lembrete)
+        ↓ notificação [Ok] [Desfazer]   (nota para você mesmo: confirmação "📅 Anotado na agenda" no WhatsApp)
+extensão "Alfred — agenda" no Thunderbird (a cada 2 min)
+        GET /agenda/fila → cria o evento (com alarme 30 min antes) no calendário "Agenda" (Google via CalDAV
+        → aparece no celular) → POST /agenda/{id}/resultado → status no_calendario
+        Desfazer → status desfazer → a extensão remove o evento → desfeito
+```
+
+- Convite ainda não aceito ("consegue dia 25?") e conversa sem data não viram compromisso. Abaixo de
+  `confianca_minima` (0.7), compromisso no passado ou sem data resolvida: ignorado.
+- Mensagens que o próprio Alfred manda para a conversa "você" (resumos, confirmações) são reconhecidas
+  pelo id enviado (`logs/whatsapp_ids_enviados.json`), pelas marcas 🎩/✔/📅/`ref:` e, para áudio, pela
+  janela de 45 s após um envio — não viram lembrete.
+- Grupos ficam de fora.
+
+```bash
+./run.sh agenda                                        # lista
+./run.sh agenda anotar "reunião com a Attano sexta 14h" # detecta e anota (mesmo caminho do WhatsApp)
+./run.sh agenda desfazer <id>
+./run.sh agenda ics                                    # feed dos que ainda não chegaram ao calendário
+```
+
+API (Bearer): `GET/POST /agenda`, `GET /agenda/fila`, `POST /agenda/{id}/resultado`, `POST /agenda/{id}/desfazer`;
+`GET /agenda/alfred.ics` sem token, só para 127.0.0.1 (dá para assinar no Thunderbird como agenda *Na rede*
+caso não queira a extensão — somente leitura e não sincroniza com o celular).
+
+Configuração em `perfis.yml → agenda:` (calendário, duração, alarme, confiança, o que é automático).
+
+### Extensão "Alfred — agenda" (`thunderbird-ext-agenda/`)
+
+O Thunderbird não tem API pública de calendário para extensões; a extensão traz uma *Experiment API*
+(`experiment/implementation.js`) que usa os módulos internos `cal.manager` / `CalEvent` do Thunderbird
+(conferidos no 157). Ela só cria e remove eventos que o Alfred mandou, pelo UID `alfred-…@alfred-pennyworth.local`.
+
+**Validada em 20/10/2026** num perfil descartável do Thunderbird 157 (headless, calendário local de teste)
+contra uma API de teste: listou os calendários, criou o evento com título/horário corretos, a API marcou
+`no_calendario`, e o Desfazer removeu o evento. **Ainda não instalada no perfil real** — isso depende de Pedro:
+
+1. `cd services/inbox/thunderbird-ext-agenda && zip -r ../alfred-agenda.xpi manifest.json background.js options.html options.js experiment`
+2. Extensão não assinada: no Thunderbird, *Configurações → Geral → Editor de configuração*, `xpinstall.signatures.required = false`
+   (ou carregue temporariamente em *Ferramentas de desenvolvedor → Depurar complementos → Carregar complemento
+   temporário → manifest.json*, repetindo a cada abertura).
+3. *Complementos → engrenagem → Instalar complemento de um arquivo* → `alfred-agenda.xpi`; aceite a permissão
+   de "acesso total" (é o que toda Experiment API pede).
+4. Opções da extensão: URL `http://127.0.0.1:7072`, token = `SHELL_EXECUTOR_TOKEN` do `.env`, calendário **Agenda**.
+5. Teste: `./run.sh agenda anotar "teste do Alfred amanhã às 15h"` → em até 2 min aparece na Agenda → `./run.sh agenda desfazer <id>`.
 
 ## Limitações conhecidas
 

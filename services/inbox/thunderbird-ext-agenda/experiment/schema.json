@@ -1,0 +1,34 @@
+[
+  {
+    "namespace": "alfredCalendar",
+    "functions": [
+      {
+        "name": "listCalendars",
+        "type": "function",
+        "async": true,
+        "description": "Calendários do Thunderbird: [{id, name, type, readOnly, disabled}].",
+        "parameters": []
+      },
+      {
+        "name": "createEvent",
+        "type": "function",
+        "async": true,
+        "description": "Cria (ou substitui, pelo UID) um evento a partir de um VCALENDAR com um VEVENT.",
+        "parameters": [
+          { "name": "calendarId", "type": "string" },
+          { "name": "ics", "type": "string" }
+        ]
+      },
+      {
+        "name": "deleteEvent",
+        "type": "function",
+        "async": true,
+        "description": "Remove o evento com este UID (true se existia).",
+        "parameters": [
+          { "name": "calendarId", "type": "string" },
+          { "name": "uid", "type": "string" }
+        ]
+      }
+    ]
+  }
+]

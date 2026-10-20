@@ -190,12 +190,29 @@ whatsapp:
     audio_max_segundos: 600       # transcreve no máximo isso (gemma4 ouve em fatias de 30 s)
     contatos_ignorar: []          # substrings de número ou nome que nunca viram pendência
     contatos_sempre: []           # substrings de número ou nome que viram pendência sem passar pelo LLM
+    audio_reter_dias: 2           # áudios de resumo (.mp3) são apagados depois disso — a cópia fica no WhatsApp
 
     pendencias:
       tts_voice: "pt-BR-AntonioNeural"
       template_pergunta: pergunta_whatsapp
       template_audio: audio_pergunta_whatsapp
       lembrar_a_cada_horas: 6
+      tocar_ao_notificar: true    # o resumo em áudio começa junto com a notificação (botões Parar / Ouvir)
+
+# ── Agenda — compromissos detectados → calendário do Thunderbird ──
+# Evento / tarefa / lembrete com data detectado no WhatsApp (contatos ou notas para você mesmo)
+# ou "vou" num convite de e-mail → VAULT_ALFRED/agenda/agenda.yml → extensão "Alfred — agenda"
+# grava no calendário abaixo (o Google, via CalDAV, aparece no celular).
+agenda:
+  calendario: "Agenda"          # nome do calendário no Thunderbird
+  duracao_min: 60               # duração padrão de evento sem hora de término
+  lembrete_min: 30              # alarme antes do horário (0 = sem alarme)
+  confianca_minima: 0.7         # abaixo disso a detecção é ignorada
+  auto_whatsapp: true           # mensagens de contatos com compromisso marcado
+  notas_para_mim: true          # o que você escreve para si mesmo no WhatsApp ("me lembra de...")
+  auto_email_vou: true          # responder "vou" a um convite de e-mail com data
+  criar_tarefa: true            # tarefa/lembrete também vira item em tasks.yml
+  notificar: true               # notificação no PC com [Ok] [Desfazer]
 
 # ── Defaults globais ──────────────────────────────────────────
 defaults:

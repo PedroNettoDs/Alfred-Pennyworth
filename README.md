@@ -153,11 +153,14 @@ Alfred-Pennyworth/
 │   ├── inbox/
 │   │   ├── core.py                    # Pipeline: Thunderbird → classificar → jornal + pendências
 │   │   ├── whatsapp.py                # Poder 3: webhook Evolution → transcrever → classificar → fila (atraso_minutos) → pendência → responder
+│   │   ├── agenda.py                  # Evento/tarefa/lembrete detectado → agenda.yml → calendário do Thunderbird
+│   │   ├── vigia.py                   # A cada 10 min: API, Evolution, WhatsApp (aviso + QR), Thunderbird, áudios > 2 dias
+│   │   ├── thunderbird-ext-agenda/    # Extensão "Alfred — agenda" (Experiment API de calendário)
 │   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir)
 │   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N e webhook da Evolution
 │   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
 │   │   ├── tests/                     # test_whatsapp.py + payloads da Evolution (texto, áudio .ogg, resposta citada…)
-│   │   ├── alfred-inbox.{service,timer}, alfred-inbox-api.service  # units de usuário
+│   │   ├── alfred-{inbox,semanal,vigia}.{service,timer}, alfred-inbox-api.service  # units de usuário
 │   │   └── about.md
 │   │
 │   ├── scripts/
@@ -441,7 +444,7 @@ Mensagens e **áudios** recebidos no WhatsApp passam pelo mesmo tratamento do e-
 2. **classifica** com o mesmo padrão do e-mail (`whatsapp_classificar.md`, JSON Schema): `profissional` / `pessoal` / `grupo` / `automatico` / `spam` + "requer resposta?" + urgência;
 3. **espera ~20 min** (`atraso_minutos` em `perfis.yml → whatsapp:`): se Pedro responder a conversa direto pelo celular nesse tempo, nada é gerado; mensagens seguidas do contato viram uma pendência só;
 4. para contatos relevantes cria uma **pendência `whatsapp`** em `VAULT_ALFRED/pendencias/pendencias.yml` (mesmo esquema, `status: aguardando`, campo `resposta_texto`) com um texto explicativo (`pergunta_whatsapp.md`) e um recado de voz (`audio_pergunta_whatsapp.md` → edge-tts) em que Alfred resume a mensagem e pergunta **"o que você quer responder?"**;
-5. avisa Pedro no WhatsApp (resumo com `ref: <id>` + áudio) — pelo N8N (`services/inbox/n8n/alfred-whatsapp.json`) ou pelo próprio Python (`/whatsapp/webhook-async`) — e **no PC**: notificação com a sugestão de resposta escrita pelo Alfred e os botões **Enviar** (abre o rascunho para editar e confirmar) / **Não enviar** / **Agenda** (tarefa em `tasks.yml` + lembrete no PC + evento no Google Agenda já preenchido) / **Ouvir**;
+5. avisa Pedro no WhatsApp (resumo com `ref: <id>` + áudio) — pelo N8N (`services/inbox/n8n/alfred-whatsapp.json`) ou pelo próprio Python (`/whatsapp/webhook-async`) — e **no PC**: notificação com a sugestão de resposta escrita pelo Alfred e os botões **Enviar** (abre o rascunho para editar e confirmar) / **Não enviar** / **Agenda** (tarefa em `tasks.yml` + lembrete no PC + evento no Google Agenda já preenchido) / **Ouvir** — o resumo em áudio começa a tocar junto com a notificação (botão **Parar**) e o `.mp3` local é apagado 2 dias depois (a cópia fica no WhatsApp);
 6. **a resposta de Pedro é enviada ao contato**: ele responde *citando* a mensagem do Alfred (ou pelo botão Enviar no PC, `./run.sh responder-texto <id> "texto"`, o chat: "responde pro Carlos que…", ou `POST /pendencias/{id}/responder-texto`). `ignorar` fecha sem enviar; se Pedro responder o contato direto no celular, a pendência fecha sozinha.
 
 ```bash
@@ -652,9 +655,12 @@ Integração com WhatsApp via Evolution API: mensagens e áudios recebidos (tran
 
 **Status:** ✅ Implementado e **validado com WhatsApp real em 2026-10-19** (instância no próprio número de Pedro, Evolution API "v2.3.7", sem N8N): texto e áudio viram pendência, resumo + áudio chegam a Pedro, a resposta citada é entregue ao contato, `ignorar` e resposta direta pelo celular fecham a pendência, e a notificação no PC (Enviar / Não enviar / Agenda / Ouvir) envia o rascunho. Depois da validação: **espera de ~20 min antes de resumir** (`atraso_minutos: 20` em `perfis.yml → whatsapp:`) — resumo, áudio e avisos só saem se Pedro não responder a conversa nesse tempo; se ele responder direto pelo celular antes, nada é gerado (testado offline, ainda não com WhatsApp real — ver [espera](services/inbox/about.md#espera-antes-de-resumir-atraso_minutos)). Falta validar o workflow N8N (stack Docker fora do ar nesta máquina) — ver [validação](services/inbox/about.md#validação-com-whatsapp-real-2026-10-19).
 
+**Agenda automática (20/10/2026):** evento, tarefa ou lembrete com data detectado numa mensagem de contato, no que Pedro escreve para si mesmo na conversa "Você" ("me lembra de pagar o boleto sexta") ou num "vou" de convite por e-mail vai para `VAULT_ALFRED/agenda/agenda.yml` e, pela extensão **Alfred — agenda** do Thunderbird, para o calendário "Agenda" (Google via CalDAV → celular), com notificação **[Ok] [Desfazer]**. Extensão validada num perfil de teste do Thunderbird 157; falta instalar no perfil real — ver [agenda](services/inbox/about.md#agenda--evento--tarefa--lembrete--calendário-do-thunderbird-agendapy).
+
+**Vigia (20/10/2026):** a conexão caiu em 19/10 às 19:10 (`device_removed`: o WhatsApp desvinculou o aparelho). O `alfred-vigia.timer` (no login e a cada 10 min) reinicia API/containers parados e, se o WhatsApp cair, mostra uma notificação com **[Mostrar QR code]** para parear de novo.
+
 **Próximos passos:**
-- **Agendamento** — extrair compromissos (data, hora, local) das mensagens relevantes e criar eventos no calendário / notas no Obsidian.
-- **Comandos para o Alfred pelo WhatsApp** — hoje tudo o que Pedro escreve citando o resumo vai para o contato: na validação real, "Pode agendar para terça-feira às 18:00 (coloque na minha agenda também)" foi entregue inteiro à Attano Tech. Separar instrução para o Alfred do texto ao contato (ex.: trecho marcado `[Alfred: põe na agenda]` é executado e removido antes do envio) e aceitar mensagens diretas ao Alfred na conversa "Você", sem citação ("Alfred, agenda reunião com a Attano terça 18h", "me lembra amanhã de mandar o orçamento") → função específica (agenda, tarefa, lembrete, pesquisa).
+- **Comandos para o Alfred pelo WhatsApp** — hoje tudo o que Pedro escreve citando o resumo vai para o contato: na validação real, "Pode agendar para terça-feira às 18:00 (coloque na minha agenda também)" foi entregue inteiro à Attano Tech. Separar instrução para o Alfred do texto ao contato (ex.: trecho marcado `[Alfred: põe na agenda]` é executado e removido antes do envio) e aceitar outros comandos diretos ao Alfred na conversa "Você" além de agenda/lembrete (já implementado), ex.: pesquisa, tarefa sem data.
 - Usar os nós "Evolution: texto/áudio para Pedro" do `alfred-whatsapp.json` também no sub-workflow "aguardar resposta" do e-mail (links vou/não vou pelo WhatsApp).
 
 ---

@@ -27,7 +27,7 @@ import base64
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Union
 
@@ -170,6 +170,52 @@ def _registrar_simulado(tipo: str, numero: str, conteudo: str, extra: Optional[d
     return mid
 
 
+# ── Registro do que o próprio Alfred enviou ───────────────────
+# Com a instância no número de Pedro, tudo que o Alfred manda para Pedro volta pelo webhook como
+# mensagem fromMe da conversa "você". Guardar os ids (e a hora do último envio) evita que o Alfred
+# leia o próprio resumo como se fosse um lembrete escrito por Pedro.
+IDS_ENVIADOS_FILE = PROJECT_ROOT / "logs" / "whatsapp_ids_enviados.json"
+_IDS_JANELA = timedelta(days=7)
+
+
+def _ler_ids_enviados() -> dict:
+    try:
+        data = json.loads(IDS_ENVIADOS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _marcar_envio(mid: Optional[str]) -> None:
+    """Registra o id enviado (ou só a hora do envio, quando a Evolution não devolve id)."""
+    try:
+        data = _ler_ids_enviados()
+        agora = datetime.now()
+        ids = {k: v for k, v in (data.get("ids") or {}).items()
+               if agora - datetime.fromisoformat(v) < _IDS_JANELA}
+        if mid:
+            ids[mid] = agora.isoformat(timespec="seconds")
+        IDS_ENVIADOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = IDS_ENVIADOS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"ultimo_envio": agora.isoformat(timespec="seconds"), "ids": ids},
+                                  ensure_ascii=False), encoding="utf-8")
+        tmp.replace(IDS_ENVIADOS_FILE)
+    except Exception as e:
+        log(f"[whatsapp] não consegui registrar id enviado: {e}")
+
+
+def enviado_pelo_alfred(mid: Optional[str]) -> bool:
+    return bool(mid) and mid in (_ler_ids_enviados().get("ids") or {})
+
+
+def segundos_desde_ultimo_envio() -> Optional[float]:
+    ts = _ler_ids_enviados().get("ultimo_envio")
+    try:
+        return (datetime.now() - datetime.fromisoformat(ts)).total_seconds() if ts else None
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Envio ─────────────────────────────────────────────────────
 
 def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: int = 0) -> dict:
@@ -190,9 +236,11 @@ def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: 
     if simulado():
         mid = _registrar_simulado("texto", destino, texto, {"quoted": bool(quoted)})
         return {"ok": True, "simulado": True, "message_id": mid}
+    _marcar_envio(None)              # antes do POST: o eco pode chegar antes da resposta
     r = _post(f"/message/sendText/{instancia()}", body)
     r["simulado"] = False
     r["message_id"] = _message_id(r.get("resposta"))
+    _marcar_envio(r["message_id"])
     return r
 
 
@@ -218,9 +266,11 @@ def enviar_audio(numero: str, audio: Union[Path, str, bytes], ptt: bool = True) 
         mid = _registrar_simulado("audio", destino, f"<áudio {tamanho or len(conteudo)} bytes>")
         return {"ok": True, "simulado": True, "message_id": mid}
     body = {"number": destino, "audio": conteudo, "encoding": bool(ptt)}
+    _marcar_envio(None)
     r = _post(f"/message/sendWhatsAppAudio/{instancia()}", body, timeout=180)
     r["simulado"] = False
     r["message_id"] = _message_id(r.get("resposta"))
+    _marcar_envio(r["message_id"])
     return r
 
 

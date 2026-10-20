@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer — Alfred vigia (2 min após o login e a cada 10 min)
+
+[Timer]
+OnBootSec=2min
+OnStartupSec=2min
+OnUnitActiveSec=10min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

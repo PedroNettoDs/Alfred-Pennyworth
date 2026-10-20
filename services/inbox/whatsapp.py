@@ -41,10 +41,12 @@ from _shared.lib_tts import tts_save, limpar_para_fala  # noqa: E402
 from _shared.lib_whatsapp import (  # noqa: E402
     enviar_texto, enviar_audio, baixar_midia, jid_para_numero, eh_grupo, formatar_numero,
     numero_pedro, simulado, instancia as instancia_padrao,
+    enviado_pelo_alfred, segundos_desde_ultimo_envio,
 )
 from _shared.perfis import get_whatsapp, list_all  # noqa: E402
 
 import core  # noqa: E402
+import agenda  # noqa: E402
 
 SEEN_FILE = core.PROJECT_ROOT / "logs" / "whatsapp_seen.json"
 FILA_FILE = core.PROJECT_ROOT / "logs" / "whatsapp_fila.json"   # mensagens esperando atraso_minutos
@@ -1185,6 +1187,142 @@ def _resumo_msg(msg: dict) -> dict:
                                     "tipo_msg", "timestamp")} | {"texto": (msg.get("texto") or "")[:200]}
 
 
+# ══════════════════════════════════════════════════════════════
+#  Agenda automática + conversa "você" (Pedro anotando para si)
+# ══════════════════════════════════════════════════════════════
+
+_MARCAS_ALFRED = re.compile(r"(🎩|^\s*[✔✖⏰📅]|\bref:\s*[0-9]{8}-)", re.M)
+
+
+def _conversa_comigo(msg: dict) -> bool:
+    """Pedro escrevendo para si mesmo (conversa "você") ou, numa instância separada, para o número do Alfred."""
+    if msg.get("grupo"):
+        return False
+    if msg.get("from_me"):
+        return bool(msg.get("dono")) and msg.get("numero") == msg.get("dono")
+    pedro = numero_pedro()
+    return bool(pedro) and msg.get("numero") == pedro
+
+
+def _eco_do_alfred(msg: dict) -> bool:
+    """Mensagem que o próprio Alfred mandou para Pedro e voltou pelo webhook."""
+    if enviado_pelo_alfred(msg.get("message_id")):
+        return True
+    if _MARCAS_ALFRED.search(msg.get("texto") or ""):
+        return True
+    seg = segundos_desde_ultimo_envio()
+    return msg.get("tipo_msg") == "audio" and seg is not None and seg < 45
+
+
+def _detectar_e_agendar(conteudo: str, contato: str, msg: dict, pid: Optional[str] = None,
+                        para_mim: bool = False) -> Optional[dict]:
+    """Compromisso com data no texto → item da agenda (notificação [Ok] [Desfazer]). None se nada."""
+    acfg = agenda._cfg()
+    if msg.get("grupo") or not (acfg["notas_para_mim"] if para_mim else acfg["auto_whatsapp"]):
+        return None
+    try:
+        comp = agenda.detectar_compromisso(
+            conteudo, contexto="nota que Pedro mandou para si mesmo no WhatsApp" if para_mim
+            else f"mensagem de WhatsApp de {contato}", para_mim=para_mim)
+    except Exception as e:
+        log(f"[agenda] detecção falhou: {e}")
+        return None
+    if not comp:
+        return None
+    desc = (("Você anotou no WhatsApp" if para_mim else f"Mensagem de {contato} (WhatsApp)")
+            + f": “{conteudo[:600]}”" + (f"\nPendência Alfred: {pid}" if pid else ""))
+    return agenda.adicionar(
+        comp["titulo"] or f"Compromisso com {contato}", comp["inicio"], dia_inteiro=comp["dia_inteiro"],
+        tipo=comp["tipo"], fim=comp["fim"], local=comp["local"], descricao=desc,
+        origem={"canal": "whatsapp-eu" if para_mim else "whatsapp", "contato": contato, "pendencia_id": pid,
+                "message_id": msg.get("message_id"), "confianca": comp["confianca"]})
+
+
+# ══════════════════════════════════════════════════════════════
+#  Áudios de resumo: apagados depois de N dias (já ficaram no WhatsApp de Pedro)
+# ══════════════════════════════════════════════════════════════
+
+@_serializado
+def limpar_audios(dias: Optional[float] = None, simular: bool = False) -> dict:
+    """
+    Apaga os .mp3 de resumo das pendências de WhatsApp criados há mais de `dias` (perfis.yml →
+    whatsapp.<nome>.audio_reter_dias, padrão 2). O .md e a pendência ficam; arquivos.mp3 vira None.
+    Só toca em arquivos referenciados por pendências tipo "whatsapp" dentro de VAULT_ALFRED/pendencias/.
+    """
+    if dias is None:
+        try:
+            dias = float((carregar_cfg()[1] or {}).get("audio_reter_dias", 2))
+        except Exception:
+            dias = 2.0
+    limite = datetime.now() - timedelta(days=dias)
+    pd = core.pend_dir().resolve()
+    removidos, mantidos, bytes_liberados = [], 0, 0
+    if True:   # @_serializado: mesmo lock do processamento de mensagens
+        data = core._load_pend()
+        mudou = False
+        for p in data["pendencias"]:
+            if p.get("tipo") != "whatsapp":
+                continue
+            rel = (p.get("arquivos") or {}).get("mp3")
+            if not rel:
+                continue
+            f = (core.vault() / rel).resolve()
+            if f.parent != pd or f.suffix != ".mp3":
+                continue
+            if not f.exists():
+                p["arquivos"]["mp3"] = None
+                mudou = True
+                continue
+            criado = datetime.fromtimestamp(f.stat().st_mtime)
+            try:
+                criado = min(criado, datetime.fromisoformat(p.get("criado_em")).replace(tzinfo=None))
+            except (TypeError, ValueError):
+                pass
+            if criado > limite:
+                mantidos += 1
+                continue
+            tam = f.stat().st_size
+            if not simular:
+                f.unlink()
+                p["arquivos"]["mp3"] = None
+                p["audio_removido_em"] = core._now().isoformat(timespec="minutes")
+                mudou = True
+            removidos.append(p["id"])
+            bytes_liberados += tam
+        if mudou:
+            core._save_pend(data)
+    if removidos:
+        log(f"[whatsapp] áudios de resumo {'a apagar' if simular else 'apagados'} (> {dias:g} dias): "
+            f"{len(removidos)} · {bytes_liberados / 1e6:.1f} MB")
+    return {"dias": dias, "removidos": removidos, "mantidos": mantidos, "bytes": bytes_liberados,
+            "simulado": simular}
+
+
+def _nota_para_mim(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: bool) -> dict:
+    """Pedro escreveu para si mesmo: se for lembrete/tarefa/evento com data, vai para a agenda."""
+    if _eco_do_alfred(msg):
+        res["motivo"] = "eco de mensagem enviada pelo Alfred (conversa você)"
+        return res
+    texto = msg.get("texto") or ""
+    if msg.get("tipo_msg") == "audio":
+        tr = transcrever_mensagem(msg, cfg)
+        res["transcricao"] = {k: tr.get(k) for k in ("texto", "metodo", "duracao_s", "erro")}
+        texto = tr.get("texto") or ""
+    ag = _detectar_e_agendar(texto, "Pedro", msg, para_mim=True)
+    if not ag:
+        res["motivo"] = "nota de Pedro para si mesmo sem compromisso com data"
+        return res
+    res["agenda"] = {k: ag.get(k) for k in ("id", "titulo", "inicio", "status", "_novo")}
+    res.update(acao="agenda", motivo="lembrete anotado por Pedro")
+    conf = (f"📅 Anotado na agenda: *{ag['titulo']}* — {agenda._quando_legivel(ag)}"
+            + ("" if ag.get("_novo") else " (já estava)"))
+    destino = msg.get("dono") or numero_pedro()
+    res["notificacao"] = {"numero": destino, "texto": conf, "pendencia_id": None, "audio_url": None}
+    if notificar and enviar and destino:
+        res["envio_confirmacao"] = enviar_texto(destino, conf)
+    return res
+
+
 @_serializado
 def processar_mensagem_whatsapp(
     payload: dict,
@@ -1275,6 +1413,8 @@ def processar_mensagem_whatsapp(
             if notificar and res["notificacao"]["numero"] and enviar:
                 res["envio_confirmacao"] = enviar_texto(res["notificacao"]["numero"], conf)
             return res
+        if _conversa_comigo(msg):
+            return _nota_para_mim(msg, cfg, res, enviar=enviar, notificar=notificar)
         if msg.get("from_me") and not msg.get("grupo"):
             p = _pendencia_aguardando_do_jid(msg.get("remote_jid"))
             if p:
@@ -1314,6 +1454,10 @@ def processar_mensagem_whatsapp(
     if mid:
         seen[mid] = datetime.now().isoformat(timespec="minutes")
         core.save_seen(seen, SEEN_FILE)
+
+    ag = _detectar_e_agendar(conteudo, _contato_legivel(msg), msg)
+    if ag:
+        res["agenda"] = {k: ag.get(k) for k in ("id", "titulo", "inicio", "status", "_novo")}
 
     ok, motivo = _relevante(cat, cfg)
     if not ok:

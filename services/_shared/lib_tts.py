@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+from typing import Optional
 from pathlib import Path
 
 import edge_tts
@@ -90,3 +91,45 @@ def tocar_audio(path: Path, bloquear: bool = False) -> bool:
             log(f"[audio] Falha com {cmd[0]}: {e}")
     log("[audio] Nenhum player disponível (ffplay/mpv/xdg-open)")
     return False
+
+
+def iniciar_audio(path: Path) -> Optional["subprocess.Popen"]:
+    """
+    Começa a tocar sem bloquear e devolve o processo (para parar com parar_audio). Só players que
+    tocam e saem sozinhos (INBOX_AUDIO_PLAYER, ffplay, mpv, pw-play) — xdg-open não serve aqui.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    custom = os.getenv("INBOX_AUDIO_PLAYER", "").strip()
+    candidatos: list[list[str]] = []
+    if custom:
+        candidatos.append(custom.split() + [str(path)])
+    if shutil.which("ffplay"):
+        candidatos.append(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)])
+    if shutil.which("mpv"):
+        candidatos.append(["mpv", "--no-video", "--really-quiet", str(path)])
+    for cmd in candidatos:
+        try:
+            return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+        except Exception as e:
+            log(f"[audio] Falha com {cmd[0]}: {e}")
+    return None
+
+
+def tocando(proc) -> bool:
+    return proc is not None and proc.poll() is None
+
+
+def parar_audio(proc) -> None:
+    if tocando(proc):
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+

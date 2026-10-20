@@ -29,6 +29,7 @@ fáceis de consumir por shell/N8N.
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -42,7 +43,7 @@ load_env(override=False)  # .env da raiz; variáveis já exportadas (run.sh, tes
 
 import core  # noqa: E402
 import whatsapp  # noqa: E402
-from _shared.lib_tts import tocar_audio  # noqa: E402
+from _shared.lib_tts import tocar_audio, iniciar_audio, parar_audio, tocando  # noqa: E402
 
 
 # ── Subcomandos ───────────────────────────────────────────────
@@ -244,7 +245,15 @@ def cmd_whatsapp(args):
             return 1
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
         return 0
-    print("Ações: status | qrcode | webhook URL | simular payload.json | notificar ID | fila | processar-fila")
+    if sub == "limpar-audios":
+        r = whatsapp.limpar_audios(dias=args.dias, simular=args.simular)
+        verbo = "seriam apagados" if r["simulado"] else "apagados"
+        print(f"{len(r['removidos'])} áudio(s) de resumo {verbo} (> {r['dias']:g} dias, {r['bytes'] / 1e6:.1f} MB); "
+              f"{r['mantidos']} mantido(s).")
+        for pid in r["removidos"]:
+            print(f"  {pid}")
+        return 0
+    print("Ações: status | qrcode | webhook URL | simular payload.json | notificar ID | fila | processar-fila | limpar-audios")
     return 1
 
 
@@ -352,10 +361,12 @@ def cmd_aguardar_resposta(args):
 
 # ── WhatsApp no PC: Enviar (rascunho) / Não enviar / Agenda / Ouvir ─────────
 
-def _menu_whatsapp_gui(titulo: str, corpo: str, tem_audio: bool) -> str:
-    """Uma notificação com botões; bloqueia até o clique. → "enviar" | "nao" | "agenda" | "ouvir" | "" (descartada)."""
+def _menu_whatsapp_gui(titulo: str, corpo: str, tem_audio: bool, audio_tocando: bool = False) -> str:
+    """Uma notificação com botões; bloqueia até o clique.
+    → "enviar" | "nao" | "agenda" | "ouvir" | "parar" | "" (descartada)."""
     semana = 60 * 60 * 24 * 7
-    acoes = [("enviar", "Enviar"), ("nao", "Não enviar"), ("agenda", "Agenda")] + ([("ouvir", "Ouvir")] if tem_audio else [])
+    botao_audio = [("parar", "⏹ Parar áudio")] if audio_tocando else ([("ouvir", "▶ Ouvir")] if tem_audio else [])
+    acoes = [("enviar", "Enviar"), ("nao", "Não enviar"), ("agenda", "Agenda")] + botao_audio
     r = _notificacao_dbus(titulo, corpo, acoes)
     if r is not None:
         return r
@@ -484,6 +495,35 @@ def _dormir_ate(iso: str, pid: str):
             return
 
 
+def _tocar_ao_notificar() -> bool:
+    env = os.getenv("INBOX_AUTOPLAY", "").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    try:
+        cfg = whatsapp.carregar_cfg()[1]
+        return bool((cfg.get("pendencias") or {}).get("tocar_ao_notificar", True))
+    except Exception:
+        return True
+
+
+def cmd_aguardar_agenda(args):
+    """Interno: notificação "anotado na agenda" com [Ok] [Desfazer]; ociosa até o clique."""
+    import agenda
+    item = agenda.obter(args.id)
+    if not item:
+        return 0
+    titulo, corpo = agenda.texto_notificacao(item)
+    r = _notificacao_dbus(titulo, corpo, [("ok", "Ok"), ("desfazer", "Desfazer")])
+    if r is None:
+        core._notify(titulo, corpo + f"\nDesfazer: run.sh agenda desfazer {item['id']}")
+        return 0
+    if r == "desfazer":
+        it = agenda.desfazer(args.id)
+        core._notify("Alfred — agenda", f"Desfeito: {it['titulo']}"
+                     + (" (sai do calendário na próxima sincronização da extensão)" if it["status"] == "desfazer" else ""))
+    return 0
+
+
 def cmd_aguardar_whatsapp(args):
     """
     Interno: notificação no PC de uma pendência de WhatsApp, ociosa até o clique.
@@ -494,19 +534,35 @@ def cmd_aguardar_whatsapp(args):
       Ouvir      → toca o áudio da pergunta e mostra de novo
     Sai em silêncio se a notificação for descartada ou a pendência já tiver sido respondida por outro caminho.
     """
-    for _ in range(10):
+    player = None
+    primeira = True
+    for _ in range(20):
         p = core.obter_pendencia(args.id)
         if not p or p.get("status") != "aguardando":
+            parar_audio(player)
             return 0
         wa = p.get("whatsapp") or {}
         contato = wa.get("contato") or p["titulo"]
         mp3 = (p.get("arquivos") or {}).get("mp3")
-        escolha = _menu_whatsapp_gui(f"Alfred — WhatsApp de {contato}", _corpo_whatsapp(p), bool(mp3))
+        mp3_ok = bool(mp3) and (core.vault() / mp3).exists()
+        # o resumo em áudio começa junto com a notificação (perfis.yml: pendencias.tocar_ao_notificar)
+        if primeira and mp3_ok and _tocar_ao_notificar():
+            player = iniciar_audio(core.vault() / mp3)
+        primeira = False
+        escolha = _menu_whatsapp_gui(f"Alfred — WhatsApp de {contato}", _corpo_whatsapp(p), mp3_ok,
+                                     audio_tocando=tocando(player))
+        if escolha != "parar" and escolha != "ouvir":
+            parar_audio(player)
         p = core.obter_pendencia(args.id)
         if not p or p.get("status") != "aguardando":
+            parar_audio(player)
             return 0
-        if escolha == "ouvir" and mp3:
-            tocar_audio(core.vault() / mp3, bloquear=True)
+        if escolha == "parar":
+            parar_audio(player)
+            continue
+        if escolha == "ouvir" and mp3_ok:
+            parar_audio(player)
+            player = iniciar_audio(core.vault() / mp3)
             continue
         if escolha == "enviar":
             texto = _caixa_texto_gui(f"Alfred — resposta para {contato}",
@@ -623,7 +679,8 @@ def cmd_perguntar(args):
 # ── Main ──────────────────────────────────────────────────────
 
 SUBCOMANDOS = ("ciclo", "scan", "jornal", "pendencias", "perguntar", "ver", "ouvir", "responder", "responder-texto",
-               "whatsapp", "semanal", "limpeza", "_aguardar-resposta", "_aguardar-whatsapp")
+               "whatsapp", "semanal", "limpeza", "agenda", "vigia", "_aguardar-resposta", "_aguardar-whatsapp",
+               "_aguardar-agenda", "_vigia-qr")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -652,7 +709,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--nota", default="")
     sp = sub.add_parser("whatsapp", help="Evolution API: status | qrcode | webhook URL | simular payload.json | "
                                          "notificar ID | fila | processar-fila")
-    sp.add_argument("acao", choices=("status", "qrcode", "webhook", "simular", "notificar", "fila", "processar-fila"))
+    sp.add_argument("acao", choices=("status", "qrcode", "webhook", "simular", "notificar", "fila", "processar-fila",
+                                     "limpar-audios"))
+    sp.add_argument("--dias", type=float, default=None, help="limpar-audios: idade mínima (default: audio_reter_dias)")
+    sp.add_argument("--simular", action="store_true", help="limpar-audios: só lista o que seria apagado")
     sp.add_argument("arg", nargs="?", default=None)
     sp.add_argument("--notificar", action="store_true", help="simular: o Python manda o resumo a Pedro (sem N8N)")
     sp.add_argument("--sem-enviar", action="store_true", help="simular / processar-fila: nunca chama a Evolution API")
@@ -669,6 +729,10 @@ def build_parser() -> argparse.ArgumentParser:
     import limpeza
     limpeza.adicionar_parser(sub)
     sp = sub.add_parser("_aguardar-whatsapp"); sp.add_argument("id")
+    import agenda
+    agenda.adicionar_parser(sub)
+    import vigia
+    vigia.adicionar_parser(sub)
     return ap
 
 
@@ -708,6 +772,17 @@ def main() -> int:
         return cmd_aguardar_resposta(args)
     if args.cmd == "_aguardar-whatsapp":
         return cmd_aguardar_whatsapp(args)
+    if args.cmd == "agenda":
+        import agenda
+        return agenda.cmd_agenda(args)
+    if args.cmd == "_aguardar-agenda":
+        return cmd_aguardar_agenda(args)
+    if args.cmd == "vigia":
+        import vigia
+        return vigia.cmd_vigia(args)
+    if args.cmd == "_vigia-qr":
+        import vigia
+        return vigia.aguardar_qr(args.estado)
     build_parser().print_help()
     return 1
 

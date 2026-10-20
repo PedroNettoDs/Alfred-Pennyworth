@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Alfred — agenda</title>
+<style>body{font:14px system-ui;margin:12px;max-width:560px} label{display:block;margin:8px 0} input[type=text],input[type=password],select{width:100%} pre{white-space:pre-wrap;background:#f4f4f4;padding:6px}</style>
+</head>
+<body>
+  <h3>Alfred — agenda</h3>
+  <p>Grava no calendário escolhido os compromissos que o Alfred detectou (WhatsApp, e-mail, notas para você mesmo).
+     Use um calendário sincronizado (ex.: “Agenda”, do Google) para ver tudo também no celular.</p>
+  <label>URL do Alfred <input type="text" id="urlAlfred"></label>
+  <label>Token (SHELL_EXECUTOR_TOKEN) <input type="password" id="token"></label>
+  <label>Calendário <select id="calendario"></select></label>
+  <label>Verificar a cada (min) <input type="number" id="intervaloMin" min="1" style="width:70px"></label>
+  <button id="salvar">Salvar</button> <button id="agora">Verificar agora</button>
+  <pre id="saida"></pre>
+  <script src="options.js"></script>
+</body>
+</html>

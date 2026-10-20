@@ -1,0 +1,13 @@
+[Unit]
+Description=Alfred vigia — API, Evolution/WhatsApp, Thunderbird e limpeza dos áudios de resumo
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
+ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh vigia
+TimeoutStartSec=300
+
+# INSTALAÇÃO (unit de usuário, sem sudo):
+#   cp alfred-vigia.service alfred-vigia.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now alfred-vigia.timer
