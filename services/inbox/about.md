@@ -192,6 +192,8 @@ Evolution API (container, número pareado por QR code)
     ▼
 POST /whatsapp/webhook  (direto, ou via Webhook do N8N)          services/inbox/whatsapp.py
     ├─ normalizar_payload()        → contato, número, tipo, texto, citação, fromMe, grupo
+    ├─ _descarte_sem_texto()       → grupo fora de `grupos` (ignorar / mencao sem Pedro), contatos_ignorar:
+    │                                 não vira pendência → o áudio NÃO é transcrito (sem GPU, sem trecho no log)
     ├─ áudio → transcrever_audio() → ffmpeg (OGG → WAV 16 kHz) → gemma4 via Ollama (campo images)
     │                                 → fallback faster-whisper → "" (pendência avisa "não transcrito")
     ├─ classificar_whatsapp()      → whatsapp_classificar.md (JSON Schema):
@@ -221,7 +223,7 @@ O webhook devolve `{"acao": pendencia_criada | agendada | agrupada | resposta_re
 
 Com a instância no próprio número, toda conversa passa pelo Alfred — inclusive as que Pedro está respondendo em tempo real. Por isso a parte cara e barulhenta espera `atraso_minutos` (20 no `perfis.yml`) **sem resposta de Pedro naquela conversa**:
 
-- **Na hora** (o webhook continua rápido): normalizar → transcrever o áudio → classificar → decidir a relevância → dedup em `whatsapp_seen.json`. Mensagem relevante entra em `logs/whatsapp_fila.json` (mensagem normalizada sem o base64, transcrição, classificação, prazo e as opções `enviar`/`notificar` do webhook) e o webhook responde `acao: agendada` com o `prazo`.
+- **Na hora** (o webhook continua rápido): normalizar → transcrever o áudio (só se puder virar pendência — grupo ignorado e `contatos_ignorar` não são transcritos) → classificar → decidir a relevância → dedup em `whatsapp_seen.json`. Mensagem relevante entra em `logs/whatsapp_fila.json` (mensagem normalizada sem o base64, transcrição, classificação, prazo e as opções `enviar`/`notificar` do webhook) e o webhook responde `acao: agendada` com o `prazo`.
 - **Pedro escreve na mesma conversa antes do prazo** (mensagem `fromMe` no mesmo `remote_jid` — direto pelo celular): o item sai da fila e nada é gerado (`acao: fila_cancelada`). Ecos das respostas que o próprio Alfred envia **não** cancelam: Pedro respondeu a pendência anterior e pode não ter visto a mensagem nova.
 - **Mensagens seguidas do contato** entram no mesmo item; o prazo continua contado da primeira. Ao vencer viram **uma** pendência: textos/transcrições juntos (o resumo e o rascunho cobrem tudo), maior urgência, `whatsapp.mensagens` com todos os ids e a resposta citando a última.
 - **Prazo vencido:** uma thread iniciada com a API (`main.py`, a cada 60 s; os vencidos enquanto a API estava fora saem na primeira volta) cria a pendência, o `.md`, o áudio, a notificação no PC e — se o webhook veio com `notificar=1`, como o `/whatsapp/webhook-async` — o aviso pelo WhatsApp. O item só sai da fila depois da pendência gravada (erro → tenta de novo, até 3 vezes).

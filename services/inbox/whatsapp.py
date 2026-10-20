@@ -5,6 +5,7 @@ Mensagens e áudios recebidos no WhatsApp passam pelo mesmo tratamento do e-mail
 
     webhook Evolution (messages.upsert)
         ↓ normalizar_payload()
+        ↓ _descarte_sem_texto()           grupo ignorado / contatos_ignorar → não vira pendência, áudio nem é transcrito
     texto | áudio → transcrever_audio()   (gemma4 via Ollama; faster-whisper como fallback)
         ↓ classificar_whatsapp()          heurísticas + Ollama (JSON):
         ↓                                 profissional | pessoal | grupo | automatico | spam
@@ -314,6 +315,30 @@ def _na_lista(msg: dict, lista) -> bool:
     return any(str(s).lower().strip() and str(s).lower().strip() in alvo for s in (lista or []))
 
 
+def _heuristica(cat, resumo, motivo, requer=False, urg="baixa") -> dict:
+    return {"categoria": cat, "confianca": 1.0, "requer_resposta": requer, "urgencia": urg,
+            "resumo": resumo[:300], "motivo": motivo, "origem": "heuristica"}
+
+
+def _descarte_sem_texto(msg: dict, cfg: dict) -> Optional[dict]:
+    """
+    Heurísticas que descartam a mensagem sem olhar o texto (contatos_ignorar, reação/figurinha, grupo fora
+    do modo `grupos`) → classificação que nunca vira pendência; None = a decisão depende do texto.
+    processar_mensagem_whatsapp consulta antes de transcrever: áudio de grupo ignorado não passa pelo gemma4.
+    """
+    if _na_lista(msg, cfg.get("contatos_ignorar")):
+        return _heuristica("ignorado", "contato na lista de ignorados", "contatos_ignorar")
+    if msg.get("tipo_msg") in _IGNORAR_TIPOS:
+        return _heuristica("outro", f"{msg['tipo_msg']} sem texto", "tipo de mensagem sem conteúdo")
+    if msg.get("grupo"):
+        modo = str(cfg.get("grupos") or "ignorar")
+        pedro = numero_pedro() or msg.get("dono") or ""
+        mencionado = bool(pedro) and any(jid_para_numero(j) == pedro for j in msg.get("mencoes", []))
+        if modo == "ignorar" or (modo == "mencao" and not mencionado):
+            return _heuristica("grupo", f"mensagem de grupo ({msg.get('remote_jid')})", f"grupos: {modo}")
+    return None
+
+
 def classificar_whatsapp(msg: dict, cfg: dict, texto: Optional[str] = None) -> dict:
     """
     Retorna {"categoria", "confianca", "requer_resposta", "urgencia", "resumo", "motivo", "origem"}.
@@ -321,24 +346,14 @@ def classificar_whatsapp(msg: dict, cfg: dict, texto: Optional[str] = None) -> d
     """
     texto = (texto if texto is not None else msg.get("texto") or "").strip()
     contato = _contato_legivel(msg)
+    h = _heuristica
 
-    def h(cat, resumo, motivo, requer=False, urg="baixa"):
-        return {"categoria": cat, "confianca": 1.0, "requer_resposta": requer, "urgencia": urg,
-                "resumo": resumo[:300], "motivo": motivo, "origem": "heuristica"}
-
-    if _na_lista(msg, cfg.get("contatos_ignorar")):
-        return h("ignorado", "contato na lista de ignorados", "contatos_ignorar")
-    if msg.get("tipo_msg") in _IGNORAR_TIPOS:
-        return h("outro", f"{msg['tipo_msg']} sem texto", "tipo de mensagem sem conteúdo")
-    if msg.get("grupo"):
-        modo = str(cfg.get("grupos") or "ignorar")
-        pedro = numero_pedro() or msg.get("dono") or ""
-        mencionado = bool(pedro) and any(jid_para_numero(j) == pedro for j in msg.get("mencoes", []))
-        if modo == "ignorar" or (modo == "mencao" and not mencionado):
-            return h("grupo", f"mensagem de grupo ({msg.get('remote_jid')})", f"grupos: {modo}")
-        if modo == "mencao":
-            return h("grupo", f"{contato} mencionou Pedro no grupo: {texto[:120]}", "menção em grupo",
-                     requer=True, urg="media")
+    descarte = _descarte_sem_texto(msg, cfg)
+    if descarte:
+        return descarte
+    if msg.get("grupo") and str(cfg.get("grupos") or "ignorar") == "mencao":   # sem menção já saiu acima
+        return h("grupo", f"{contato} mencionou Pedro no grupo: {texto[:120]}", "menção em grupo",
+                 requer=True, urg="media")
     if _na_lista(msg, cfg.get("contatos_sempre")):
         return h("profissional", f"{contato}: {texto[:160]}" if texto else f"{msg.get('tipo_msg')} de {contato}",
                  "contatos_sempre", requer=True, urg="media")
@@ -1438,10 +1453,12 @@ def processar_mensagem_whatsapp(
         res.update(acao="duplicada", motivo="mensagem já processada")
         return res
 
-    # ── transcrição ─────────────────────────────────────────────
+    # ── transcrição — só se a mensagem puder virar pendência ───
+    # (áudio de grupo ignorado / contatos_ignorar: o descarte não depende do texto — nada de GPU nem
+    #  trecho da conversa no journal; classificar_whatsapp abaixo chega à mesma heurística)
     conteudo = msg.get("texto") or ""
     transcricao = None
-    if msg.get("tipo_msg") == "audio":
+    if msg.get("tipo_msg") == "audio" and not _descarte_sem_texto(msg, cfg):
         transcricao = transcrever_mensagem(msg, cfg)
         res["transcricao"] = {k: transcricao.get(k) for k in ("texto", "metodo", "duracao_s", "segmentos", "cortado", "erro")}
         conteudo = transcricao.get("texto") or ""

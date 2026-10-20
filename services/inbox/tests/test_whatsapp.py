@@ -268,6 +268,50 @@ class TestWebhook(Base):
             self.assertIn(trecho, d["motivo"], (nome, d))
         self.assertEqual(self.pendencias(), [])
 
+    def cfg_com(self, **extra):
+        """carregar_cfg do teste com chaves do perfis.yml sobrepostas."""
+        base = whatsapp.carregar_cfg
+
+        def cfg(nome=None):
+            n, c = base(nome)
+            return n, {**c, **extra}
+        return mock.patch.object(whatsapp, "carregar_cfg", cfg)
+
+    def audio_de_grupo(self, mid, mencoes=()):
+        p = payload("evolution_audio.json")
+        p["data"]["key"].update(id=mid, remoteJid="120363012345678901@g.us",
+                                participant="5514988887777@s.whatsapp.net")
+        if mencoes:
+            p["data"]["message"]["audioMessage"]["contextInfo"] = {"mentionedJid": list(mencoes)}
+        return p
+
+    def test_audio_descartado_sem_texto_nao_e_transcrito(self):
+        # grupo do condomínio mandando áudio: a heurística descarta sem texto → nada de gemma4
+        transcrever = mock.Mock(side_effect=_fake_transcrever)
+        casos = (("grupos: ignorar", self.audio_de_grupo("AUDIO-GRUPO-1"), {"grupos": "ignorar"}, "grupo"),
+                 ("grupos: mencao sem Pedro", self.audio_de_grupo("AUDIO-GRUPO-2"), {"grupos": "mencao"}, "grupo"),
+                 ("contatos_ignorar", payload("evolution_audio.json"), {"contatos_ignorar": ["Carlos"]}, "ignorado"))
+        with mock.patch.object(whatsapp, "transcrever_audio", transcrever):
+            for nome, p, extra, categoria in casos:
+                with self.subTest(nome), self.cfg_com(**extra):
+                    post = lambda: self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p,
+                                                    headers={"apikey": "CHAVE-DE-TESTE"}).json()
+                    d = post()
+                    self.assertEqual((d["acao"], d["classificacao"]["categoria"]), ("ignorada", categoria), d)
+                    self.assertIsNone(d["transcricao"])
+                    self.assertEqual(post()["acao"], "duplicada")   # continua marcada em whatsapp_seen.json
+            transcrever.assert_not_called()
+
+            # Pedro mencionado no grupo (grupos: mencao) pode virar pendência → transcreve
+            with self.cfg_com(grupos="mencao"):
+                d = self.client.post("/whatsapp/webhook", params={"enviar": "false"},
+                                     json=self.audio_de_grupo("AUDIO-GRUPO-3", ["5514999990000@s.whatsapp.net"]),
+                                     headers={"apikey": "CHAVE-DE-TESTE"}).json()
+        self.assertEqual(transcrever.call_count, 1)
+        self.assertEqual(d["acao"], "pendencia_criada", d)
+        self.assertIn("mencionou Pedro", d["classificacao"]["resumo"])
+        self.assertEqual(len(self.pendencias()), 1)
+
     def test_agrupa_segunda_mensagem_do_contato(self):
         d1 = self.post_webhook("evolution_texto.json", enviar="false").json()
         d2 = self.post_webhook("evolution_audio.json", enviar="false").json()
