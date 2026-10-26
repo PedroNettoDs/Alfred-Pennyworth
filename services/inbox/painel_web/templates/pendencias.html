@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Pendências{% endblock %}
+{% block conteudo %}
+{#- o número acompanha o polling (painel.js atualiza todo [data-contador] com /painel/api/contadores) #}
+{%- set subtitulo %}<span data-contador="aguardando">{{ aguardando }}</span> aguardando{% endset %}
+{{ m.cabecalho("Pendências", subtitulo) }}
+<nav class="abas" aria-label="Abas de pendências">
+  <a class="aba" href="/painel/pendencias?{{ {'aba': 'aguardando', 'tipo': tipo, 'q': q}|urlencode }}"
+     {%- if aba == "aguardando" %} aria-current="page"{% endif %}>Aguardando</a>
+  <a class="aba" href="/painel/pendencias?{{ {'aba': 'resolvidas', 'tipo': tipo, 'q': q}|urlencode }}"
+     {%- if aba == "resolvidas" %} aria-current="page"{% endif %}>Resolvidas</a>
+</nav>
+<form class="filtros" method="get" action="/painel/pendencias" role="search">
+  <input type="hidden" name="aba" value="{{ aba }}">
+  {{ m.selecao("tipo", "Tipo", [("", "Todos"), ("whatsapp", "WhatsApp"), ("email", "E-mail")], tipo, enviar_ao_mudar=true) }}
+  <div class="filtros__busca">{{ m.campo("q", "Buscar por contato ou texto", q, tipo="search") }}</div>
+  {{ m.botao("Buscar", nome_icone="busca") }}
+</form>
+{%- if aba == "resolvidas" %}
+<p class="pequeno suave">As 50 mais recentes, com o status final e a data da resolução.</p>
+{%- endif %}
+<div data-poll-url="{{ poll_url }}">
+  {% include "_pendencias_lista.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,303 @@
+{#
+  Macros do Painel do Alfred — markup padronizado (classes de painel.css, atributos de painel.js).
+  Uso:  {% import "_macros.html" as m %}  …  {{ m.selo_status(p.status) }}
+  Tudo aqui sai com autoescape: textos vindos dos YAML podem ir direto nos parâmetros.
+  Contrato completo: painel_web/COMPONENTES.md.
+#}
+
+{# ── Ícones (SVG em linha, 24×24, traço; só caminhos fixos daqui — nada vindo de dados) ── #}
+{% set ICONES = {
+  "sucesso":     ["M20 6 9 17l-5-5"],
+  "erro":        ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "m15 9-6 6", "m9 9 6 6"],
+  "aguardando":  ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "M12 6v6l4 2"],
+  "info":        ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "M12 16v-4", "M12 8h.01"],
+  "alerta":      ["M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z", "M12 9v4", "M12 17h.01"],
+  "simulado":    ["M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M8 21h8", "M12 17v4"],
+  "ponto":       ["M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"],
+  "whatsapp":    ["M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"],
+  "email":       ["M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "m22 6-10 7L2 6"],
+  "inicio":      ["M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"],
+  "pendencias":  ["M22 12h-6l-2 3h-4l-2-3H2", "M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"],
+  "agenda":      ["M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "M16 2v4", "M8 2v4", "M3 10h18"],
+  "limpeza":     ["M3 6h18", "M8 6V4h8v2", "M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6", "M10 11v6", "M14 11v6"],
+  "sistema":     ["M22 12h-4l-3 9L9 3l-3 9H2"],
+  "sair":        ["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "m16 17 5-5-5-5", "M21 12H9"],
+  "externo":     ["M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", "M15 3h6v6", "M10 14 21 3"],
+  "voltar":      ["M19 12H5", "m12 19-7-7 7-7"],
+  "audio":       ["M11 5 6 9H2v6h4l5 4z", "M15.5 8.5a5 5 0 0 1 0 7", "M19 5a10 10 0 0 1 0 14"],
+  "audio-off":   ["M11 5 6 9H2v6h4l5 4z", "m22 9-6 6", "m16 9 6 6"],
+  "busca":       ["M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0z", "m21 21-4.3-4.3"],
+  "pessoa":      ["M16 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0z", "M4 21a8 8 0 0 1 16 0"],
+  "marca":       ["M3 7v10l7-3.5v-3z", "M21 7v10l-7-3.5v-3z", "M10 10.5h4v3h-4z"],
+} %}
+
+{# icone("whatsapp") → <svg class="icone" aria-hidden="true">. Decorativo: o texto ao lado diz o que é.
+   Com rotulo, vira imagem com nome acessível (use só quando não houver texto visível). #}
+{% macro icone(nome, rotulo=none, classe="") -%}
+<svg class="icone{% if classe %} {{ classe }}{% endif %}" viewBox="0 0 24 24" focusable="false"
+  {%- if rotulo %} role="img" aria-label="{{ rotulo }}"{% else %} aria-hidden="true"{% endif %}>
+  {%- for d in ICONES.get(nome, ICONES["ponto"]) %}<path d="{{ d }}"/>{% endfor -%}
+</svg>
+{%- endmacro %}
+
+{# ── Selos ──────────────────────────────────────────────────────────────── #}
+{# tom: sucesso | aguardando | simulado | erro | neutro. Sempre ícone + texto. #}
+{% set ICONE_DO_TOM = {"sucesso": "sucesso", "aguardando": "aguardando", "simulado": "simulado",
+                       "erro": "erro", "neutro": "ponto"} %}
+
+{% macro selo(tom, texto, nome_icone=none) -%}
+<span class="selo selo--{{ tom if tom in ICONE_DO_TOM else 'neutro' }}">{{ icone(nome_icone or ICONE_DO_TOM.get(tom, "ponto")) }}{{ texto }}</span>
+{%- endmacro %}
+
+{# Status de pendência, item de agenda e lote de limpeza → (tom, rótulo). Desconhecido: neutro + valor cru. #}
+{% set STATUS = {
+  "aguardando":        ("aguardando", "Aguardando"),
+  "respondida":        ("sucesso",    "Respondida"),
+  "respondida_manual": ("neutro",     "Respondida pelo celular"),
+  "vou":               ("sucesso",    "Vou"),
+  "nao_vou":           ("neutro",     "Não vou"),
+  "ignorada":          ("neutro",     "Ignorada"),
+  "expirada":          ("neutro",     "Expirada"),
+  "pendente":          ("aguardando", "Pendente"),
+  "no_calendario":     ("sucesso",    "No calendário"),
+  "em_execucao":       ("aguardando", "Em execução"),
+  "desfazer":          ("aguardando", "Remoção pendente"),
+  "desfeito":          ("neutro",     "Desfeito"),
+  "cancelado":         ("neutro",     "Cancelado"),
+  "erro":              ("erro",       "Erro"),
+  "aprovado":          ("sucesso",    "Aprovado"),
+  "recusado":          ("neutro",     "Recusado"),
+  "expirado":          ("neutro",     "Expirado"),
+  "concluido":         ("sucesso",    "Concluído"),
+  "simulado":          ("simulado",   "Simulado"),
+  "parcial":           ("aguardando", "Parcial"),
+  "falhou":            ("erro",       "Falhou"),
+} %}
+
+{% macro selo_status(status) -%}
+{%- set par = STATUS.get(status, ("neutro", status or "—")) -%}
+{{ selo(par[0], par[1]) }}
+{%- endmacro %}
+
+{# Urgência: só "alta" é vermelha; média/baixa são neutras (a lista não vira um arco-íris). #}
+{% macro selo_urgencia(urgencia) -%}
+{%- if urgencia == "alta" -%}{{ selo("erro", "Urgência alta", "alerta") }}
+{%- elif urgencia == "media" -%}{{ selo("neutro", "Média") }}
+{%- elif urgencia == "baixa" -%}{{ selo("neutro", "Baixa") }}
+{%- endif -%}
+{%- endmacro %}
+
+{# Tipo da pendência: "whatsapp" ou e-mail (tipos evento/contato). Ícone + texto, sem cor. #}
+{% macro tipo(tipo_pendencia) -%}
+{%- if tipo_pendencia == "whatsapp" -%}
+<span class="linha__tipo">{{ icone("whatsapp") }}WhatsApp</span>
+{%- else -%}
+<span class="linha__tipo">{{ icone("email") }}E-mail</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# ── Datas (recebe strings já formatadas pelos filtros de painel.py) ──────── #}
+{# tempo("2026-10-25T14:03", "há 12 min", "25/10/2026 14:03") → <time> com o absoluto no title. #}
+{% macro tempo(iso, texto, absoluto=none, classe="") -%}
+<time{% if classe %} class="{{ classe }}"{% endif %} datetime="{{ iso or '' }}"{% if absoluto %} title="{{ absoluto }}"{% endif %}>{{ texto }}</time>
+{%- endmacro %}
+
+{# ── Cabeçalho de tela ──────────────────────────────────────────────────── #}
+{# {% call m.cabecalho("Pendências", "3 aguardando") %}<botões opcionais>{% endcall %}
+   ou só {{ m.cabecalho("Agenda") }}. voltar=(url, texto) mostra o link de voltar acima do título. #}
+{% macro cabecalho(titulo, subtitulo=none, voltar=none) -%}
+<header class="tela-cabecalho">
+  <div>
+    {%- if voltar %}<a class="voltar" href="{{ voltar[0] }}">{{ icone("voltar") }}{{ voltar[1] }}</a>{% endif %}
+    <h1 class="tela-titulo">{{ titulo }}</h1>
+    {%- if subtitulo %}<p class="tela-subtitulo">{{ subtitulo }}</p>{% endif %}
+  </div>
+  {%- if caller %}<div class="tela-acoes">{{ caller() }}</div>{% endif %}
+</header>
+{%- endmacro %}
+
+{# ── Estado vazio ───────────────────────────────────────────────────────── #}
+{% macro vazio(texto, nome_icone="info", compacto=false) -%}
+<div class="vazio{% if compacto %} vazio--compacto{% endif %}">
+  {{ icone(nome_icone) }}
+  <p class="vazio__texto">{{ texto }}</p>
+  {%- if caller %}<div>{{ caller() }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{# ── Botões ─────────────────────────────────────────────────────────────── #}
+{# variante: primario | secundario | perigo | discreto. attrs: dict de atributos extras
+   (ex.: {"data-acao": url, "data-confirmar": "dialogo-envio", "data-texto-ocupado": "Enviando…"}).
+   Um <a> com href vira link com cara de botão. #}
+{% macro botao(texto, variante="secundario", tipo="submit", attrs={}, nome_icone=none, pequeno=false, href=none) -%}
+{%- set cls = "botao" ~ ("" if variante == "secundario" else " botao--" ~ variante) ~ (" botao--pequeno" if pequeno else "") -%}
+{%- if href -%}
+<a class="{{ cls }}" href="{{ href }}"{{ attrs|xmlattr }}>{% if nome_icone %}{{ icone(nome_icone) }}{% endif %}{{ texto }}</a>
+{%- else -%}
+<button class="{{ cls }}" type="{{ tipo }}"{{ attrs|xmlattr }}>{% if nome_icone %}{{ icone(nome_icone) }}{% endif %}{{ texto }}</button>
+{%- endif -%}
+{%- endmacro %}
+
+{# ── Campos ─────────────────────────────────────────────────────────────── #}
+{# Sempre com <label for>. ajuda/erro ficam ligados por aria-describedby; erro marca aria-invalid. #}
+{% macro campo(nome, rotulo, valor="", tipo="text", id=none, ajuda=none, erro=none, obrigatorio=false, opcional=false, attrs={}) -%}
+{%- set cid = id or ("campo-" ~ nome) -%}
+{%- set desc = ((cid ~ "-ajuda ") if ajuda else "") ~ ((cid ~ "-erro") if erro else "") -%}
+<div class="campo">
+  <label class="campo__rotulo" for="{{ cid }}">{{ rotulo }}{% if opcional %} <span class="campo__opcional">(opcional)</span>{% endif %}</label>
+  <input class="entrada" id="{{ cid }}" name="{{ nome }}" type="{{ tipo }}"{% if tipo != "password" %} value="{{ valor }}"{% endif %}
+    {%- if obrigatorio %} required{% endif %}
+    {%- if desc %} aria-describedby="{{ desc|trim }}"{% endif %}
+    {%- if erro %} aria-invalid="true"{% endif %}{{ attrs|xmlattr }}>
+  {%- if ajuda %}<span class="campo__ajuda" id="{{ cid }}-ajuda">{{ ajuda }}</span>{% endif %}
+  {%- if erro %}<span class="campo__erro" id="{{ cid }}-erro" role="alert">{{ icone("erro") }}{{ erro }}</span>{% endif %}
+</div>
+{%- endmacro %}
+
+{# Textarea; grande=true para a resposta proposta (11 rem, redimensionável). #}
+{% macro area_texto(nome, rotulo, valor="", id=none, ajuda=none, grande=false, linhas=3, obrigatorio=false, opcional=false, attrs={}) -%}
+{%- set cid = id or ("campo-" ~ nome) -%}
+<div class="campo">
+  <label class="campo__rotulo" for="{{ cid }}">{{ rotulo }}{% if opcional %} <span class="campo__opcional">(opcional)</span>{% endif %}</label>
+  <textarea class="entrada{% if grande %} entrada--grande{% endif %}" id="{{ cid }}" name="{{ nome }}" rows="{{ 8 if grande else linhas }}"
+    {%- if obrigatorio %} required{% endif %}
+    {%- if ajuda %} aria-describedby="{{ cid }}-ajuda"{% endif %}{{ attrs|xmlattr }}>{{ valor }}</textarea>
+  {%- if ajuda %}<span class="campo__ajuda" id="{{ cid }}-ajuda">{{ ajuda }}</span>{% endif %}
+</div>
+{%- endmacro %}
+
+{# Select. opcoes: lista de (valor, rotulo). #}
+{% macro selecao(nome, rotulo, opcoes, valor="", id=none, enviar_ao_mudar=false) -%}
+{%- set cid = id or ("campo-" ~ nome) -%}
+<div class="campo">
+  <label class="campo__rotulo" for="{{ cid }}">{{ rotulo }}</label>
+  <select class="entrada" id="{{ cid }}" name="{{ nome }}"{% if enviar_ao_mudar %} data-enviar-ao-mudar{% endif %}>
+    {%- for v, r in opcoes %}<option value="{{ v }}"{% if v == valor %} selected{% endif %}>{{ r }}</option>{% endfor -%}
+  </select>
+</div>
+{%- endmacro %}
+
+{# ── Avisos e mensagens ─────────────────────────────────────────────────── #}
+{# Banner fixo (servidor). tom: sucesso | aguardando | erro | neutro. #}
+{% macro aviso(tom, texto, nome_icone=none) -%}
+<div class="aviso{% if tom != 'neutro' %} aviso--{{ tom }}{% endif %}" role="{{ 'alert' if tom == 'erro' else 'status' }}">
+  {{ icone(nome_icone or {"sucesso": "sucesso", "aguardando": "aguardando", "erro": "erro"}.get(tom, "info")) }}
+  <p class="aviso__texto">{{ texto }}{% if caller %} {{ caller() }}{% endif %}</p>
+</div>
+{%- endmacro %}
+
+{# Banner "Esta pendência já foi resolvida por …": o JS o revela quando o polling ou um 409 detecta que
+   outro caminho resolveu a pendência no meio da edição (âmbar + role=alert: interrompe uma ação). Página que
+   já abre resolvida usa m.aviso("neutro", …) — role=status, sem a cor de "aguardando". #}
+{% macro banner_resolvida(texto="", visivel=false) -%}
+<div class="aviso aviso--aguardando" role="alert" data-banner-resolvida{% if not visivel %} hidden{% endif %}>
+  {{ icone("info") }}
+  <p class="aviso__texto" data-banner-texto>{{ texto }}</p>
+</div>
+{%- endmacro %}
+
+{# Área onde o JS escreve o resultado de um formulário (fica vazia no HTML). #}
+{% macro resultado(id=none) -%}
+<div data-resultado aria-live="polite"{% if id %} id="{{ id }}"{% endif %}></div>
+{%- endmacro %}
+
+{# Selo "Modo simulado" (dentro do diálogo de envio e onde mais o modo importar). #}
+{% macro selo_simulado(texto="Modo simulado: nada sairá da máquina") -%}
+{{ selo("simulado", texto) }}
+{%- endmacro %}
+
+{# ── Diálogo de confirmação ─────────────────────────────────────────────── #}
+{# {% call m.dialogo("dialogo-envio", "Confirmar envio", "Confirmar envio") %} corpo {% endcall %}
+   Fica FORA dos contêineres de polling. O JS abre (form/botão com data-confirmar="<id>"),
+   preenche [data-preencher-campo]/[data-preencher] e executa no botão [data-confirmar-ok]. #}
+{% macro dialogo(id, titulo, texto_confirmar="Confirmar", variante="primario") -%}
+<dialog class="dialogo" id="{{ id }}" aria-labelledby="{{ id }}-titulo">
+  <div class="dialogo__corpo">
+    <h2 class="dialogo__titulo" id="{{ id }}-titulo">{{ titulo }}</h2>
+    {{ caller() if caller }}
+  </div>
+  <div class="dialogo__acoes">
+    <button class="botao" type="button" data-fechar-dialogo>Cancelar</button>
+    <button class="botao botao--{{ variante }}" type="button" data-confirmar-ok>{{ texto_confirmar }}</button>
+  </div>
+</dialog>
+{%- endmacro %}
+
+{# ── Dados ──────────────────────────────────────────────────────────────── #}
+{# pares: lista de (chave, valor); valores vazios/None são pulados. #}
+{% macro chave_valor(pares) -%}
+<dl class="chave-valor">
+  {%- for k, v in pares if v not in (none, "") %}
+  <dt>{{ k }}</dt><dd>{{ v }}</dd>
+  {%- endfor %}
+</dl>
+{%- endmacro %}
+
+{# Player do áudio. estado: disponivel | expirado | sem. #}
+{% macro audio(url, estado="disponivel", rotulo="Áudio do resumo") -%}
+<div class="audio">
+  {%- if estado == "disponivel" %}
+  <audio controls preload="none" src="{{ url }}" aria-label="{{ rotulo }}">Seu navegador não toca áudio.</audio>
+  {%- elif estado == "expirado" %}
+  <p class="audio__indisponivel">{{ icone("audio-off") }}Áudio expirado</p>
+  {%- else %}
+  <p class="audio__indisponivel">{{ icone("audio-off") }}Sem áudio</p>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{# "O Alfred proporia" × "Você respondeu". proposta None → avisa que não houve rascunho. #}
+{% macro comparacao(proposta, resposta) -%}
+<div class="comparacao">
+  <section class="comparacao__lado" aria-label="O Alfred proporia">
+    <h3 class="comparacao__titulo">{{ icone("marca") }}O Alfred proporia</h3>
+    {%- if proposta %}
+    <p class="comparacao__texto">{{ proposta }}</p>
+    {%- else %}
+    <p class="comparacao__texto comparacao__vazio">Sem rascunho registrado.</p>
+    {%- endif %}
+  </section>
+  <section class="comparacao__lado comparacao__lado--pedro" aria-label="Você respondeu">
+    <h3 class="comparacao__titulo">{{ icone("pessoa") }}Você respondeu</h3>
+    {%- if resposta %}
+    <p class="comparacao__texto">{{ resposta }}</p>
+    {%- else %}
+    <p class="comparacao__texto comparacao__vazio">Resposta não registrada.</p>
+    {%- endif %}
+  </section>
+</div>
+{%- endmacro %}
+
+{# Linha do tempo. eventos: lista de dicts {texto, quando (texto pronto), iso?, tom?, detalhe?}
+   tom: sucesso | aguardando | erro | (vazio = neutro). #}
+{% macro historico(eventos) -%}
+<ol class="historico">
+  {%- for e in eventos %}
+  <li class="historico__item{% if e.tom %} historico__item--{{ e.tom }}{% endif %}">
+    <p class="historico__texto">{{ e.texto }}</p>
+    {%- if e.quando %}{{ tempo(e.iso, e.quando, classe="historico__quando") }}{% endif %}
+    {%- if e.detalhe %}<span class="historico__detalhe">{{ e.detalhe }}</span>{% endif %}
+  </li>
+  {%- endfor %}
+</ol>
+{%- endmacro %}
+
+{# ── Sistema ────────────────────────────────────────────────────────────── #}
+{# estado: ok | aviso | indisponivel | erro | neutro (+ rotulo opcional p/ trocar o texto do selo). #}
+{% set ESTADO_SISTEMA = {
+  "ok":           ("sucesso",    "OK"),
+  "aviso":        ("aguardando", "Atenção"),
+  "simulado":     ("simulado",   "Modo simulado"),
+  "indisponivel": ("neutro",     "Indisponível"),
+  "erro":         ("erro",       "Erro"),
+  "neutro":       ("neutro",     "—"),
+} %}
+
+{% macro item_sistema(nome, estado, detalhe=none, rotulo=none) -%}
+{%- set par = ESTADO_SISTEMA.get(estado, ESTADO_SISTEMA["indisponivel"]) -%}
+<li class="sistema-item">
+  <span class="sistema-item__nome">{{ nome }}</span>
+  <span>{{ selo(par[0], rotulo or par[1], "alerta" if estado == "indisponivel" else none) }}</span>
+  <span class="sistema-item__detalhe">{{ detalhe or "" }}</span>
+</li>
+{%- endmacro %}

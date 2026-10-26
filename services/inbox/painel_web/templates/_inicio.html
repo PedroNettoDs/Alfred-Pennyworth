@@ -1,0 +1,75 @@
+{#
+  Miolo do Início (página e /painel/parcial/inicio).
+  Vars: cont (contadores), recentes (linhas), alfred {ligado, desde}, wa {tom, rotulo, detalhe}, simulado,
+        lotes_aguardando, emails_limpeza, proximos (itens de agenda).
+#}
+{% import "_macros.html" as m %}
+{% from "_linha.html" import linha %}
+<div class="grade-cartoes">
+  <a class="cartao cartao--link" href="/painel/pendencias">
+    <p class="cartao__rotulo">Pendências aguardando</p>
+    <div class="metricas">
+      <div class="metrica"><span class="metrica__valor">{{ cont.aguardando }}</span><span class="metrica__rotulo">no total</span></div>
+      <div class="metrica"><span class="metrica__valor">{{ cont.whatsapp }}</span><span class="metrica__rotulo">WhatsApp</span></div>
+      <div class="metrica"><span class="metrica__valor">{{ cont.email }}</span><span class="metrica__rotulo">E-mail</span></div>
+    </div>
+  </a>
+
+  <a class="cartao cartao--link" href="/painel/sistema">
+    <p class="cartao__rotulo">Alfred</p>
+    <div class="selos">
+      {%- if alfred.ligado %}{{ m.selo("sucesso", "Ligado") }}{% else %}{{ m.selo("erro", "Desligado") }}{% endif %}
+    </div>
+    {%- if not alfred.ligado %}
+    <p class="pequeno suave">Desligado{% if alfred.desde %} desde {{ alfred.desde }}{% endif %} (modo jogo).</p>
+    {%- endif %}
+  </a>
+
+  <a class="cartao cartao--link" href="/painel/sistema">
+    <p class="cartao__rotulo">WhatsApp</p>
+    <div class="selos">
+      {{ m.selo(wa.tom, wa.rotulo, "alerta" if wa.rotulo == "Indisponível" else none) }}
+      {%- if simulado and wa.rotulo != "Modo simulado" %}{{ m.selo("simulado", "Modo simulado") }}{% endif %}
+    </div>
+    {%- if wa.detalhe %}<p class="pequeno suave">{{ wa.detalhe }}</p>{% endif %}
+  </a>
+
+  <a class="cartao cartao--link" href="/painel/limpeza">
+    <p class="cartao__rotulo">Limpeza da caixa</p>
+    <div class="metricas">
+      <div class="metrica"><span class="metrica__valor">{{ lotes_aguardando }}</span><span class="metrica__rotulo">{{ "lote aguardando" if lotes_aguardando == 1 else "lotes aguardando" }}</span></div>
+      {%- if lotes_aguardando %}
+      <div class="metrica"><span class="metrica__valor">{{ emails_limpeza }}</span><span class="metrica__rotulo">e-mails</span></div>
+      {%- endif %}
+    </div>
+  </a>
+
+  <a class="cartao cartao--link" href="/painel/agenda">
+    <p class="cartao__rotulo">Próximos na agenda</p>
+    {%- if proximos %}
+    <ul class="lista lista--solta pilha--curta">
+      {%- for i in proximos %}
+      <li class="pequeno"><span class="numero">{{ i.quando }}</span> · {{ i.titulo }}</li>
+      {%- endfor %}
+    </ul>
+    {%- else %}
+    <p class="pequeno suave">A agenda está vazia.</p>
+    {%- endif %}
+  </a>
+</div>
+
+<section class="cartao" aria-labelledby="inicio-recentes">
+  <div class="cartao__cabecalho">
+    <h2 class="cartao__titulo" id="inicio-recentes">Mais recentes aguardando</h2>
+    <a href="/painel/pendencias">Ver todas</a>
+  </div>
+  {%- if recentes %}
+  <ul class="lista lista--solta">
+    {%- for i in recentes %}
+    {{ linha(i) }}
+    {%- endfor %}
+  </ul>
+  {%- else %}
+  {{ m.vazio("Nenhuma pendência aguardando, senhor.", "pendencias", compacto=true) }}
+  {%- endif %}
+</section>

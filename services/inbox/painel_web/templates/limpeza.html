@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Limpeza{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Limpeza da caixa", "Lotes de e-mails que o Alfred propõe mover para a Lixeira") }}
+<div class="pilha" data-poll-url="/painel/parcial/limpeza">{% include "_limpeza_lista.html" %}</div>
+{% call m.dialogo("dialogo-limpeza", "Aprovar a limpeza?", "Mover para a Lixeira", "perigo") %}
+  <p data-preencher="mensagem"></p>
+{% endcall %}
+{% endblock %}

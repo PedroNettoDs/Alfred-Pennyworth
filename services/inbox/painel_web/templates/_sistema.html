@@ -1,0 +1,81 @@
+{#
+  Miolo do Sistema (página e /painel/parcial/sistema). Vars de painel._dados_sistema(): alfred, wa, wa_status,
+  fila, porta_*, executor, researcher, ollama ({estado, detalhe}), containers ({itens}|{erro}),
+  timers ({itens}|{erro}), pendencias, agora.
+#}
+{% import "_macros.html" as m %}
+<section class="cartao sistema-grupo" aria-labelledby="s-alfred">
+  <h2 class="cartao__titulo" id="s-alfred">Alfred</h2>
+  <ul class="sistema-lista">
+    {%- if alfred.ligado %}
+    {{ m.item_sistema("Estado", "ok", "Timers e API podem rodar.", rotulo="Ligado") }}
+    {%- else %}
+    {{ m.item_sistema("Estado", "erro", ("Modo jogo desde " ~ alfred.desde) if alfred.desde else "Modo jogo (logs/alfred_desligado).", rotulo="Desligado") }}
+    {%- endif %}
+    {{ m.item_sistema("Pendências aguardando", "neutro", pendencias ~ " no total", rotulo=pendencias|string) }}
+  </ul>
+</section>
+
+<section class="cartao sistema-grupo" aria-labelledby="s-whatsapp">
+  <h2 class="cartao__titulo" id="s-whatsapp">WhatsApp</h2>
+  <ul class="sistema-lista">
+    {{ m.item_sistema("Conexão", wa.estado, wa.detalhe, rotulo=wa.rotulo) }}
+    {{ m.item_sistema("Instância", "neutro", wa_status.instancia or "—", rotulo="Evolution API") }}
+    {%- if wa_status.simulado %}
+    {{ m.item_sistema("Envios", "simulado", "Nada sai da máquina (sem EVOLUTION_URL ou WHATSAPP_DRY_RUN=true).") }}
+    {%- else %}
+    {{ m.item_sistema("Envios", "ok", "As respostas autorizadas vão para o contato.", rotulo="Reais") }}
+    {%- endif %}
+    {%- if fila is not none %}
+    {{ m.item_sistema("Fila de espera", "neutro", fila ~ " conversa(s) esperando atraso_minutos", rotulo=fila|string) }}
+    {%- endif %}
+  </ul>
+</section>
+
+<section class="cartao sistema-grupo" aria-labelledby="s-apis">
+  <h2 class="cartao__titulo" id="s-apis">APIs locais</h2>
+  <ul class="sistema-lista">
+    {{ m.item_sistema("Inbox (" ~ porta_inbox ~ ")", "ok", "No ar (é ela que serve este painel)") }}
+    {{ m.item_sistema("Executor (" ~ porta_exec ~ ")", executor.estado, executor.detalhe) }}
+    {{ m.item_sistema("Researcher (" ~ porta_res ~ ")", researcher.estado, researcher.detalhe) }}
+    {{ m.item_sistema("Ollama", ollama.estado, ollama.detalhe) }}
+  </ul>
+</section>
+
+<section class="cartao sistema-grupo" aria-labelledby="s-containers">
+  <h2 class="cartao__titulo" id="s-containers">Containers</h2>
+  <ul class="sistema-lista">
+    {%- if containers.erro %}
+    {{ m.item_sistema("Docker", "indisponivel", containers.erro) }}
+    {%- else %}
+    {%- for c in containers.itens %}
+    {%- if c.estado == "running" %}
+    {{ m.item_sistema(c.nome, "ok", "running", rotulo="Rodando") }}
+    {%- elif not c.estado %}
+    {{ m.item_sistema(c.nome, "neutro", "Container não encontrado", rotulo="Ausente") }}
+    {%- elif c.estado in ("exited", "dead") %}
+    {{ m.item_sistema(c.nome, "erro", c.estado, rotulo="Parado") }}
+    {%- else %}
+    {{ m.item_sistema(c.nome, "aviso", c.estado) }}
+    {%- endif %}
+    {%- endfor %}
+    {%- endif %}
+  </ul>
+</section>
+
+<section class="cartao sistema-grupo" aria-labelledby="s-timers">
+  <h2 class="cartao__titulo" id="s-timers">Timers do systemd (usuário)</h2>
+  <ul class="sistema-lista">
+    {%- if timers.erro %}
+    {{ m.item_sistema("Timers", "indisponivel", timers.erro) }}
+    {%- elif not timers.itens %}
+    {{ m.item_sistema("Timers", "neutro", "Nenhum timer alfred-* encontrado para este usuário.", rotulo="Nenhum") }}
+    {%- else %}
+    {%- for t in timers.itens %}
+    {{ m.item_sistema(t.nome, "neutro", ("Próxima execução: " ~ t.proximo ~ " (" ~ t.relativo ~ ")") if t.proximo else "Sem próxima execução agendada",
+                      rotulo="Agendado" if t.proximo else "Parado") }}
+    {%- endfor %}
+    {%- endif %}
+  </ul>
+</section>
+<p class="pequeno suave">Consultado em {{ agora }}.</p>

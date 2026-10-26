@@ -25,6 +25,7 @@ POST /pendencias/{id}/responder-texto  {texto, enviar?, nota?} → registra e en
 POST /pendencias/{id}/notificar-whatsapp        → manda a Pedro o resumo + áudio da pergunta (via Evolution API)
 GET  /whatsapp/status                            → configuração, estado da instância, fila
 GET/POST /agenda, /agenda/fila, /agenda/{id}/resultado, /agenda/{id}/desfazer, /agenda/alfred.ics (ver bloco Agenda)
+GET  /painel                                     → Painel do Alfred (painel.py; só 127.0.0.1, login com o token)
 
 Com `atraso_minutos` > 0 (perfis.yml → whatsapp:) o webhook só enfileira (acao=agendada + prazo); uma thread
 de fundo iniciada com a API passa a cada FILA_INTERVALO_S pela fila e cria pendência + áudio + avisos dos
@@ -38,7 +39,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -50,6 +51,13 @@ load_env(override=False)
 import core  # noqa: E402
 import whatsapp  # noqa: E402
 import semanal  # noqa: E402
+try:
+    import painel  # noqa: E402  (Painel do Alfred: /painel, só 127.0.0.1)
+except ImportError as e:
+    # venv criado antes do painel (o run.sh só instala o requirements ao criar o venv): sem o jinja2 a API
+    # continua subindo — webhook do WhatsApp, N8N, extensões e tools —, só sem as rotas /painel.
+    painel = None
+    log(f"[painel] Painel desativado: {e}. Rode venv/bin/pip install -r requirements.txt e reinicie a API.")
 from _shared.lib_mail import find_thunderbird_profile  # noqa: E402
 from _shared.lib_whatsapp import resumo_config as whatsapp_config  # noqa: E402
 
@@ -242,8 +250,11 @@ def pendencia(pid: str, authorization: Optional[str] = Header(None)):
 
 
 @app.get("/pendencias/{pid}/audio")
-def pendencia_audio(pid: str, authorization: Optional[str] = Header(None)):
-    check_auth(authorization)
+def pendencia_audio(pid: str, request: Request, authorization: Optional[str] = Header(None)):
+    # Bearer (N8N, tools) OU sessão do Painel do Alfred (o <audio> do navegador não manda Bearer).
+    # O Bearer vem primeiro: um cookie do painel estragado nunca atrapalha quem usa o token.
+    if not (TOKEN and authorization == f"Bearer {TOKEN}") and not (painel and painel.sessao_valida(request)):
+        check_auth(authorization)
     p = core.obter_pendencia(pid)
     mp3 = (p or {}).get("arquivos", {}).get("mp3")
     path = core.vault() / mp3 if mp3 else None
@@ -256,7 +267,7 @@ def pendencia_audio(pid: str, authorization: Optional[str] = Header(None)):
 def pendencia_responder(pid: str, req: RespostaRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
     try:
-        return core.responder(pid, req.resposta, req.nota or "")
+        return core.responder(pid, req.resposta, req.nota or "", origem="via API")
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -516,6 +527,11 @@ def agenda_ics(request: Request):
     if host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="feed .ics só para 127.0.0.1")
     return Response(content=agenda.feed_ics(), media_type="text/calendar; charset=utf-8")
+
+
+# Painel do Alfred (interface web local de aprovações) — rotas em painel.py (fora se faltar o jinja2)
+if painel is not None:
+    app.include_router(painel.router)
 
 
 if __name__ == "__main__":

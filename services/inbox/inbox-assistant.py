@@ -105,7 +105,7 @@ def cmd_ver(args):
     if not p:
         print(f"Pendência não encontrada: {args.id}")
         return 1
-    md = core.vault() / (p.get("arquivos") or {}).get("md", "")
+    md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")   # respondida na espera: md = None
     if md.is_file():
         print(md.read_text(encoding="utf-8"))
     else:
@@ -128,7 +128,7 @@ def cmd_ouvir(args):
 
 def cmd_responder(args):
     try:
-        p = core.responder(args.id, args.resposta, args.nota or "")
+        p = core.responder(args.id, args.resposta, args.nota or "", origem="via terminal")
     except (KeyError, ValueError) as e:
         print(f"Erro: {e}")
         return 1
@@ -322,10 +322,13 @@ def _perguntar_gui(titulo: str, corpo: str, tem_audio: bool) -> str:
 
 
 def _registrar_escolha(pid: str, escolha: str, origem: str) -> bool:
-    atual = core.obter_pendencia(pid)
-    if not atual or atual.get("status") != "aguardando":
+    """`origem` continua indo na nota (como antes); respondido_via = "notificação no PC".
+    Checar e gravar na mesma transação: se outro caminho respondeu no meio, nada muda."""
+    try:
+        atual = core.responder(pid, "vou" if escolha == "vou" else "nao_vou", origem,
+                               origem="via notificação no PC", so_se_aguardando=True)
+    except (KeyError, core.PendenciaJaResolvida):
         return False
-    core.responder(pid, "vou" if escolha == "vou" else "nao_vou", origem)
     core._notify("Alfred", f"Anotado: {'VOU' if escolha == 'vou' else 'NÃO VOU'} — {atual['titulo'][:50]}")
     return True
 
@@ -607,7 +610,7 @@ def _perguntar_whatsapp(p: dict, ouvir: bool) -> str:
             tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
             continue
         if low in ("ver", "v"):
-            md = core.vault() / (p.get("arquivos") or {}).get("md", "")
+            md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")
             print(md.read_text(encoding="utf-8") if md.is_file() else "(sem texto)")
             continue
         try:
@@ -662,13 +665,14 @@ def cmd_perguntar(args):
                 tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
                 continue
             if r in ("ver", "v"):
-                md = core.vault() / (p.get("arquivos") or {}).get("md", "")
+                md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")
                 print(md.read_text(encoding="utf-8") if md.is_file() else "(sem texto)")
                 continue
             if r in ("vou", "sim", "s", "v+", "nao", "não", "n", "nao vou", "não vou"):
                 escolha = "vou" if r in ("vou", "sim", "s", "v+") else "nao"
                 nota = input("  Nota (opcional) › ").strip()
-                core.responder(p["id"], "vou" if escolha == "vou" else "nao_vou", nota or "via terminal")
+                core.responder(p["id"], "vou" if escolha == "vou" else "nao_vou", nota or "via terminal",
+                               origem="via terminal")
                 print(f"  ✔ anotado: {'VOU' if escolha == 'vou' else 'NÃO VOU'}")
                 break
             print("  responda: vou | nao | ouvir | ver | pular | sair")

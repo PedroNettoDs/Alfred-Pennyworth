@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Sistema{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Sistema", "Somente leitura · cada item é consultado com tempo curto; o que não responder aparece como indisponível") }}
+<div class="pilha" data-poll-url="/painel/parcial/sistema">{% include "_sistema.html" %}</div>
+{% endblock %}

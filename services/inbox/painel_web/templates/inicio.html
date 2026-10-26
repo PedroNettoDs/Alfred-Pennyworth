@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Início{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Início", hoje) }}
+<div data-poll-url="/painel/parcial/inicio">{% include "_inicio.html" %}</div>
+{% endblock %}

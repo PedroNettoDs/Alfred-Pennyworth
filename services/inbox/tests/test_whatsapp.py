@@ -115,6 +115,8 @@ class Base(unittest.TestCase):
             mock.patch.object(whatsapp, "FILA_FILE", TMP / "whatsapp_fila.json"),
             mock.patch.object(whatsapp, "SEEN_FILE", TMP / "whatsapp_seen.json"),
             mock.patch.object(lib_whatsapp, "ENVIADOS_FILE", TMP / "whatsapp_enviados.jsonl"),
+            # ids enviados pelo Alfred (eco): nunca o logs/ do repositório
+            mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", TMP / "whatsapp_ids_enviados.json"),
             mock.patch.object(core, "_notify", lambda *a, **k: None),
             mock.patch.object(core, "_iniciar_aguardador", lambda comando, pid: AGUARDADORES.append((comando, pid))),
         ]
@@ -140,7 +142,8 @@ class Base(unittest.TestCase):
         # vault e registros limpos a cada teste
         for f in (TMP / "vault" / "pendencias").glob("*") if (TMP / "vault" / "pendencias").is_dir() else []:
             f.unlink()
-        for f in (TMP / "whatsapp_seen.json", TMP / "whatsapp_enviados.jsonl", TMP / "whatsapp_fila.json"):
+        for f in (TMP / "whatsapp_seen.json", TMP / "whatsapp_enviados.jsonl", TMP / "whatsapp_fila.json",
+                  TMP / "whatsapp_ids_enviados.json"):
             if f.exists():
                 f.unlink()
 
@@ -321,6 +324,30 @@ class TestWebhook(Base):
         self.assertIn("mais uma mensagem", d2["notificacao"]["texto"])
         self.assertIsNone(d2["notificacao"]["audio_url"])
         self.assertEqual(len(self.pendencias()), 1)
+
+    def test_nao_agrupa_em_pendencia_resolvida_por_outro_processo_no_meio(self):
+        """O webhook decide agrupar com uma leitura feita antes da classificação; se no meio dela outro caminho
+        (notificação no PC, CLI) responde a pendência, a mensagem nova vira pendência nova — não some."""
+        pid = self.post_webhook("evolution_texto.json", enviar="false").json()["pendencia"]["id"]
+        original = whatsapp.classificar_whatsapp
+
+        def classificar_e_responder_no_meio(*a, **kw):
+            r = original(*a, **kw)
+            whatsapp.responder_texto(pid, "Ok, combinado.", enviar=False, origem="via notificação no PC")
+            return r
+
+        with mock.patch.object(whatsapp, "classificar_whatsapp", classificar_e_responder_no_meio):
+            d2 = self.post_webhook("evolution_audio.json", enviar="false").json()
+        self.assertEqual(d2["acao"], "pendencia_criada", d2)
+        self.assertNotEqual(d2["pendencia"]["id"], pid)
+        p = core.obter_pendencia(pid)
+        self.assertEqual(p["status"], "respondida")
+        self.assertEqual([m["message_id"] for m in p["whatsapp"]["mensagens"]], ["3EB0A1B2C3D4E5F60001"])
+        self.assertEqual([x["id"] for x in self.pendencias()], [d2["pendencia"]["id"]])
+        # agrupar_mensagem direto numa pendência já resolvida: None e nada gravado
+        msg = whatsapp.normalizar_payload(payload("evolution_texto.json"))
+        self.assertIsNone(whatsapp.agrupar_mensagem(pid, msg, "mais uma"))
+        self.assertEqual(len(core.obter_pendencia(pid)["whatsapp"]["mensagens"]), 1)
 
     def test_resposta_de_pedro_citando_ref(self):
         pid = self.post_webhook("evolution_texto.json", enviar="false").json()["pendencia"]["id"]
@@ -592,9 +619,48 @@ class TestResponderTexto(Base):
         p = core.obter_pendencia(pid)
         self.assertEqual(p["status"], "aguardando"); self.assertEqual(p["resposta_texto"], "tenta")
         self.assertEqual(p["whatsapp"]["envio"]["erro"], "HTTP 500")
+        self.assertIsNone(p["respondido_via"])           # voltou a aguardar: não foi resolvida por ninguém
         # repetir funciona
         r = self.client.post(f"/pendencias/{pid}/responder-texto", json={"texto": "tenta"}, headers=self.auth)
         self.assertEqual(r.status_code, 200)
+
+    def test_respondido_via_e_ja_resolvida(self):
+        pid = self._cria()
+        p = whatsapp.responder_texto(pid, "Ok, combinado.", enviar=True, origem="via painel")
+        self.assertEqual((p["status"], p["respondido_via"]), ("respondida", "painel"))
+        self.assertEqual(core.obter_pendencia(pid)["respondido_via"], "painel")
+        with self.assertRaises(core.PendenciaJaResolvida) as cm:
+            whatsapp.responder_texto(pid, "de novo", origem="via terminal")
+        e = cm.exception
+        self.assertIsInstance(e, ValueError)                     # quem já tratava ValueError continua igual
+        self.assertEqual(str(e), f"Pendência {pid} já está com status 'respondida'")
+        self.assertEqual((e.pid, e.status, e.caminho), (pid, "respondida", "Painel do Alfred"))
+        with self.assertRaises(core.PendenciaJaResolvida):
+            whatsapp.agendar_pendencia(pid, core._now() + timedelta(days=1))
+        self.assertEqual(len(self.enviados()), 1)
+        # API devolve 400 com a mesma mensagem de antes
+        r = self.client.post(f"/pendencias/{pid}/responder-texto", json={"texto": "x"}, headers=self.auth)
+        self.assertEqual(r.status_code, 400); self.assertIn("já está com status", r.json()["detail"])
+
+    def test_responder_email_pela_api_grava_respondido_via(self):
+        with core.trava_pendencias():
+            data = core._load_pend()
+            data["pendencias"].append({"id": "20261020-meetup-api", "tipo": "evento", "status": "aguardando",
+                                       "titulo": "Meetup", "evento": {"data_inicio": None}, "arquivos": {}})
+            core._save_pend(data)
+        r = self.client.post("/pendencias/20261020-meetup-api/responder", json={"resposta": "nao_vou"}, headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        p = core.obter_pendencia("20261020-meetup-api")
+        self.assertEqual((p["status"], p["respondido_via"]), ("nao_vou", "API"))
+        self.assertEqual(core.caminho_resolucao(p), "API (N8N, chat ou extensão)")
+
+    def test_status_repassa_timeout(self):
+        chamadas = []
+        with mock.patch.object(lib_whatsapp, "configurado", lambda: True), \
+             mock.patch.object(lib_whatsapp, "_get", lambda path, timeout=30: chamadas.append(timeout) or {"ok": False, "erro": "fora"}):
+            self.assertEqual(whatsapp.status(timeout=2)["estado_instancia"], "fora")
+            whatsapp.status()
+        self.assertEqual(chamadas, [2, 30])
 
     def test_listagem_e_status(self):
         pid = self._cria()
@@ -668,7 +734,22 @@ class TestFilaAtraso(Base):
         self.assertEqual(whatsapp.processar_fila()[0]["acao"], "pendencia_criada")
         self.assertEqual(self.enviados(), [])
 
+    def cfg_com(self, **extra):
+        """carregar_cfg do teste (com atraso_minutos=20) e chaves do perfis.yml sobrepostas."""
+        base = whatsapp.carregar_cfg
+
+        def cfg(nome=None):
+            n, c = base(nome)
+            return n, {**c, **extra}
+        return mock.patch.object(whatsapp, "carregar_cfg", cfg)
+
+    def arquivos_no_vault(self):
+        pd = core.vault() / "pendencias"
+        return sorted(f.name for f in pd.glob("*") if f.suffix in (".md", ".mp3")) if pd.is_dir() else []
+
     def test_pedro_responde_antes_do_prazo_cancela(self):
+        """fromMe na espera: nada de pendência aguardando, aviso ou envio — só o registro respondida_manual
+        com a mensagem do contato, o rascunho que o Alfred proporia e a resposta de Pedro."""
         self.assertEqual(self.post_webhook("evolution_texto.json", notificar="true").json()["acao"], "agendada")
         self.avancar(5)
         d = self.post_webhook("evolution_fromme_direto.json").json()   # Pedro responde Carlos pelo celular
@@ -677,8 +758,37 @@ class TestFilaAtraso(Base):
         self.assertEqual(whatsapp.listar_fila(), [])
         self.avancar(30)
         self.assertEqual(whatsapp.processar_fila(), [])
-        self.assertEqual(self.pendencias("todas"), []); self.assertEqual(self.enviados(), [])
+        self.assertEqual(self.pendencias(), []); self.assertEqual(self.enviados(), [])
         self.assertEqual(AGUARDADORES, [])
+        self.assertEqual(self.arquivos_no_vault(), [])        # sem .md nem .mp3
+        # o registro: o que o Alfred proporia × o que Pedro respondeu
+        todas = self.pendencias("todas")
+        self.assertEqual(len(todas), 1, todas)
+        r = todas[0]
+        self.assertEqual(d["respondidas_na_espera"], [r["id"]])
+        self.assertEqual(d["pendencia"]["id"], r["id"])
+        self.assertEqual((r["status"], r["resposta"], r["respondido_via"]), ("respondida_manual", "texto", "celular"))
+        wa = r["whatsapp"]
+        self.assertTrue(wa["respondida_na_espera"])
+        self.assertEqual([m["message_id"] for m in wa["mensagens"]], ["3EB0A1B2C3D4E5F60001"])
+        self.assertIn("orçamento do servidor", wa["texto"])
+        if not LIVE:
+            self.assertEqual(wa["rascunho"], "Recebi, Carlos! Vou ver o orçamento e te retorno.")
+        self.assertIn("já te mando", r["resposta_texto"])
+        self.assertEqual(wa["envio"], {"manual": True, "message_id": "3EB0A1B2C3D4E5F60006"})
+        self.assertEqual(r["arquivos"], {"md": None, "mp3": None})
+        self.assertEqual(r["criado_em"], (self.agora - timedelta(minutes=35)).isoformat(timespec="minutes"))
+        self.assertEqual(core.caminho_resolucao(r), "resposta direta pelo celular")
+        # CLI `ver` não quebra com md = None
+        import importlib.util
+        import io
+        from contextlib import redirect_stdout
+        spec = importlib.util.spec_from_file_location("inbox_assistant", INBOX / "inbox-assistant.py")
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.cmd_ver(mock.Mock(id=r["id"])), 0)
+        self.assertIn("respondida_manual", out.getvalue())
         # nova mensagem do contato depois disso → fila de novo, prazo recomeça
         p2 = payload("evolution_texto.json"); p2["data"]["key"]["id"] = "NOVA-DO-CARLOS"
         d = self.client.post("/whatsapp/webhook", json=p2, headers={"apikey": "CHAVE-DE-TESTE"}).json()
@@ -705,6 +815,69 @@ class TestFilaAtraso(Base):
         d = self.client.post("/whatsapp/webhook", json=eco, headers={"apikey": "CHAVE-DE-TESTE"}).json()
         self.assertIn("eco", d["motivo"]); self.assertNotIn("fila_cancelada", d)
         self.assertEqual(len(whatsapp.listar_fila()), 1)
+
+    def _eco_durante_envio_de_outro_processo(self, marcar_id: bool, texto_eco: str):
+        """Pendência antiga respondida pela notificação no PC (outro processo) enquanto a mensagem nova do
+        contato está na fila; o eco fromMe do envio chega ANTES de o message_id ir para pendencias.yml."""
+        self.post_webhook("evolution_texto.json", enviar="false")
+        self.avancar(20)
+        pid = whatsapp.processar_fila()[0]["pendencia"]["id"]
+        self.avancar(60)
+        p2 = payload("evolution_texto.json"); p2["data"]["key"]["id"] = "NOVA-DO-CARLOS"
+        self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p2, headers={"apikey": "CHAVE-DE-TESTE"})
+        self.assertEqual(len(whatsapp.listar_fila()), 1)
+        ecos = []
+
+        def enviar_com_eco(numero, texto, quoted=None, delay=0):
+            if marcar_id:
+                lib_whatsapp._marcar_envio("ECO-ALFRED")
+            eco = payload("evolution_fromme_direto.json")
+            eco["data"]["key"]["id"] = "ECO-ALFRED"
+            eco["data"]["message"]["conversation"] = texto_eco
+            # a API processa o eco no meio do envio (a trava de thread não vale entre processos)
+            ecos.append(whatsapp.processar_mensagem_whatsapp.__wrapped__(eco, enviar=False))
+            return {"ok": True, "simulado": False, "message_id": "ECO-ALFRED"}
+
+        with mock.patch.object(whatsapp, "enviar_texto", enviar_com_eco):
+            whatsapp.responder_texto(pid, "Ok, combinado.", origem="via notificação no PC")
+        d = ecos[0]
+        self.assertEqual(d["acao"], "ignorada", d); self.assertIn("eco", d["motivo"])
+        self.assertNotIn("fila_cancelada", d); self.assertNotIn("respondidas_na_espera", d)
+        self.assertEqual(len(whatsapp.listar_fila()), 1)                 # a mensagem nova continua esperando
+        self.assertEqual([p["id"] for p in self.pendencias("todas")], [pid])   # nenhum respondida_manual falso
+        self.assertEqual(core.obter_pendencia(pid)["whatsapp"]["envio"]["message_id"], "ECO-ALFRED")
+
+    def test_eco_de_outro_processo_com_id_registrado_nao_cancela(self):
+        self._eco_durante_envio_de_outro_processo(marcar_id=True, texto_eco="(texto como a Evolution devolveu)")
+
+    def test_eco_de_outro_processo_antes_do_id_nao_cancela(self):
+        self._eco_durante_envio_de_outro_processo(marcar_id=False, texto_eco="Ok,  combinado.")
+
+    def test_envio_interrompido_antigo_nao_vira_eco(self):
+        """Processo morreu entre a T1 e a T2 (envio.ok=None para sempre): passado ENVIO_EM_CURSO_MAX, uma resposta
+        manual de Pedro com o mesmo texto volta a ser resposta direta, não eco."""
+        class Morreu(BaseException):
+            pass
+
+        self.post_webhook("evolution_texto.json", enviar="false")
+        self.avancar(20)
+        pid = whatsapp.processar_fila()[0]["pendencia"]["id"]
+        with mock.patch.object(whatsapp, "enviar_texto", side_effect=Morreu()):
+            with self.assertRaises(Morreu):
+                whatsapp.responder_texto(pid, "Ok, combinado.", origem="via notificação no PC")
+        envio = core.obter_pendencia(pid)["whatsapp"]["envio"]
+        self.assertEqual((core.obter_pendencia(pid)["status"], envio["ok"]), ("respondida", None))
+        self.avancar(60)
+        p2 = payload("evolution_texto.json"); p2["data"]["key"]["id"] = "NOVA-DO-CARLOS"
+        self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p2, headers={"apikey": "CHAVE-DE-TESTE"})
+        self.assertEqual(len(whatsapp.listar_fila()), 1)
+        manual = payload("evolution_fromme_direto.json")
+        manual["data"]["key"]["id"] = "MANUAL-DO-PEDRO"
+        manual["data"]["message"]["conversation"] = "Ok, combinado."
+        d = self.client.post("/whatsapp/webhook", json=manual, headers={"apikey": "CHAVE-DE-TESTE"}).json()
+        self.assertEqual(d["acao"], "fila_cancelada", d)
+        self.assertEqual(d["fila_cancelada"], ["NOVA-DO-CARLOS"])
+        self.assertEqual(whatsapp.listar_fila(), [])
 
     def test_mensagens_seguidas_juntam_no_mesmo_item(self):
         d1 = self.post_webhook("evolution_texto.json", enviar="false").json()
@@ -742,12 +915,106 @@ class TestFilaAtraso(Base):
         p2 = payload("evolution_texto.json"); p2["data"]["key"]["id"] = "NOVA-DO-CARLOS"
         self.assertEqual(self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p2,
                                           headers={"apikey": "CHAVE-DE-TESTE"}).json()["acao"], "agendada")
+        avisos = list(AGUARDADORES)
         d = self.post_webhook("evolution_fromme_direto.json").json()
         self.assertEqual(d["acao"], "respondida_manual", d)
         self.assertEqual(d["fila_cancelada"], ["NOVA-DO-CARLOS"])
-        self.assertEqual(core.obter_pendencia(pid)["status"], "respondida_manual")
+        p = core.obter_pendencia(pid)
+        self.assertEqual((p["status"], p["respondido_via"]), ("respondida_manual", "celular"))
+        self.assertIn("já te mando", p["resposta_texto"])
+        # a mensagem que ainda esperava na fila vira o registro respondida_manual (sem pendência aguardando)
+        self.assertEqual(len(d["respondidas_na_espera"]), 1, d)
+        r = core.obter_pendencia(d["respondidas_na_espera"][0])
+        self.assertEqual((r["status"], r["respondido_via"]), ("respondida_manual", "celular"))
+        self.assertTrue(r["whatsapp"]["respondida_na_espera"])
+        self.assertEqual([m["message_id"] for m in r["whatsapp"]["mensagens"]], ["NOVA-DO-CARLOS"])
+        if not LIVE:
+            self.assertEqual(r["whatsapp"]["rascunho"], "Recebi, Carlos! Vou ver o orçamento e te retorno.")
+        self.assertIn("já te mando", r["resposta_texto"])
+        self.assertEqual(self.pendencias(), [])
+        self.assertEqual(AGUARDADORES, avisos)       # nenhuma notificação nova
+        self.assertEqual(self.enviados(), [])
         self.avancar(30)
         self.assertEqual(whatsapp.processar_fila(), [])
+
+    def test_rascunho_indisponivel_registra_sem_rascunho(self):
+        """LLM fora do ar (ou erro no rascunho) → o registro sai assim mesmo, com rascunho None."""
+        def sem_rascunho(prompt, **kw):
+            return None if "RASCUNHO da resposta" in prompt else _fake_classificar(prompt, **kw)
+
+        casos = (("LLM mudo", mock.patch.object(whatsapp, "ollama_generate_json", sem_rascunho)),
+                 ("exceção", mock.patch.object(whatsapp, "gerar_rascunho", side_effect=RuntimeError("Ollama caiu"))))
+        for nome, ctx in casos:
+            with self.subTest(nome):
+                self.setUp()
+                self.assertEqual(self.post_webhook("evolution_texto.json", enviar="false").json()["acao"], "agendada")
+                with ctx:
+                    d = self.post_webhook("evolution_fromme_direto.json").json()
+                self.assertEqual(d["acao"], "fila_cancelada", d)
+                r = self.pendencias("todas")
+                self.assertEqual([x["id"] for x in r], d["respondidas_na_espera"])
+                self.assertEqual(r[0]["status"], "respondida_manual")
+                self.assertIsNone(r[0]["whatsapp"]["rascunho"]); self.assertIsNone(r[0]["whatsapp"]["compromisso"])
+                self.assertIn("já te mando", r[0]["resposta_texto"])
+
+    def test_falha_ao_registrar_nao_derruba_o_webhook(self):
+        self.post_webhook("evolution_texto.json", enviar="false")
+        with mock.patch.object(whatsapp, "registrar_resposta_direta", side_effect=OSError("disco cheio")):
+            r = self.post_webhook("evolution_fromme_direto.json")
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertEqual((d["acao"], d["fila_cancelada"], d["respondidas_na_espera"]),
+                         ("fila_cancelada", ["3EB0A1B2C3D4E5F60001"], []))
+        self.assertEqual(whatsapp.listar_fila(), []); self.assertEqual(self.pendencias("todas"), [])
+
+    def test_ignorados_nao_geram_registro(self):
+        """Grupos / contatos_ignorar / confiança-relevância continuam valendo: só item que estava na fila vira registro."""
+        grupo = payload("evolution_fromme_direto.json")
+        grupo["data"]["key"]["remoteJid"] = "120363012345678901@g.us"
+        spam_jid = payload("evolution_spam.json")["data"]["key"]["remoteJid"]
+        spam = payload("evolution_fromme_direto.json")
+        spam["data"]["key"]["remoteJid"] = spam_jid
+        casos = (("contatos_ignorar", "evolution_texto.json", payload("evolution_fromme_direto.json"),
+                  {"contatos_ignorar": ["Carlos"]}),
+                 ("grupo ignorado", "evolution_grupo.json", grupo, {"grupos": "ignorar"}),
+                 ("spam / sem relevância", "evolution_spam.json", spam, {}))
+        for nome, recebida, resposta, extra in casos:
+            with self.subTest(nome), self.cfg_com(**extra):
+                self.setUp()
+                d = self.post_webhook(recebida, enviar="false").json()
+                self.assertEqual(d["acao"], "ignorada", d)
+                self.assertEqual(whatsapp.listar_fila(), [])
+                d = self.client.post("/whatsapp/webhook", json=resposta, headers={"apikey": "CHAVE-DE-TESTE"}).json()
+                self.assertNotIn("fila_cancelada", d); self.assertNotIn("respondidas_na_espera", d)
+                self.assertEqual(self.pendencias("todas"), []); self.assertEqual(self.enviados(), [])
+
+    def test_webhook_repetido_depois_do_registro_e_duplicada(self):
+        self.post_webhook("evolution_texto.json", enviar="false")
+        d = self.post_webhook("evolution_fromme_direto.json").json()
+        self.assertEqual(len(d["respondidas_na_espera"]), 1, d)
+        self.assertEqual(self.post_webhook("evolution_texto.json").json()["acao"], "duplicada")
+        (TMP / "whatsapp_seen.json").unlink()        # sem o seen, o próprio pendencias.yml acusa a duplicata
+        self.assertEqual(self.post_webhook("evolution_texto.json").json()["acao"], "duplicada")
+        self.assertEqual(whatsapp.listar_fila(), []); self.assertEqual(len(self.pendencias("todas")), 1)
+
+    def test_pendencia_ja_criada_respondida_manual_guarda_rascunho_e_resposta(self):
+        self.post_webhook("evolution_texto.json", enviar="false")
+        self.avancar(20)
+        pid = whatsapp.processar_fila()[0]["pendencia"]["id"]
+        rascunho = core.obter_pendencia(pid)["whatsapp"]["rascunho"]
+        self.assertTrue(rascunho)
+        self.avancar(3)                              # dentro da janela de agrupar: mesmo assim é resposta de Pedro
+        d = self.post_webhook("evolution_fromme_direto.json").json()
+        self.assertEqual((d["acao"], d["pendencia"]["id"]), ("respondida_manual", pid), d)
+        self.assertNotIn("respondidas_na_espera", d)
+        p = core.obter_pendencia(pid)
+        self.assertEqual((p["status"], p["respondido_via"]), ("respondida_manual", "celular"))
+        self.assertEqual(p["whatsapp"]["rascunho"], rascunho)          # o que o Alfred proporia continua lá
+        self.assertIn("já te mando", p["resposta_texto"])              # e o que Pedro respondeu
+        self.assertEqual(p["whatsapp"]["envio"]["manual"], True)
+        self.assertIn("RESPONDIDA DIRETO NO CELULAR", (core.vault() / p["arquivos"]["md"]).read_text(encoding="utf-8"))
+        self.assertEqual(core.caminho_resolucao(p), "resposta direta pelo celular")
+        self.assertEqual(self.enviados(), [])
 
     def test_atraso_zero_mantem_fluxo_imediato(self):
         with mock.patch.object(TestFilaAtraso, "ATRASO", 0):

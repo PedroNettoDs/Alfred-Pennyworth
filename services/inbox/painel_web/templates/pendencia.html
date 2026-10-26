@@ -1,0 +1,138 @@
+{#
+  Detalhe da pendência (WhatsApp ou e-mail). Vars de painel._dados_detalhe(): p (entrada do yml), eh_wa,
+  aguardando, contato, numero, relativo, chegada, audio (disponivel|expirado|sem), historico, caminho,
+  simulado_envio, rotulo_status, resolvida_em + (WhatsApp) rotulo_texto, texto, resumo, categoria, confianca,
+  urgencia, motivo, texto_resposta, sugestao_quando, envio, na_espera + (e-mail) explicacao, link, dados.
+  Aguardando: o JS consulta /estado e, se outro caminho resolver, mostra o banner e desabilita as ações.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}{{ contato }}{% endblock %}
+{% block conteudo %}
+<div class="detalhe"{% if aguardando %} data-estado-url="/painel/api/pendencias/{{ p.id }}/estado"{% endif %}>
+  {{ m.cabecalho(contato, ("Pendência de WhatsApp" if eh_wa else ("Convite por e-mail" if p.tipo == "evento" else "Contato por e-mail"))
+                 ~ (" · recebida " ~ relativo if relativo else ""), voltar=("/painel/pendencias", "Pendências")) }}
+  {%- if aguardando %}
+  {{ m.banner_resolvida() }}
+  {%- else %}
+  {#- já abre resolvida: aviso neutro (role=status); o âmbar com role=alert fica para o caso dinâmico #}
+  {{ m.aviso("neutro", "Esta pendência já foi resolvida por " ~ caminho ~ ".") }}
+  {%- endif %}
+
+  <div class="detalhe__grade">
+    <div class="detalhe__principal">
+    {%- if eh_wa %}
+      <section class="cartao" aria-labelledby="c-msg">
+        <div class="cartao__cabecalho"><h2 class="cartao__titulo" id="c-msg">Mensagem</h2>{{ m.selo_urgencia(urgencia) }}</div>
+        <div class="detalhe__contato pequeno">{{ m.icone("whatsapp") }}<strong>{{ contato }}</strong>{% if numero %}<span class="detalhe__numero">{{ numero }}</span>{% endif %}</div>
+        <p class="cartao__rotulo">{{ rotulo_texto }}</p>
+        <p class="texto-original">{{ texto or "(sem texto legível)" }}</p>
+        {%- if chegada %}<p class="pequeno suave">Recebida em {{ chegada }}</p>{% endif %}
+      </section>
+      <section class="cartao" aria-labelledby="c-resumo">
+        <h2 class="cartao__titulo" id="c-resumo">Resumo do Alfred</h2>
+        <p>{{ resumo or "Sem resumo." }}</p>
+        {{ m.chave_valor([("Categoria", categoria), ("Confiança", confianca),
+                          ("Urgência", {"alta": "Alta", "media": "Média", "baixa": "Baixa"}.get(urgencia, urgencia)),
+                          ("Motivo", motivo)]) }}
+      </section>
+    {%- else %}
+      <section class="cartao" aria-labelledby="c-exp">
+        <h2 class="cartao__titulo" id="c-exp">Explicação do Alfred</h2>
+        {%- if explicacao %}
+        <div class="prosa">{{ explicacao }}</div>
+        {%- else %}
+        <p class="suave">{{ p.titulo }}</p>
+        {%- endif %}
+        {%- if link %}
+        <p><a class="link-externo" href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ m.icone("externo") }}Abrir o link do evento<span class="sr-only"> (abre em nova aba)</span></a></p>
+        {%- endif %}
+      </section>
+      <section class="cartao" aria-labelledby="c-dados">
+        <h2 class="cartao__titulo" id="c-dados">Dados do e-mail</h2>
+        {{ m.chave_valor(dados) }}
+      </section>
+    {%- endif %}
+      <section class="cartao" aria-labelledby="c-audio">
+        <h2 class="cartao__titulo" id="c-audio">Áudio do resumo</h2>
+        {{ m.audio("/pendencias/" ~ p.id ~ "/audio", audio) }}
+      </section>
+      <section class="cartao" aria-labelledby="c-hist">
+        <h2 class="cartao__titulo" id="c-hist">Histórico</h2>
+        {{ m.historico(historico) }}
+      </section>
+    </div>
+
+    <div class="detalhe__lateral">
+    {%- if not aguardando %}
+      <section class="cartao" aria-labelledby="c-res">
+        <div class="cartao__cabecalho"><h2 class="cartao__titulo" id="c-res">Resultado</h2>{{ m.selo_status(p.status) }}</div>
+        <p class="pequeno suave">Resolvida{% if resolvida_em %} em {{ resolvida_em }}{% endif %} por {{ caminho }}.</p>
+        {%- if eh_wa and p.status == "respondida_manual" %}
+        {%- if na_espera %}<p class="pequeno">Você respondeu pelo celular antes do aviso do Alfred; nada foi enviado por ele.</p>{% endif %}
+        {{ m.comparacao(p.whatsapp.rascunho if p.whatsapp else none, p.resposta_texto) }}
+        {%- elif eh_wa and p.resposta_texto %}
+        <p class="cartao__rotulo">Resposta</p>
+        <p class="texto-original">{{ p.resposta_texto }}</p>
+        {%- if envio.ok is sameas true %}
+        <p>{% if envio.simulado %}{{ m.selo("simulado", "Simulado: nada saiu da máquina") }}{% else %}{{ m.selo("sucesso", "Enviado para " ~ contato) }}{% endif %}</p>
+        {%- elif envio.ok is sameas false %}
+        <p>{{ m.selo("erro", "O envio falhou") }}</p>
+        {%- endif %}
+        {%- endif %}
+        {%- if p.nota %}<p class="pequeno">Nota: {{ p.nota }}</p>{% endif %}
+        {%- if p.task_id %}<p class="pequeno">Tarefa #{{ p.task_id }} criada em tasks.yml.</p>{% endif %}
+      </section>
+    {%- elif eh_wa %}
+      <div class="pilha" data-acoes>
+        <section class="cartao" aria-labelledby="c-resp">
+          <h2 class="cartao__titulo" id="c-resp">Resposta proposta</h2>
+          {%- if envio.ok is sameas false and p.resposta_texto %}
+          {{ m.aviso("erro", "O último envio falhou: " ~ (envio.erro or "erro desconhecido") ~ ". O texto abaixo foi guardado.") }}
+          {%- endif %}
+          <form id="form-resposta" data-acao="/painel/api/pendencias/{{ p.id }}/responder-texto"
+                data-confirmar="dialogo-envio" data-apos-sucesso="encerrar">
+            {{ m.area_texto("texto", "Texto que será enviado a " ~ contato, texto_resposta, id="texto-resposta",
+                            grande=true, obrigatorio=true, ajuda="Edite à vontade. Nada sai sem a sua confirmação.") }}
+            <div class="acoes">{{ m.botao("Autorizar envio", "primario", attrs={"data-texto-ocupado": "Enviando…"}) }}</div>
+            {{ m.resultado() }}
+          </form>
+          <form class="acoes--separadas" data-acao="/painel/api/pendencias/{{ p.id }}/ignorar" data-apos-sucesso="encerrar">
+            {{ m.botao("Não enviar", attrs={"data-texto-ocupado": "Fechando…"}) }}
+            {{ m.resultado() }}
+          </form>
+        </section>
+        <section class="cartao" aria-labelledby="c-ag">
+          <h2 class="cartao__titulo" id="c-ag">Agendar</h2>
+          <form data-acao="/painel/api/pendencias/{{ p.id }}/agendar">
+            {{ m.campo("quando", "Quando?", sugestao_quando, obrigatorio=true,
+                       ajuda="Ex.: 20/10 14:00 · 20/10/2026 · amanhã 10h · hoje 18:00 · terça 15h · 16:00") }}
+            <div class="acoes">{{ m.botao("Agendar", attrs={"data-texto-ocupado": "Anotando…"}) }}</div>
+            {{ m.resultado() }}
+          </form>
+        </section>
+      </div>
+    {%- else %}
+      <section class="cartao" aria-labelledby="c-decisao" data-acoes>
+        <h2 class="cartao__titulo" id="c-decisao">Sua decisão</h2>
+        <form data-acao="/painel/api/pendencias/{{ p.id }}/responder" data-apos-sucesso="encerrar">
+          {{ m.area_texto("nota", "Nota", opcional=true, linhas=2) }}
+          <div class="acoes">
+            {{ m.botao("Vou", "primario", attrs={"name": "resposta", "value": "vou", "data-texto-ocupado": "Registrando…"}) }}
+            {{ m.botao("Não vou", attrs={"name": "resposta", "value": "nao_vou", "data-texto-ocupado": "Registrando…"}) }}
+          </div>
+          {{ m.resultado() }}
+        </form>
+      </section>
+    {%- endif %}
+    </div>
+  </div>
+</div>
+{%- if aguardando and eh_wa %}
+{% call m.dialogo("dialogo-envio", "Confirmar envio", "Confirmar envio") %}
+  <p>Para: <strong>{{ contato }}</strong>{% if numero %} <span class="detalhe__numero">{{ numero }}</span>{% endif %}</p>
+  <pre class="dialogo__texto" data-preencher-campo="texto"></pre>
+  {%- if simulado_envio %}<p>{{ m.selo_simulado() }}</p>{% endif %}
+{% endcall %}
+{%- endif %}
+{% endblock %}

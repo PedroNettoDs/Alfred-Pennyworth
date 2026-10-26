@@ -2,13 +2,17 @@
 title: Alfred Tasks
 description: Gerencia tarefas e lembretes do Pedro. Adiciona, lista, completa e verifica prazos vencidos. Armazena em VAULT_ALFRED/tasks.yml.
 author: Alfred Pennyworth
-version: 1.0.0
+version: 1.1.0
 """
 
 from pydantic import BaseModel, Field
+from contextlib import contextmanager
 from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
+import fcntl
+import os
+import time
 import yaml
 
 
@@ -35,10 +39,49 @@ class Tools:
         except Exception:
             return {"tasks": []}
 
+    @contextmanager
+    def _trava(self, timeout: float = 30.0):
+        """
+        Mesma trava do services/inbox/core.py (trava_arquivo): flock em `.tasks.yml.lock` ao lado do arquivo.
+        O Alfred no host (pendências "vou", botão Agenda, agenda) também cria tarefas — o vault é bind mount,
+        então todos disputam o mesmo .lock e nenhuma tarefa some nem repete id.
+        """
+        f = self._tasks_file()
+        lock = f.parent / f".{f.name}.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o666)
+        except PermissionError:
+            fd = os.open(str(lock), os.O_RDONLY)
+        try:
+            limite = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= limite:
+                        raise TimeoutError(f"tasks.yml ocupado há mais de {timeout:g} s — tente de novo")
+                    time.sleep(0.05)
+            yield
+        finally:
+            os.close(fd)   # fechar solta o flock
+
     def _save(self, data: dict):
+        """Gravação atômica (tmp + os.replace). Chamar DENTRO de `with self._trava()`."""
         f = self._tasks_file()
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        tmp = f.with_name(f.name + ".tmp")
+        tmp.unlink(missing_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(yaml.dump(data, allow_unicode=True, sort_keys=False))
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, f.stat().st_mode & 0o777)
+        except OSError:
+            pass
+        os.replace(tmp, f)
 
     def _next_id(self, tasks: list) -> int:
         return max((t.get("id", 0) for t in tasks), default=0) + 1
@@ -62,23 +105,22 @@ class Tools:
         :param priority: "low", "normal" ou "high" (padrão: "normal")
         :return: Confirmação com ID da tarefa criada
         """
-        data = self._load()
-        task_id = self._next_id(data["tasks"])
         tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
-
-        task = {
-            "id": task_id,
-            "title": title,
-            "status": "open",
-            "priority": priority or "normal",
-            "tags": tag_list,
-            "due_date": due_date or None,
-            "created_at": datetime.now().isoformat(timespec="minutes"),
-            "completed_at": None,
-        }
-
-        data["tasks"].append(task)
-        self._save(data)
+        with self._trava():   # ler → próximo id → gravar sem ninguém no meio
+            data = self._load()
+            task_id = self._next_id(data["tasks"])
+            task = {
+                "id": task_id,
+                "title": title,
+                "status": "open",
+                "priority": priority or "normal",
+                "tags": tag_list,
+                "due_date": due_date or None,
+                "created_at": datetime.now().isoformat(timespec="minutes"),
+                "completed_at": None,
+            }
+            data["tasks"].append(task)
+            self._save(data)
 
         due_str = f" (vence em {due_date})" if due_date else ""
         return f"Tarefa #{task_id} criada: \"{title}\"{due_str}"
@@ -128,15 +170,16 @@ class Tools:
         :param task_id: ID numérico da tarefa (obtido com list_tasks)
         :return: Confirmação
         """
-        data = self._load()
-        for task in data["tasks"]:
-            if task.get("id") == task_id:
-                if task.get("status") == "done":
-                    return f"Tarefa #{task_id} já estava concluída."
-                task["status"] = "done"
-                task["completed_at"] = datetime.now().isoformat(timespec="minutes")
-                self._save(data)
-                return f"Tarefa #{task_id} marcada como concluída: \"{task['title']}\""
+        with self._trava():
+            data = self._load()
+            for task in data["tasks"]:
+                if task.get("id") == task_id:
+                    if task.get("status") == "done":
+                        return f"Tarefa #{task_id} já estava concluída."
+                    task["status"] = "done"
+                    task["completed_at"] = datetime.now().isoformat(timespec="minutes")
+                    self._save(data)
+                    return f"Tarefa #{task_id} marcada como concluída: \"{task['title']}\""
         return f"Tarefa #{task_id} não encontrada."
 
     def list_overdue(self) -> str:

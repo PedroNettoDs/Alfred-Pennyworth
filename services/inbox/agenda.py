@@ -18,7 +18,6 @@ Status: pendente → no_calendario | erro (tenta de novo até MAX_TENTATIVAS) ; 
 """
 
 import re
-import threading
 import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -34,7 +33,6 @@ from _shared.lib_templates import render_template
 MAX_TENTATIVAS = 5
 EM_EXECUCAO_TIMEOUT = timedelta(minutes=15)
 TIPOS = ("evento", "tarefa", "lembrete")
-_lock = threading.RLock()
 
 SCHEMA_COMPROMISSO = {
     "type": "object",
@@ -104,11 +102,15 @@ def _load() -> dict:
     return data
 
 
+def _trava():
+    """Trava entre processos de agenda.yml (API, CLI, aguardador "Desfazer", ciclo do e-mail).
+    Ordem: agenda → tasks (adicionar cria tarefa dentro dela); nunca pendências dentro da agenda."""
+    return core.trava_arquivo(agenda_file())
+
+
 def _save(data: dict) -> None:
-    f = agenda_file()
-    tmp = f.with_suffix(".yml.tmp")
-    tmp.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    tmp.replace(f)
+    with _trava():   # reentrante: quem lê-muda-grava já está dentro dela
+        core.gravar_atomico(agenda_file(), yaml.dump(data, allow_unicode=True, sort_keys=False))
 
 
 def _norm(s: str) -> str:
@@ -161,7 +163,7 @@ def adicionar(
         inicio = inicio.replace(tzinfo=core._now().tzinfo)
     if fim is None and not dia_inteiro:
         fim = inicio + timedelta(minutes=cfg["duracao_min"] if tipo == "evento" else 15)
-    with _lock:
+    with _trava():
         data = _load()
         chave = (_norm(titulo), inicio.date().isoformat())
         for i in data["itens"]:
@@ -380,7 +382,7 @@ def feed_ics() -> str:
 
 def fila_extensao() -> list[dict]:
     """Itens para a extensão: criar (pendente/erro com tentativas) e remover (desfazer)."""
-    with _lock:
+    with _trava():
         data = _load()
         now = core._now()
         out, mudou = [], False
@@ -408,7 +410,7 @@ def fila_extensao() -> list[dict]:
 
 
 def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", erro: str = "") -> dict:
-    with _lock:
+    with _trava():
         data = _load()
         item = next((i for i in data["itens"] if i.get("id") == aid), None)
         if not item:
@@ -435,7 +437,7 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
 
 
 def desfazer(aid: str) -> dict:
-    with _lock:
+    with _trava():
         data = _load()
         item = next((i for i in data["itens"] if i.get("id") == aid), None)
         if not item:

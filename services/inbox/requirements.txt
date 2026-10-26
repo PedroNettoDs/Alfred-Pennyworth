@@ -6,3 +6,4 @@ numpy
 icalendar
 fastapi
 uvicorn
+jinja2

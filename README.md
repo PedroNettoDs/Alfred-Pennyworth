@@ -72,7 +72,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | Ollama           | 11434 | Host (nativo) | Servidor de LLMs; serve llama3.1:8b e nomic-embed       |
 | Shell Executor   | 7070  | Host (systemd)| API REST que executa comandos no host sob whitelist       |
 | Researcher       | 7071  | Host (systemd)| Orquestra busca web → síntese LLM → escrita no vault     |
-| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N) |
+| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N); **Painel do Alfred** em `/painel` (só 127.0.0.1, login com o `SHELL_EXECUTOR_TOKEN`) |
 | Evolution API    | 8080 (127.0.0.1) | Docker  | WhatsApp pareado por QR code; entrega mensagens/áudios por webhook e envia as respostas de Pedro (+ PostgreSQL `evolution-postgres`) |
 
 ### Comunicação entre Serviços
@@ -159,8 +159,10 @@ Alfred-Pennyworth/
 │   │   ├── thunderbird-ext-agenda/    # Extensão "Alfred — agenda" (Experiment API de calendário)
 │   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir)
 │   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N e webhook da Evolution
+│   │   ├── painel.py                  # Painel do Alfred (/painel, só 127.0.0.1): telas e ações de aprovação
+│   │   ├── painel_web/                # Templates Jinja2 + painel.css / painel.js do painel (sem build)
 │   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
-│   │   ├── tests/                     # test_whatsapp.py + payloads da Evolution (texto, áudio .ogg, resposta citada…)
+│   │   ├── tests/                     # test_whatsapp, test_painel, test_trava… + payloads da Evolution (texto, áudio .ogg, resposta citada…)
 │   │   ├── alfred-{inbox,semanal,vigia}.{service,timer}, alfred-inbox-api.service  # units de usuário
 │   │   └── about.md
 │   │
@@ -341,6 +343,8 @@ sudo systemctl restart alfred-researcher
 4. Salve
 5. Repita para cada tool
 
+> **Atualização de 25/10/2026:** `alfred_pendencias.py` (v1.2.0) e `alfred_tasks.py` (v1.1.0) passaram a usar a mesma trava entre processos do Inbox Assistant — reimporte as duas (cole o conteúdo novo por cima). Enquanto a versão antiga estiver instalada, o que o chat grava continua sem trava. Ver [gravação concorrente](services/inbox/about.md#gravação-concorrente-trava-entre-processos).
+
 ### Configurar os tokens nas Valves
 
 Após importar, clique no ícone de engrenagem de cada tool e preencha:
@@ -429,8 +433,10 @@ cd services/inbox
 ./run.sh pendencias      # fila aguardando resposta
 ./run.sh perguntar       # Alfred pergunta uma a uma no terminal e espera vou/nao
 ./run.sh responder <id> vou
-./run.sh serve           # API HTTP :7072 para o N8N
+./run.sh serve           # API HTTP :7072 para o N8N + Painel do Alfred em /painel
 ```
+
+**Painel do Alfred** — com a API no ar, `http://127.0.0.1:7072/painel` (só desta máquina; login com o `SHELL_EXECUTOR_TOKEN`) mostra as pendências, o rascunho que o Alfred propõe para cada resposta (**Autorizar envio** / **Não enviar** / **Agendar**; **Vou** / **Não vou** no e-mail), a agenda (**Desfazer**), os lotes de limpeza (**Aprovar** / **Recusar**) e o estado do sistema, atualizando a cada 15 s. Dependência nova `jinja2`: num venv existente rode `venv/bin/pip install -r requirements.txt` antes de reiniciar a API (sem ele a API sobe sem o painel e o log avisa). Detalhes: [about.md](services/inbox/about.md#painel-do-alfred).
 
 Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE`, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
 
@@ -444,10 +450,10 @@ Mensagens e **áudios** recebidos no WhatsApp passam pelo mesmo tratamento do e-
 
 1. **transcreve o áudio localmente** — ffmpeg converte o OGG/Opus do WhatsApp em WAV e o **gemma4** transcreve via Ollama (o áudio vai em base64 no campo `images` do `/api/generate`; fatias de 30 s); fallback `faster-whisper` se instalado;
 2. **classifica** com o mesmo padrão do e-mail (`whatsapp_classificar.md`, JSON Schema): `profissional` / `pessoal` / `grupo` / `automatico` / `spam` + "requer resposta?" + urgência;
-3. **espera ~20 min** (`atraso_minutos` em `perfis.yml → whatsapp:`): se Pedro responder a conversa direto pelo celular nesse tempo, nada é gerado; mensagens seguidas do contato viram uma pendência só;
+3. **espera ~20 min** (`atraso_minutos` em `perfis.yml → whatsapp:`): se Pedro responder a conversa direto pelo celular nesse tempo, nada é notificado nem enviado — o Alfred só registra um item `respondida_manual` com a mensagem do contato, o rascunho que teria proposto e a resposta de Pedro, lado a lado na aba **Resolvidas** do Painel; mensagens seguidas do contato viram uma pendência só;
 4. para contatos relevantes cria uma **pendência `whatsapp`** em `VAULT_ALFRED/pendencias/pendencias.yml` (mesmo esquema, `status: aguardando`, campo `resposta_texto`) com um texto explicativo (`pergunta_whatsapp.md`) e um recado de voz (`audio_pergunta_whatsapp.md` → edge-tts) em que Alfred resume a mensagem e pergunta **"o que você quer responder?"**;
 5. avisa Pedro no WhatsApp (resumo com `ref: <id>` + áudio) — pelo N8N (`services/inbox/n8n/alfred-whatsapp.json`) ou pelo próprio Python (`/whatsapp/webhook-async`) — e **no PC**: notificação com a sugestão de resposta escrita pelo Alfred e os botões **Enviar** (abre o rascunho para editar e confirmar) / **Não enviar** / **Agenda** (tarefa em `tasks.yml` + lembrete no PC + evento no Google Agenda já preenchido) / **Ouvir** — o resumo em áudio começa a tocar junto com a notificação (botão **Parar**) e o `.mp3` local é apagado 2 dias depois (a cópia fica no WhatsApp);
-6. **a resposta de Pedro é enviada ao contato**: ele responde *citando* a mensagem do Alfred (ou pelo botão Enviar no PC, `./run.sh responder-texto <id> "texto"`, o chat: "responde pro Carlos que…", ou `POST /pendencias/{id}/responder-texto`). `ignorar` fecha sem enviar; se Pedro responder o contato direto no celular, a pendência fecha sozinha.
+6. **a resposta de Pedro é enviada ao contato**: ele responde *citando* a mensagem do Alfred (ou pelo botão Enviar no PC, **Autorizar envio** no Painel, `./run.sh responder-texto <id> "texto"`, o chat: "responde pro Carlos que…", ou `POST /pendencias/{id}/responder-texto`). `ignorar` fecha sem enviar; se Pedro responder o contato direto no celular, a pendência fecha sozinha (guardando o rascunho do Alfred e a resposta real).
 
 ```bash
 docker compose up -d evolution-postgres evolution-api       # .env: EVOLUTION_API_KEY, EVOLUTION_POSTGRES_PASSWORD, WHATSAPP_NUMERO_PEDRO
@@ -457,7 +463,7 @@ cd services/inbox
 ./run.sh whatsapp webhook http://172.17.0.1:7072/whatsapp/webhook-async   # ou a URL do Webhook do N8N
 ./run.sh whatsapp status                                   # instância "open", fila
 ./run.sh responder-texto <id> "Carlos, mando até quinta."  # resposta → WhatsApp do contato
-venv/bin/python -m unittest tests.test_whatsapp -v         # 37 testes offline (inclui o formato real da Evolution v2.3.7)
+venv/bin/python -m unittest tests.test_whatsapp -v         # 63 testes offline (inclui o formato real da Evolution v2.3.7)
 ```
 
 Sem `EVOLUTION_URL` no `.env` (ou com `WHATSAPP_DRY_RUN=true`) **nenhuma mensagem sai da máquina**: os envios ficam em `logs/whatsapp_enviados.jsonl`. Pareamento, formatos de payload, configuração (`perfis.yml → whatsapp:`) e limitações: [`services/inbox/about.md`](services/inbox/about.md#whatsapp-poder-3--evolution-api).
@@ -479,7 +485,7 @@ services/scripts/alfred-switch.sh status
 | Desligar faz | Religar faz |
 |---|---|
 | para os timers (briefing 07:00, e-mail 07:30/18:30, podcast 19:00, vigia) e qualquer execução em andamento | `docker start` banco + Evolution |
-| para a API do Alfred (:7072) — WhatsApp deixa de ser processado | sobe a API |
+| para a API do Alfred (:7072) — WhatsApp deixa de ser processado e o Painel não abre | sobe a API |
 | `docker stop` da Evolution API (WhatsApp) e do banco dela | religa os timers (o vigia confere tudo em seguida) |
 | fecha as notificações que esperam clique (as pendências continuam aguardando) | reabre essas notificações |
 | descarrega os modelos do Ollama da VRAM (GPU livre para jogar) | — |
@@ -680,9 +686,9 @@ Scraper de portais públicos de licitação (ComprasNet, Portal de Compras SP) q
 
 Integração com WhatsApp via Evolution API: mensagens e áudios recebidos (transcrição local com gemma4) passam pelo mesmo tratamento do e-mail e viram uma pendência em que Alfred resume a mensagem e pergunta "o que você quer responder?" (texto + áudio); a resposta de Pedro é enviada de volta pelo WhatsApp.
 
-**Pipeline:** Evolution API (Docker) → webhook → Inbox Assistant (`whatsapp.py`: transcrever → classificar → pendência + áudio) → N8N ou Python avisa Pedro → resposta citada / CLI / chat / API → Evolution API `sendText`
+**Pipeline:** Evolution API (Docker) → webhook → Inbox Assistant (`whatsapp.py`: transcrever → classificar → pendência + áudio) → N8N ou Python avisa Pedro → resposta citada / CLI / chat / API / Painel → Evolution API `sendText`
 
-**Status:** ✅ Implementado e **validado com WhatsApp real em 2026-10-19** (instância no próprio número de Pedro, Evolution API "v2.3.7", sem N8N): texto e áudio viram pendência, resumo + áudio chegam a Pedro, a resposta citada é entregue ao contato, `ignorar` e resposta direta pelo celular fecham a pendência, e a notificação no PC (Enviar / Não enviar / Agenda / Ouvir) envia o rascunho. Depois da validação: **espera de ~20 min antes de resumir** (`atraso_minutos: 20` em `perfis.yml → whatsapp:`) — resumo, áudio e avisos só saem se Pedro não responder a conversa nesse tempo; se ele responder direto pelo celular antes, nada é gerado (testado offline, ainda não com WhatsApp real — ver [espera](services/inbox/about.md#espera-antes-de-resumir-atraso_minutos)). Falta validar o workflow N8N (stack Docker fora do ar nesta máquina) — ver [validação](services/inbox/about.md#validação-com-whatsapp-real-2026-10-19).
+**Status:** ✅ Implementado e **validado com WhatsApp real em 2026-10-19** (instância no próprio número de Pedro, Evolution API "v2.3.7", sem N8N): texto e áudio viram pendência, resumo + áudio chegam a Pedro, a resposta citada é entregue ao contato, `ignorar` e resposta direta pelo celular fecham a pendência, e a notificação no PC (Enviar / Não enviar / Agenda / Ouvir) envia o rascunho. Depois da validação: **espera de ~20 min antes de resumir** (`atraso_minutos: 20` em `perfis.yml → whatsapp:`) — resumo, áudio e avisos só saem se Pedro não responder a conversa nesse tempo; se ele responder direto pelo celular antes, nada é notificado nem enviado e fica só o registro com o rascunho que o Alfred proporia e a resposta de Pedro (testado offline, ainda não com WhatsApp real — ver [espera](services/inbox/about.md#espera-antes-de-resumir-atraso_minutos)). Falta validar o workflow N8N (stack Docker fora do ar nesta máquina) — ver [validação](services/inbox/about.md#validação-com-whatsapp-real-2026-10-19).
 
 **Agenda automática (20/10/2026):** evento, tarefa ou lembrete com data detectado numa mensagem de contato, no que Pedro escreve para si mesmo na conversa "Você" ("me lembra de pagar o boleto sexta") ou num "vou" de convite por e-mail vai para `VAULT_ALFRED/agenda/agenda.yml` e, pela extensão **Alfred — agenda** do Thunderbird, para o calendário "Agenda" (Google via CalDAV → celular), com notificação **[Ok] [Desfazer]**. Extensão validada num perfil de teste do Thunderbird 157; falta instalar no perfil real — ver [agenda](services/inbox/about.md#agenda--evento--tarefa--lembrete--calendário-do-thunderbird-agendapy).
 

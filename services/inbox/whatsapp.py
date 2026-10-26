@@ -10,7 +10,8 @@ Mensagens e áudios recebidos no WhatsApp passam pelo mesmo tratamento do e-mail
         ↓ classificar_whatsapp()          heurísticas + Ollama (JSON):
         ↓                                 profissional | pessoal | grupo | automatico | spam
     enfileirar_mensagem()                 espera `atraso_minutos` sem resposta de Pedro (logs/whatsapp_fila.json);
-        ↓ processar_fila()                fromMe na mesma conversa cancela — nada é gerado
+        ↓ processar_fila()                fromMe na mesma conversa cancela — só um registro respondida_manual
+        ↓                                 (rascunho do Alfred × resposta de Pedro), sem .md/áudio/aviso/envio
     criar_pendencia_whatsapp()            texto explicativo + áudio "o que você quer responder?"
         ↓                                 pendencias.yml: tipo=whatsapp, status=aguardando, resposta_texto=null
     responder_texto()                     registra a resposta de Pedro e envia pela Evolution API
@@ -18,7 +19,8 @@ Mensagens e áudios recebidos no WhatsApp passam pelo mesmo tratamento do e-mail
 A resposta de Pedro chega pelo MESMO webhook: ele cita (responde) a mensagem em que
 Alfred resumiu a conversa — essa mensagem carrega "ref: <id>" — e o texto citado vira
 responder_texto(). Se Pedro responder o contato direto do celular, a pendência fecha
-como "respondida_manual" (ou, se ainda estava na fila, sai dela). "ignorar" fecha sem enviar nada.
+como "respondida_manual" (ou, se ainda estava na fila, sai dela e vira um registro respondida_manual
+com o rascunho que o Alfred proporia). "ignorar" fecha sem enviar nada.
 
 Reutiliza core.py (pendencias.yml, vault, templates, TTS, notificação). Nenhuma função
 levanta exceção por falha de LLM/rede: degrada com log() e segue.
@@ -52,10 +54,10 @@ import agenda  # noqa: E402
 SEEN_FILE = core.PROJECT_ROOT / "logs" / "whatsapp_seen.json"
 FILA_FILE = core.PROJECT_ROOT / "logs" / "whatsapp_fila.json"   # mensagens esperando atraso_minutos
 
-# O /whatsapp/webhook-async processa cada mensagem numa thread; criar_pendencia_whatsapp lê o
-# pendencias.yml, gasta ~15 s em LLM + TTS e só então grava — duas mensagens ao mesmo tempo
-# apagavam uma das pendências. Também garante que o eco do envio só é tratado depois de
-# pergunta_msg_id gravado. RLock: processar → responder_texto / notificar_pedro reentra.
+# O /whatsapp/webhook-async processa cada mensagem numa thread: _LOCK serializa o fluxo dentro da API
+# (garante que o eco do envio só é tratado depois de pergunta_msg_id / envio.message_id gravados).
+# RLock: processar → responder_texto / notificar_pedro reentra. As gravações de pendencias.yml usam
+# também core.trava_pendencias() (entre PROCESSOS: CLI, aguardadores, ciclo, tools) — ordem: _LOCK → trava.
 _LOCK = threading.RLock()
 
 
@@ -535,16 +537,33 @@ def criar_pendencia_whatsapp(msg: dict, cat: dict, cfg: dict, nome: str, transcr
                              mensagens: Optional[list[dict]] = None) -> dict:
     """`mensagens` = [{message_id, tipo, texto, em}] quando várias mensagens seguidas esperaram juntas na
     fila (msg["texto"] já traz os textos combinados); sem ela, a pendência nasce de uma mensagem só."""
+    contato  = _contato_legivel(msg)
+    conteudo = (msg.get("texto") or (transcricao or {}).get("texto") or "").strip()
+    # id reservado na trava entre processos; LLM + TTS fora dela; o yml só é relido e gravado no fim
+    pid = core._reservar_id(_base_id(contato, cat.get("resumo") or conteudo))
+    try:
+        entry = _montar_pendencia_whatsapp(pid, msg, cat, cfg, nome, transcricao, mensagens, contato, conteudo)
+    except BaseException:
+        core._soltar_reserva(pid)
+        raise
+    with core.trava_pendencias():
+        data = core._load_pend()
+        data["pendencias"].append(entry)
+        core._save_pend(data)
+    log(f"[whatsapp] Pendência {pid} criada ({cat.get('categoria')}, {cat.get('urgencia')}) — "
+        f"md{' + mp3' if entry['arquivos']['mp3'] else ''}")
+    return entry
+
+
+def _montar_pendencia_whatsapp(pid: str, msg: dict, cat: dict, cfg: dict, nome: str, transcricao: Optional[dict],
+                               mensagens: Optional[list[dict]], contato: str, conteudo: str) -> dict:
+    """Pergunta (.md) + rascunho + áudio → entrada de pendencias.yml (ainda não gravada)."""
     pcfg   = cfg.get("pendencias") or {}
     perfil = cfg.get("_perfil") or {}
     now    = core._now()
-    data   = core._load_pend()
-    contato  = _contato_legivel(msg)
-    conteudo = (msg.get("texto") or (transcricao or {}).get("texto") or "").strip()
     mensagens = mensagens or [{"message_id": msg.get("message_id"), "tipo": msg.get("tipo_msg"),
                                "texto": conteudo, "em": msg.get("timestamp")}]
     desc = _descricao_tipo(msg, transcricao) if len(mensagens) == 1 else _descricao_varias(mensagens)
-    pid = core._novo_id(_base_id(contato, cat.get("resumo") or conteudo), {p.get("id") for p in data["pendencias"]})
     titulo = f"{contato}: {(cat.get('resumo') or conteudo or desc)[:90]}"
 
     prompt = render_template(pcfg.get("template_pergunta", "pergunta_whatsapp"), {
@@ -672,27 +691,35 @@ def criar_pendencia_whatsapp(msg: dict, cat: dict, cfg: dict, nome: str, transcr
         "resposta_texto": None,
         "nota":           None,
     }
-    data["pendencias"].append(entry)
-    core._save_pend(data)
-    log(f"[whatsapp] Pendência {pid} criada ({cat.get('categoria')}, {cat.get('urgencia')}) — md{' + mp3' if tem_audio else ''}")
     return entry
 
 
-def agrupar_mensagem(entry_id: str, msg: dict, conteudo: str) -> dict:
-    """Nova mensagem do mesmo contato → entra na pendência aberta (sem novo LLM/áudio)."""
-    data = core._load_pend()
-    entry = next((p for p in data["pendencias"] if p.get("id") == entry_id), None)
-    if not entry:
-        raise KeyError(entry_id)
-    wa = entry.setdefault("whatsapp", {})
-    wa.setdefault("mensagens", []).append({"message_id": msg.get("message_id"), "tipo": msg.get("tipo_msg"),
-                                           "texto": conteudo, "em": msg.get("timestamp")})
-    wa["atualizado_em"] = core._now().isoformat(timespec="minutes")
-    wa["texto"] = ((wa.get("texto") or "") + "\n" + conteudo).strip()
-    wa["key"] = msg.get("key") or wa.get("key")               # a resposta cita a última mensagem
-    if conteudo:
-        wa["quoted_message"] = {"conversation": conteudo[:500]}
-    core._save_pend(data)
+def agrupar_mensagem(entry_id: str, msg: dict, conteudo: str) -> Optional[dict]:
+    """
+    Nova mensagem do mesmo contato → entra na pendência aberta (sem novo LLM/áudio).
+    A decisão de agrupar vem de uma leitura feita antes da transcrição/classificação (segundos a minutos):
+    dentro da trava a pendência é conferida de novo. Se outro processo (notificação no PC, CLI, tool) já a
+    resolveu, ou ela não é mais do mesmo contato, devolve None sem gravar nada — quem chamou segue o fluxo
+    normal (fila ou pendência nova) e a mensagem não se perde. KeyError se o id não existe.
+    """
+    with core.trava_pendencias():
+        data = core._load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == entry_id), None)
+        if not entry:
+            raise KeyError(entry_id)
+        wa = entry.get("whatsapp") or {}
+        if entry.get("status") != "aguardando" or wa.get("remote_jid") != msg.get("remote_jid"):
+            log(f"[whatsapp] {entry_id} não está mais aguardando ({entry.get('status')}) — mensagem nova não agrupada")
+            return None
+        wa = entry.setdefault("whatsapp", {})
+        wa.setdefault("mensagens", []).append({"message_id": msg.get("message_id"), "tipo": msg.get("tipo_msg"),
+                                               "texto": conteudo, "em": msg.get("timestamp")})
+        wa["atualizado_em"] = core._now().isoformat(timespec="minutes")
+        wa["texto"] = ((wa.get("texto") or "") + "\n" + conteudo).strip()
+        wa["key"] = msg.get("key") or wa.get("key")               # a resposta cita a última mensagem
+        if conteudo:
+            wa["quoted_message"] = {"conversation": conteudo[:500]}
+        core._save_pend(data)
     md = core.vault() / ((entry.get("arquivos") or {}).get("md") or "")
     if md.is_file():
         txt = md.read_text(encoding="utf-8").rstrip()
@@ -711,7 +738,8 @@ def agrupar_mensagem(entry_id: str, msg: dict, conteudo: str) -> dict:
 # Com a instância no número de Pedro, toda conversa passa pelo Alfred — inclusive as que ele está
 # respondendo em tempo real. Receber (transcrever + classificar) é barato e acontece na hora; a parte
 # cara e barulhenta (pergunta + rascunho no LLM, TTS, notificação no PC, aviso pelo WhatsApp) espera
-# na fila. Uma mensagem fromMe na mesma conversa cancela o item; mensagens seguidas do contato
+# na fila. Uma mensagem fromMe na mesma conversa cancela o item (registrar_resposta_direta guarda só o
+# rascunho que o Alfred proporia, sem .md/áudio/aviso); mensagens seguidas do contato
 # entram no mesmo item (o prazo continua contado da primeira). Quem dispara ao vencer é a thread de
 # fundo da API (main.py, a cada ~60 s) ou `inbox-assistant.py whatsapp processar-fila`.
 
@@ -752,38 +780,49 @@ def enfileirar_mensagem(msg: dict, cat: dict, transcricao: Optional[dict], conte
     e o prazo não muda. `opcoes` = {enviar, notificar, notificar_desktop} do webhook, usadas quando o
     prazo vencer. → (item, juntou).
     """
-    fila = _load_fila()
     now = core._now()
     m = dict(msg)
     if m.get("audio"):   # já transcrito: a fila não guarda o base64 nem a mediaKey
         m["audio"] = {k: v for k, v in m["audio"].items() if k not in ("base64", "mensagem")}
     parte = {"msg": m, "conteudo": conteudo, "cat": cat, "transcricao": transcricao,
              "recebido_em": now.isoformat(timespec="seconds")}
-    item = next((i for i in fila if i.get("remote_jid") == msg.get("remote_jid")), None)
-    if item:
-        item["mensagens"].append(parte)
-    else:
-        item = {"id": msg.get("message_id") or f"{msg.get('remote_jid')}-{now:%H%M%S}", "cfg": nome,
-                "remote_jid": msg.get("remote_jid"), "contato": _contato_legivel(msg),
-                "criado_em": now.isoformat(timespec="seconds"),
-                "prazo": (now + timedelta(minutes=atraso)).isoformat(timespec="seconds"),
-                **opcoes, "tentativas": 0, "mensagens": [parte]}
-        fila.append(item)
-    _save_fila(fila)
+    with core.trava_arquivo(FILA_FILE):   # API e CLI (simular / processar-fila) mexem na mesma fila
+        fila = _load_fila()
+        item = next((i for i in fila if i.get("remote_jid") == msg.get("remote_jid")), None)
+        if item:
+            item["mensagens"].append(parte)
+        else:
+            item = {"id": msg.get("message_id") or f"{msg.get('remote_jid')}-{now:%H%M%S}", "cfg": nome,
+                    "remote_jid": msg.get("remote_jid"), "contato": _contato_legivel(msg),
+                    "criado_em": now.isoformat(timespec="seconds"),
+                    "prazo": (now + timedelta(minutes=atraso)).isoformat(timespec="seconds"),
+                    **opcoes, "tentativas": 0, "mensagens": [parte]}
+            fila.append(item)
+        _save_fila(fila)
     log(f"[whatsapp] {item['contato']} na fila até {item['prazo'][11:16]} ({len(item['mensagens'])} mensagem(ns))")
     return item, len(item["mensagens"]) > 1
 
 
+def retirar_da_fila(remote_jid: str) -> list[dict]:
+    """Pedro escreveu na conversa antes do prazo → os itens do contato saem da fila. → itens retirados."""
+    with core.trava_arquivo(FILA_FILE):
+        fila = _load_fila()
+        fora = [i for i in fila if i.get("remote_jid") == remote_jid]
+        if not fora:
+            return []
+        _save_fila([i for i in fila if i.get("remote_jid") != remote_jid])
+    n = sum(len(i.get("mensagens") or []) for i in fora)
+    log(f"[whatsapp] Pedro respondeu {fora[0].get('contato')} antes do prazo — {n} mensagem(ns) saíram da fila")
+    return fora
+
+
+def _ids_do_item(item: dict) -> list[str]:
+    return [p["msg"].get("message_id") for p in item.get("mensagens") or []]
+
+
 def cancelar_fila(remote_jid: str) -> list[str]:
-    """Pedro escreveu na conversa antes do prazo → o contato sai da fila. → message_ids cancelados."""
-    fila = _load_fila()
-    fora = [i for i in fila if i.get("remote_jid") == remote_jid]
-    if not fora:
-        return []
-    _save_fila([i for i in fila if i.get("remote_jid") != remote_jid])
-    ids = [p["msg"].get("message_id") for i in fora for p in i.get("mensagens") or []]
-    log(f"[whatsapp] Pedro respondeu {fora[0].get('contato')} antes do prazo — {len(ids)} mensagem(ns) saíram da fila")
-    return ids
+    """Como retirar_da_fila, mas devolve só os message_ids cancelados."""
+    return [mid for i in retirar_da_fila(remote_jid) for mid in _ids_do_item(i)]
 
 
 def listar_fila() -> list[dict]:
@@ -847,21 +886,36 @@ def processar_fila(todos: bool = False, enviar: Optional[bool] = None) -> list[d
     webhook pediu (enviar=False sobrepõe: nunca chama a Evolution). O item só sai da fila depois da pendência
     gravada; se der erro, tenta de novo na próxima volta (até 3 vezes).
     """
-    fila = _load_fila()
     agora = core._now()
     resultados = []
-    for item in [i for i in fila if todos or (core._parse_dt(i.get("prazo")) or agora) <= agora]:
+    for item in [i for i in _load_fila() if todos or (core._parse_dt(i.get("prazo")) or agora) <= agora]:
+        sai = True
         try:
             resultados.append(_criar_do_item(item, enviar))
-            fila.remove(item)
         except Exception as e:
             item["tentativas"] = int(item.get("tentativas") or 0) + 1
             log(f"[whatsapp] fila: erro criando a pendência de {item.get('contato')} "
                 f"(tentativa {item['tentativas']}/3): {e}")
-            if item["tentativas"] >= 3:
-                fila.remove(item)
+            sai = item["tentativas"] >= 3
+            if sai:
                 resultados.append({"acao": "erro", "fila": {"id": item.get("id")}, "motivo": str(e)[:200]})
-        _save_fila(fila)
+        # a fila é relida na trava: outro processo pode ter mexido nela enquanto o LLM trabalhava
+        with core.trava_arquivo(FILA_FILE):
+            fila = _load_fila()
+            atual = next((i for i in fila if i.get("id") == item.get("id")
+                          and i.get("remote_jid") == item.get("remote_jid")), None)
+            if atual is not None:
+                if not sai:
+                    atual["tentativas"] = item["tentativas"]
+                else:
+                    # mensagens que chegaram depois de o item ser lido continuam esperando
+                    resto = [p for p in atual.get("mensagens") or []
+                             if p["msg"].get("message_id") not in set(_ids_do_item(item))]
+                    if resto:
+                        atual["mensagens"] = resto
+                    else:
+                        fila.remove(atual)
+                _save_fila(fila)
     return resultados
 
 
@@ -929,12 +983,16 @@ def notificar_pedro(pid: str, agrupada: Optional[dict] = None, enviar: bool = Tr
         log("[whatsapp] WHATSAPP_NUMERO_PEDRO vazio — não sei para quem mandar o resumo")
         res["erro"] = "WHATSAPP_NUMERO_PEDRO não definido"
         return res
-    r = enviar_texto(destino, notif["texto"])
+    r = enviar_texto(destino, notif["texto"])   # rede fora da trava
     res["envio_texto"] = r
     if r.get("ok") and r.get("message_id") and not agrupada:
-        entry.setdefault("whatsapp", {})["pergunta_msg_id"] = r["message_id"]
-        entry["lembrado_em"] = core._now().isoformat(timespec="minutes")
-        core._save_pend(data)
+        with core.trava_pendencias():
+            data = core._load_pend()
+            atual = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+            if atual is not None:
+                atual.setdefault("whatsapp", {})["pergunta_msg_id"] = r["message_id"]
+                atual["lembrado_em"] = core._now().isoformat(timespec="minutes")
+                core._save_pend(data)
     if notif.get("audio_path") and Path(notif["audio_path"]).exists():
         res["envio_audio"] = enviar_audio(destino, Path(notif["audio_path"]))
     return res
@@ -963,61 +1021,79 @@ def responder_texto(pid: str, texto: str, enviar: bool = True, origem: str = "",
     Registra a resposta de Pedro (texto livre) e a envia ao contato pela Evolution API.
     'ignorar' fecha a pendência sem enviar. Falha no envio devolve a pendência para
     'aguardando' com o texto guardado em resposta_texto (basta repetir o comando).
-    Levanta KeyError (id) / ValueError (tipo, status, texto vazio).
+    Levanta KeyError (id) / ValueError (tipo, texto vazio) / core.PendenciaJaResolvida (status ≠ aguardando,
+    subclasse de ValueError com a mesma mensagem de antes).
+
+    Reservar → enviar → concluir: a pendência sai de 'aguardando' numa transação curta na trava entre
+    processos ANTES do envio; o envio (rede, pode demorar) fica fora da trava; o resultado é gravado numa
+    segunda transação. Dois cliques / duas origens ao mesmo tempo (painel, notificação, CLI, WhatsApp) só
+    enviam uma vez: o segundo encontra o status já mudado e levanta PendenciaJaResolvida.
     """
     texto = (texto or "").strip()
-    data = core._load_pend()
-    entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
-    if not entry:
-        raise KeyError(f"Pendência não encontrada: {pid}")
-    if entry.get("tipo") != "whatsapp":
-        raise ValueError(f"{pid} não é pendência de WhatsApp — use responder {pid} vou|nao-vou")
-    if entry.get("status") != "aguardando":
-        raise ValueError(f"Pendência {pid} já está com status '{entry.get('status')}'")
-    if not texto:
-        raise ValueError("Texto da resposta vazio")
-
     now = core._now()
-    wa = entry.setdefault("whatsapp", {})
-    entry["respondido_em"] = now.isoformat(timespec="minutes")
-    entry["nota"] = (nota or "").strip() or None
+    with core.trava_pendencias():
+        data = core._load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+        if not entry:
+            raise KeyError(f"Pendência não encontrada: {pid}")
+        if entry.get("tipo") != "whatsapp":
+            raise ValueError(f"{pid} não é pendência de WhatsApp — use responder {pid} vou|nao-vou")
+        if entry.get("status") != "aguardando":
+            raise core.PendenciaJaResolvida(entry)
+        if not texto:
+            raise ValueError("Texto da resposta vazio")
 
-    if IGNORAR_RE.match(texto):
-        entry["status"] = "ignorada"
-        entry["resposta"] = "ignorada"
-        core._save_pend(data)
+        wa = entry.setdefault("whatsapp", {})
+        entry["respondido_em"] = now.isoformat(timespec="minutes")
+        entry["nota"] = (nota or "").strip() or None
+        entry["respondido_via"] = core._via(origem)
+        ignorar = bool(IGNORAR_RE.match(texto))
+        if ignorar:
+            entry["status"] = "ignorada"
+            entry["resposta"] = "ignorada"
+        else:
+            entry["resposta_texto"] = texto
+            entry["resposta"] = "texto"
+            entry["status"] = "respondida"
+            wa["envio"] = {"solicitado_em": now.isoformat(timespec="minutes"), "enviar": bool(enviar),
+                           "ok": None, "simulado": None, "message_id": None, "erro": None}
+        core._save_pend(data)   # salva ANTES de enviar: o eco fromMe do próprio envio não deve reabrir nada
+
+    if ignorar:
         _anexar_resposta_md(entry, "IGNORADA", None, now, origem)
         log(f"[whatsapp] {pid} → ignorada")
         return entry
-
-    entry["resposta_texto"] = texto
-    entry["resposta"] = "texto"
-    entry["status"] = "respondida"
-    wa["envio"] = {"solicitado_em": now.isoformat(timespec="minutes"), "enviar": bool(enviar),
-                   "ok": None, "simulado": None, "message_id": None, "erro": None}
-    core._save_pend(data)   # salva ANTES de enviar: o eco fromMe do próprio envio não deve reabrir nada
 
     if enviar:
         destino = wa.get("remote_jid") if wa.get("grupo") else (wa.get("numero") or jid_para_numero(wa.get("remote_jid")))
         quoted = {"key": wa.get("key"), "message": wa.get("quoted_message") or {}} if wa.get("key") else None
         r = enviar_texto(destino, texto, quoted=quoted)
-        wa["envio"].update({
+        resultado = {
             "ok": bool(r.get("ok")), "simulado": bool(r.get("simulado")), "message_id": r.get("message_id"),
             "erro": None if r.get("ok") else (r.get("erro") or str(r.get("resposta"))[:200]),
             "destino": destino,
-        })
+        }
+        with core.trava_pendencias():
+            data = core._load_pend()
+            atual = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+            if atual is not None:   # relida: preserva o que outro processo gravou entre as transações
+                entry = atual
+            wa = entry.setdefault("whatsapp", {})
+            wa["envio"] = {**(wa.get("envio") or {}), **resultado}
+            if not r.get("ok"):
+                entry["status"] = "aguardando"    # resposta guardada; repetir o comando reenvia
+                entry["resposta"] = None
+                entry["respondido_via"] = None
+            if atual is not None:
+                core._save_pend(data)
         if not r.get("ok"):
-            entry["status"] = "aguardando"    # resposta guardada; repetir o comando reenvia
-            entry["resposta"] = None
-            core._save_pend(data)
             log(f"[whatsapp] {pid}: envio FALHOU ({wa['envio']['erro']}) — pendência continua aguardando")
             return entry
-        core._save_pend(data)
         rot = "RESPONDIDA (envio simulado)" if r.get("simulado") else "RESPONDIDA (enviada pelo WhatsApp)"
     else:
         rot = "RESPONDIDA (sem envio)"
     _anexar_resposta_md(entry, rot, texto, now, origem)
-    log(f"[whatsapp] {pid} → respondida" + (" (simulado)" if wa["envio"].get("simulado") else ""))
+    log(f"[whatsapp] {pid} → respondida" + (" (simulado)" if (wa.get("envio") or {}).get("simulado") else ""))
     return entry
 
 
@@ -1104,24 +1180,25 @@ def agendar_pendencia(pid: str, quando: datetime, tem_hora: bool = True, titulo:
     whatsapp.lembrar_em (a notificação volta nesse horário; a pendência continua aguardando) e devolve o
     link do Google Agenda. → {"task_id", "lembrar_em", "google_url", "titulo"}.
     """
-    data = core._load_pend()
-    entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
-    if not entry:
-        raise KeyError(f"Pendência não encontrada: {pid}")
-    if entry.get("status") != "aguardando":
-        raise ValueError(f"Pendência {pid} já está com status '{entry.get('status')}'")
-    wa = entry.setdefault("whatsapp", {})
-    contato = wa.get("contato") or entry.get("titulo")
-    titulo = (titulo or ((wa.get("compromisso") or {}).get("titulo")) or f"Responder {contato} (WhatsApp)").strip()
-    resumo = (entry.get("evento") or {}).get("resumo") or ""
-    detalhes = f"{resumo}\n\nMensagem de {contato}: “{(wa.get('texto') or '')[:400]}”\nPendência Alfred: {pid}"
-    tid = core._add_task(f"{titulo}" + (f" — {quando:%H:%M}" if tem_hora else ""),
-                         quando.strftime("%Y-%m-%d"), ["whatsapp", "alfred", core._ascii(contato).lower()[:30]])
-    url = google_agenda_url(titulo, quando, tem_hora, detalhes)
-    wa["lembrar_em"] = quando.isoformat(timespec="minutes")
-    wa["agenda"] = {"task_id": tid, "quando": wa["lembrar_em"], "tem_hora": tem_hora, "titulo": titulo,
-                    "criado_em": core._now().isoformat(timespec="minutes")}
-    core._save_pend(data)
+    with core.trava_pendencias():   # tarefa em tasks.yml aninhada (ordem pendências → tasks)
+        data = core._load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+        if not entry:
+            raise KeyError(f"Pendência não encontrada: {pid}")
+        if entry.get("status") != "aguardando":
+            raise core.PendenciaJaResolvida(entry)
+        wa = entry.setdefault("whatsapp", {})
+        contato = wa.get("contato") or entry.get("titulo")
+        titulo = (titulo or ((wa.get("compromisso") or {}).get("titulo")) or f"Responder {contato} (WhatsApp)").strip()
+        resumo = (entry.get("evento") or {}).get("resumo") or ""
+        detalhes = f"{resumo}\n\nMensagem de {contato}: “{(wa.get('texto') or '')[:400]}”\nPendência Alfred: {pid}"
+        tid = core._add_task(f"{titulo}" + (f" — {quando:%H:%M}" if tem_hora else ""),
+                             quando.strftime("%Y-%m-%d"), ["whatsapp", "alfred", core._ascii(contato).lower()[:30]])
+        url = google_agenda_url(titulo, quando, tem_hora, detalhes)
+        wa["lembrar_em"] = quando.isoformat(timespec="minutes")
+        wa["agenda"] = {"task_id": tid, "quando": wa["lembrar_em"], "tem_hora": tem_hora, "titulo": titulo,
+                        "criado_em": core._now().isoformat(timespec="minutes")}
+        core._save_pend(data)
     _anexar_agenda_md(entry, titulo, quando, tem_hora, tid)
     log(f"[whatsapp] {pid} → agenda: tarefa #{tid}, lembrete {wa['lembrar_em']}")
     return {"task_id": tid, "lembrar_em": wa["lembrar_em"], "google_url": url, "titulo": titulo}
@@ -1181,19 +1258,110 @@ def _pendencia_aguardando_do_jid(remote_jid: str) -> Optional[dict]:
     return None
 
 
-def _fechar_manual(pid: str, texto: str, msg: dict) -> dict:
-    """Pedro respondeu o contato direto do celular → fecha a pendência sem enviar nada."""
-    data = core._load_pend()
-    entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+def _fechar_manual(pid: str, texto: str, msg: dict) -> Optional[dict]:
+    """
+    Pedro respondeu o contato direto do celular → fecha a pendência sem enviar nada. O rascunho do Alfred
+    (whatsapp.rascunho) fica e a resposta real vai para resposta_texto — o painel mostra os dois lado a lado.
+    None se a pendência já saiu de 'aguardando' por outro caminho no meio tempo.
+    """
     now = core._now()
-    entry["status"] = "respondida_manual"
-    entry["resposta"] = "texto"
-    entry["resposta_texto"] = texto or f"({msg.get('tipo_msg')} enviado direto pelo celular)"
-    entry["respondido_em"] = now.isoformat(timespec="minutes")
-    entry.setdefault("whatsapp", {})["envio"] = {"manual": True, "message_id": msg.get("message_id")}
-    core._save_pend(data)
+    with core.trava_pendencias():
+        data = core._load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+        if not entry or entry.get("status") != "aguardando":
+            return None
+        entry["status"] = "respondida_manual"
+        entry["resposta"] = "texto"
+        entry["resposta_texto"] = texto or f"({msg.get('tipo_msg')} enviado direto pelo celular)"
+        entry["respondido_em"] = now.isoformat(timespec="minutes")
+        entry["respondido_via"] = "celular"
+        entry.setdefault("whatsapp", {})["envio"] = {"manual": True, "message_id": msg.get("message_id")}
+        core._save_pend(data)
     _anexar_resposta_md(entry, "RESPONDIDA DIRETO NO CELULAR", texto, now, "fromMe")
     log(f"[whatsapp] {pid} → respondida_manual (Pedro respondeu direto)")
+    return entry
+
+
+def registrar_resposta_direta(item_fila: dict, msg_pedro: dict) -> dict:
+    """
+    Pedro respondeu pelo celular enquanto a conversa esperava `atraso_minutos`: nada de pendência aguardando,
+    .md, áudio, notificação ou envio — só um registro `respondida_manual` com a mensagem do contato, o
+    rascunho que o Alfred teria proposto (mesma lógica de whatsapp_rascunho.md, gerado agora) e a resposta
+    que Pedro deu. LLM fora do ar → rascunho None e o registro sai assim mesmo. → entrada gravada.
+    Só chega aqui o que entrou na fila (já passou por grupos / contatos_ignorar / confiança / relevância).
+    """
+    msg, cat, transcricao, mensagens = _combinar(item_fila)
+    nome, cfg = carregar_cfg(item_fila.get("cfg"))
+    contato = _contato_legivel(msg)
+    conteudo = (msg.get("texto") or (transcricao or {}).get("texto") or "").strip()
+    desc = _descricao_tipo(msg, transcricao) if len(mensagens) == 1 else _descricao_varias(mensagens)
+    try:   # LLM fora da trava (até ~2 min no pior caso)
+        sugestao = gerar_rascunho(contato, conteudo, desc, cfg)
+    except Exception as e:
+        log(f"[whatsapp] rascunho da resposta direta falhou: {e}")
+        sugestao = {"rascunho": "", "compromisso": None}
+    now = core._now()
+    criado = core._parse_dt(item_fila.get("criado_em"))
+    entry = {
+        "id":        None,   # calculado dentro da trava
+        "tipo":      "whatsapp",
+        "status":    "respondida_manual",
+        "titulo":    f"{contato}: {(cat.get('resumo') or conteudo or desc)[:90]}",
+        "criado_em": criado.isoformat(timespec="minutes") if criado else now.isoformat(timespec="minutes"),
+        "inbox":     nome,
+        "evento": {
+            "organizador": contato, "quem": f"{contato} ({formatar_numero(msg.get('numero'))})",
+            "data_inicio": None, "data_fim": None, "local": "", "online": None, "link": "",
+            "custo": "desconhecido", "o_que_pedem": "responder a mensagem", "prazo_resposta": None,
+            "resumo": cat.get("resumo") or conteudo[:300],
+        },
+        "email": None,
+        "whatsapp": {
+            "instancia":   msg.get("instancia"),
+            "remote_jid":  msg.get("remote_jid"),
+            "numero":      msg.get("numero"),
+            "contato":     contato,
+            "grupo":       bool(msg.get("grupo")),
+            "message_id":  msg.get("message_id"),
+            "tipo_msg":    msg.get("tipo_msg"),
+            "texto":       conteudo,
+            "transcricao": ({k: transcricao.get(k) for k in ("metodo", "duracao_s", "segmentos", "cortado", "erro")}
+                            if transcricao else None),
+            "categoria":   cat.get("categoria"), "confianca": cat.get("confianca"),
+            "urgencia":    cat.get("urgencia"), "motivo": cat.get("motivo"),
+            "recebido_em": msg.get("timestamp"),
+            "key":         msg.get("key"),
+            "quoted_message": {"conversation": mensagens[-1]["texto"][:500]} if mensagens[-1].get("texto") else None,
+            "mensagens":   mensagens,
+            "atualizado_em": now.isoformat(timespec="minutes"),
+            "pergunta_msg_id": None,
+            "envio":       {"manual": True, "message_id": msg_pedro.get("message_id")},
+            "rascunho":    sugestao.get("rascunho") or None,
+            "compromisso": sugestao.get("compromisso"),
+            "agenda":      None,
+            "respondida_na_espera": True,   # a pendência nunca chegou a existir
+        },
+        "arquivos":       {"md": None, "mp3": None},
+        "resposta_links": None,
+        "lembrado_em":    None,
+        "respondido_em":  now.isoformat(timespec="minutes"),
+        "resposta":       "texto",
+        "resposta_texto": msg_pedro.get("texto") or f"({msg_pedro.get('tipo_msg')} enviado direto pelo celular)",
+        "respondido_via": "celular",
+        "nota":           None,
+    }
+    with core.trava_pendencias():
+        data = core._load_pend()
+        dup = next((d for d in (_ja_processada(data["pendencias"], m["message_id"])
+                                for m in mensagens if m.get("message_id")) if d), None)
+        if dup:   # outro processo já transformou estas mensagens em pendência
+            log(f"[whatsapp] mensagens de {contato} já estão na pendência {dup.get('id')} — sem novo registro")
+            return dup
+        entry["id"] = core._novo_id(_base_id(contato, cat.get("resumo") or conteudo), core._ids_ocupados(data))
+        data["pendencias"].append(entry)
+        core._save_pend(data)
+    log(f"[whatsapp] {entry['id']} → respondida_manual na espera (Pedro respondeu {contato} pelo celular; "
+        f"rascunho {'registrado' if entry['whatsapp']['rascunho'] else 'indisponível'})")
     return entry
 
 
@@ -1217,6 +1385,35 @@ def _conversa_comigo(msg: dict) -> bool:
         return bool(msg.get("dono")) and msg.get("numero") == msg.get("dono")
     pedro = numero_pedro()
     return bool(pedro) and msg.get("numero") == pedro
+
+
+# sendText leva no máximo ~60 s (timeout do lib_whatsapp); com folga, e solicitado_em tem precisão de minuto
+ENVIO_EM_CURSO_MAX = timedelta(minutes=5)
+
+
+def _envio_em_curso(msg: dict) -> bool:
+    """
+    fromMe que é o próprio envio de responder_texto ainda sem message_id gravado: a T1 já marcou a pendência
+    do mesmo contato como 'respondida' com envio.ok=None (envio em curso, fora da trava) e o texto é o mesmo.
+    Cobre o eco que a Evolution entrega antes até de lib_whatsapp registrar o id enviado.
+    Só vale por ENVIO_EM_CURSO_MAX: se o processo morreu entre a T1 e a T2, o envio.ok=None fica para sempre e
+    uma mensagem manual de Pedro com o mesmo texto não pode ser confundida com eco depois disso.
+    """
+    texto = " ".join((msg.get("texto") or "").split())
+    if not texto or msg.get("grupo"):
+        return False
+    limite = core._now() - ENVIO_EM_CURSO_MAX
+    for p in core.listar_pendencias("todas"):
+        wa = p.get("whatsapp") or {}
+        envio = wa.get("envio") or {}
+        solicitado = core._parse_dt(envio.get("solicitado_em")) if envio else None
+        if (p.get("tipo") == "whatsapp" and p.get("status") == "respondida" and envio
+                and envio.get("ok") is None and envio.get("enviar") and not envio.get("manual")
+                and solicitado and solicitado >= limite
+                and wa.get("remote_jid") == msg.get("remote_jid")
+                and " ".join((p.get("resposta_texto") or "").split()) == texto):
+            return True
+    return False
 
 
 def _eco_do_alfred(msg: dict) -> bool:
@@ -1272,7 +1469,7 @@ def limpar_audios(dias: Optional[float] = None, simular: bool = False) -> dict:
     limite = datetime.now() - timedelta(days=dias)
     pd = core.pend_dir().resolve()
     removidos, mantidos, bytes_liberados = [], 0, 0
-    if True:   # @_serializado: mesmo lock do processamento de mensagens
+    with core.trava_pendencias():   # só stat/unlink de arquivos locais dentro da trava (trecho curto)
         data = core._load_pend()
         mudou = False
         for p in data["pendencias"]:
@@ -1356,7 +1553,9 @@ def processar_mensagem_whatsapp(
     `notificar=True` faz o próprio Python mandar (sem N8N); `enviar=False` nunca chama a Evolution.
     Com `atraso_minutos` (perfis.yml; o parâmetro sobrepõe) > 0, mensagem relevante sem pendência aberta do
     contato vira acao=agendada + "prazo": pendência, áudio e avisos só quando processar_fila() achar o prazo
-    vencido — com as mesmas opções enviar/notificar/notificar_desktop.
+    vencido — com as mesmas opções enviar/notificar/notificar_desktop. Um fromMe de Pedro na conversa antes
+    do prazo tira o contato da fila ("fila_cancelada": [message_ids]) e grava um item respondida_manual
+    ("respondidas_na_espera": [ids]; no caso só-fila, "pendencia" = esse item).
     """
     res: dict = {"acao": "ignorada", "motivo": "", "mensagem": None, "classificacao": None,
                  "transcricao": None, "pendencia": None, "notificacao": None, "envio": None}
@@ -1378,18 +1577,37 @@ def processar_mensagem_whatsapp(
             if mid in (wa.get("pergunta_msg_id"), (wa.get("envio") or {}).get("message_id")):
                 res["motivo"] = "eco de mensagem enviada pelo Alfred"
                 return res
+        # envio feito por OUTRO processo (notificação no PC, CLI) cujo eco chega antes de o message_id ir
+        # para pendencias.yml (T2 de responder_texto). A conversa "você" fica de fora: _nota_para_mim já
+        # trata o eco dela do jeito dela.
+        if not _conversa_comigo(msg) and (enviado_pelo_alfred(mid) or _envio_em_curso(msg)):
+            res["motivo"] = "eco de mensagem enviada pelo Alfred"
+            return res
 
-    # ── Pedro escreveu na conversa: o que esperava na fila daquele contato não vira pendência ──
-    # (o eco de uma resposta enviada pelo Alfred não conta: Pedro respondeu a pendência anterior e
-    #  pode nem ter visto a mensagem nova, que ainda não foi avisada)
-    cancelados = cancelar_fila(msg.get("remote_jid")) if msg.get("from_me") else []
+    # ── Pedro escreveu na conversa: o que esperava na fila daquele contato não vira pendência aguardando ──
+    # nem notificação; vira um registro respondida_manual com o rascunho que o Alfred teria proposto e a
+    # resposta que Pedro deu (nada é enviado). O eco de uma resposta enviada pelo Alfred não chega aqui
+    # (retorna acima): Pedro respondeu a pendência anterior e pode nem ter visto a mensagem nova.
+    retirados = retirar_da_fila(msg.get("remote_jid")) if msg.get("from_me") else []
+    cancelados = [mid_ for i in retirados for mid_ in _ids_do_item(i)]
+    registrados: list[dict] = []
     if cancelados:
         res["fila_cancelada"] = cancelados
+        for item in retirados:
+            try:
+                e = registrar_resposta_direta(item, msg)
+                if (e.get("whatsapp") or {}).get("respondida_na_espera"):
+                    registrados.append(e)
+            except Exception as e:   # nunca derruba o webhook: a fila já foi cancelada, como antes
+                log(f"[whatsapp] não consegui registrar a resposta direta a {item.get('contato')}: {e}")
+        res["respondidas_na_espera"] = [e["id"] for e in registrados]
 
     def _sem_pendencia(motivo: str) -> dict:
         if cancelados:
             res.update(acao="fila_cancelada", motivo=f"Pedro respondeu a conversa antes do prazo — "
                                                      f"{len(cancelados)} mensagem(ns) saíram da fila")
+            if registrados:
+                res["pendencia"] = registrados[-1]
         else:
             res["motivo"] = motivo
         return res
@@ -1432,16 +1650,18 @@ def processar_mensagem_whatsapp(
             return _nota_para_mim(msg, cfg, res, enviar=enviar, notificar=notificar)
         if msg.get("from_me") and not msg.get("grupo"):
             p = _pendencia_aguardando_do_jid(msg.get("remote_jid"))
-            if p:
-                res["pendencia"] = _fechar_manual(p["id"], msg.get("texto") or "", msg)
+            fechada = _fechar_manual(p["id"], msg.get("texto") or "", msg) if p else None
+            if fechada:
+                res["pendencia"] = fechada
                 res.update(acao="respondida_manual", motivo="Pedro respondeu o contato direto do celular")
                 return res
         return _sem_pendencia("mensagem de Pedro sem citação de pendência")
 
     if msg.get("from_me"):
         p = _pendencia_aguardando_do_jid(msg.get("remote_jid")) if not msg.get("grupo") else None
-        if p:
-            res["pendencia"] = _fechar_manual(p["id"], msg.get("texto") or "", msg)
+        fechada = _fechar_manual(p["id"], msg.get("texto") or "", msg) if p else None
+        if fechada:
+            res["pendencia"] = fechada
             res.update(acao="respondida_manual", motivo="Pedro respondeu o contato direto do celular")
             return res
         return _sem_pendencia("mensagem enviada por mim (fromMe) sem pendência aberta")
@@ -1482,9 +1702,14 @@ def processar_mensagem_whatsapp(
         return res
 
     # ── agrupar na pendência aberta do mesmo contato ────────────
+    # `existentes` foi lido antes da transcrição/classificação: agrupar_mensagem confere de novo na trava e
+    # devolve None se outro processo resolveu a pendência no meio → segue para a fila / pendência nova.
     aberta = _pendencia_aberta_do_contato(existentes, msg, cfg)
-    if aberta:
-        entry = agrupar_mensagem(aberta["id"], msg, conteudo)
+    try:
+        entry = agrupar_mensagem(aberta["id"], msg, conteudo) if aberta else None
+    except KeyError:   # some do yml no meio (não acontece hoje, mas nunca perde a mensagem)
+        entry = None
+    if entry:
         agr = {"tipo_msg": msg.get("tipo_msg"), "texto": conteudo}
         res.update(acao="agrupada", motivo=f"contato já tem a pendência {aberta['id']} aberta", pendencia=entry,
                    notificacao=mensagem_para_pedro(entry, agrupada=agr))
@@ -1492,7 +1717,7 @@ def processar_mensagem_whatsapp(
             res["envio"] = notificar_pedro(entry["id"], agrupada=agr, enviar=True)
         return res
 
-    # ── espera atraso_minutos: se Pedro responder antes, nada é gerado ──
+    # ── espera atraso_minutos: se Pedro responder antes, só o registro respondida_manual (sem aviso) ──
     atraso = _atraso_minutos(cfg if atraso_minutos is None else {"atraso_minutos": atraso_minutos})
     if atraso > 0:
         tr = {k: transcricao.get(k) for k in ("texto", "metodo", "duracao_s", "segmentos", "cortado", "erro")} \
@@ -1516,12 +1741,12 @@ def processar_mensagem_whatsapp(
     return res
 
 
-def status() -> dict:
-    """Resumo para /health e CLI."""
+def status(timeout: Optional[float] = None) -> dict:
+    """Resumo para /health e CLI. `timeout` (s) limita a consulta à Evolution (painel: ~2 s); None = padrão (30 s)."""
     from _shared.lib_whatsapp import resumo_config, estado_instancia
     cfg = resumo_config()
     if cfg["configurado"]:
-        est = estado_instancia()
+        est = estado_instancia() if timeout is None else estado_instancia(timeout=timeout)
         cfg["estado_instancia"] = est.get("estado") or est.get("erro") or f"HTTP {est.get('status')}"
     aguard = [p for p in core.listar_pendencias("aguardando") if p.get("tipo") == "whatsapp"]
     cfg["pendencias_whatsapp_aguardando"] = len(aguard)

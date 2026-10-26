@@ -277,8 +277,14 @@ def _load_lotes() -> dict:
     return {"lotes": []}
 
 
+def _trava():
+    """Trava entre processos de limpeza.yml (API/extensão, CLI, timer semanal). Sozinha na ordem de travas."""
+    return core.trava_arquivo(lotes_file())
+
+
 def _save_lotes(data: dict):
-    lotes_file().write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    with _trava():   # reentrante: quem lê-muda-grava já está dentro dela; gravação atômica (tmp + replace)
+        core.gravar_atomico(lotes_file(), yaml.dump(data, allow_unicode=True, sort_keys=False))
 
 
 def listar_lotes(status: Optional[str] = None) -> list[dict]:
@@ -300,15 +306,24 @@ def _pegar(data: dict, lid: str) -> dict:
     return lote
 
 
+def _vencido(l: dict, agora: datetime) -> bool:
+    return l.get("status") == "aguardando" and (core._parse_dt(l.get("expira_em")) or agora) < agora
+
+
 def _expirar():
-    data = _load_lotes()
-    agora, mudou = _now(), False
-    for l in data["lotes"]:
-        if l.get("status") == "aguardando" and (core._parse_dt(l.get("expira_em")) or agora) < agora:
-            l["status"] = "expirado"
-            mudou = True
-    if mudou:
-        _save_lotes(data)
+    # listar_lotes chama a cada consulta (painel: polling) — só pega a trava se houver o que expirar
+    agora = _now()
+    if not any(_vencido(l, agora) for l in _load_lotes()["lotes"]):
+        return
+    with _trava():
+        data = _load_lotes()
+        mudou = False
+        for l in data["lotes"]:
+            if _vencido(l, agora):
+                l["status"] = "expirado"
+                mudou = True
+        if mudou:
+            _save_lotes(data)
 
 
 def _texto_lote(lote: dict) -> str:
@@ -358,21 +373,22 @@ def propor(inbox_name: Optional[str] = None, notificar: bool = True) -> Optional
         log("[limpeza] nenhum candidato — nenhum lote criado")
         return None
     agora = _now()
-    data = _load_lotes()
-    existentes = {l["id"] for l in data["lotes"]}
-    lid, n = f"limpeza-{agora:%Y%m%d-%H%M}", 1
-    while lid in existentes:
-        n += 1
-        lid = f"limpeza-{agora:%Y%m%d-%H%M}-{n}"
-    lote = {
-        "id": lid, "tipo": "limpeza", "inbox": nome, "status": "aguardando",
-        "criado_em": agora.isoformat(timespec="minutes"),
-        "expira_em": (agora + timedelta(days=int(lc["expirar_lote_dias"]))).isoformat(timespec="minutes"),
-        "total": len(c["candidatos"]), "itens": c["candidatos"],
-        "arquivos": {"md": f"pendencias/{lid}.md"},
-    }
-    data["lotes"].append(lote)
-    _save_lotes(data)
+    with _trava():   # candidatos() (leitura da caixa, lenta) fica fora; ler-anexar-gravar dentro
+        data = _load_lotes()
+        existentes = {l["id"] for l in data["lotes"]}
+        lid, n = f"limpeza-{agora:%Y%m%d-%H%M}", 1
+        while lid in existentes:
+            n += 1
+            lid = f"limpeza-{agora:%Y%m%d-%H%M}-{n}"
+        lote = {
+            "id": lid, "tipo": "limpeza", "inbox": nome, "status": "aguardando",
+            "criado_em": agora.isoformat(timespec="minutes"),
+            "expira_em": (agora + timedelta(days=int(lc["expirar_lote_dias"]))).isoformat(timespec="minutes"),
+            "total": len(c["candidatos"]), "itens": c["candidatos"],
+            "arquivos": {"md": f"pendencias/{lid}.md"},
+        }
+        data["lotes"].append(lote)
+        _save_lotes(data)
     _escrever_md(lote)
     log(f"[limpeza] lote {lid} criado com {lote['total']} e-mail(s) — aguardando aprovação")
     if notificar:
@@ -385,52 +401,54 @@ def aprovar(lid: str, nota: str = "") -> dict:
     Confirmação explícita. Revalida cada item (pendência nova, categoria que mudou, manifesto removido)
     e só então libera o lote para a extensão.
     """
-    data = _load_lotes()
-    lote = _pegar(data, lid)
-    if lote.get("status") != "aguardando":
-        raise ValueError(f"{lid} está '{lote.get('status')}' — só lotes aguardando podem ser aprovados")
-    if (core._parse_dt(lote.get("expira_em")) or _now()) < _now():
-        lote["status"] = "expirado"
-        _save_lotes(data)
-        raise ValueError(f"{lid} expirou — gere um novo com `run.sh limpeza propor`")
+    with _trava():
+        data = _load_lotes()
+        lote = _pegar(data, lid)
+        if lote.get("status") != "aguardando":
+            raise ValueError(f"{lid} está '{lote.get('status')}' — só lotes aguardando podem ser aprovados")
+        if (core._parse_dt(lote.get("expira_em")) or _now()) < _now():
+            lote["status"] = "expirado"
+            _save_lotes(data)
+            raise ValueError(f"{lid} expirou — gere um novo com `run.sh limpeza propor`")
 
-    _nome, cfg, lc = config(lote.get("inbox"))
-    registro, manifestos = carregar_registro(), carregar_manifestos()
-    protegidos = _ids_protegidos_por_pendencia()
-    agora = _now()
-    mantidos, removidos = [], []
-    for i in lote["itens"]:
-        m = {"message_id": i["message_id"], "from_addr": i["from"],
-             "from_domain": i["from"].split("@")[-1] if "@" in i["from"] else "",
-             "date": core._parse_dt(i["date"])}
-        motivo, razao = avaliar(m, cfg, lc, registro, manifestos, protegidos, agora)
-        if motivo:
-            mantidos.append(i)
-        else:
-            removidos.append({**i, "removido_por": razao})
-    if not mantidos:
-        raise ValueError(f"{lid}: nenhum item continua elegível na revalidação")
-    lote.update({"status": "aprovado", "aprovado_em": agora.isoformat(timespec="minutes"),
-                 "nota": nota.strip() or None, "itens": mantidos, "total": len(mantidos)})
-    if removidos:
-        lote["removidos_na_aprovacao"] = removidos
-    _save_lotes(data)
-    _escrever_md(lote)
-    log(f"[limpeza] {lid} APROVADO ({len(mantidos)} itens; {len(removidos)} removidos na revalidação)")
-    return lote
+        _nome, cfg, lc = config(lote.get("inbox"))
+        registro, manifestos = carregar_registro(), carregar_manifestos()
+        protegidos = _ids_protegidos_por_pendencia()
+        agora = _now()
+        mantidos, removidos = [], []
+        for i in lote["itens"]:
+            m = {"message_id": i["message_id"], "from_addr": i["from"],
+                 "from_domain": i["from"].split("@")[-1] if "@" in i["from"] else "",
+                 "date": core._parse_dt(i["date"])}
+            motivo, razao = avaliar(m, cfg, lc, registro, manifestos, protegidos, agora)
+            if motivo:
+                mantidos.append(i)
+            else:
+                removidos.append({**i, "removido_por": razao})
+        if not mantidos:
+            raise ValueError(f"{lid}: nenhum item continua elegível na revalidação")
+        lote.update({"status": "aprovado", "aprovado_em": agora.isoformat(timespec="minutes"),
+                     "nota": nota.strip() or None, "itens": mantidos, "total": len(mantidos)})
+        if removidos:
+            lote["removidos_na_aprovacao"] = removidos
+        _save_lotes(data)
+        _escrever_md(lote)
+        log(f"[limpeza] {lid} APROVADO ({len(mantidos)} itens; {len(removidos)} removidos na revalidação)")
+        return lote
 
 
 def recusar(lid: str, nota: str = "") -> dict:
-    data = _load_lotes()
-    lote = _pegar(data, lid)
-    if lote.get("status") not in ("aguardando", "aprovado"):
-        raise ValueError(f"{lid} está '{lote.get('status')}' — não dá mais para recusar")
-    lote.update({"status": "recusado", "respondido_em": _now().isoformat(timespec="minutes"),
-                 "nota": nota.strip() or None})
-    _save_lotes(data)
-    _escrever_md(lote)
-    log(f"[limpeza] {lid} recusado")
-    return lote
+    with _trava():
+        data = _load_lotes()
+        lote = _pegar(data, lid)
+        if lote.get("status") not in ("aguardando", "aprovado"):
+            raise ValueError(f"{lid} está '{lote.get('status')}' — não dá mais para recusar")
+        lote.update({"status": "recusado", "respondido_em": _now().isoformat(timespec="minutes"),
+                     "nota": nota.strip() or None})
+        _save_lotes(data)
+        _escrever_md(lote)
+        log(f"[limpeza] {lid} recusado")
+        return lote
 
 
 # ══════════════════════════════════════════════════════════════
@@ -439,51 +457,53 @@ def recusar(lid: str, nota: str = "") -> dict:
 
 def fila_execucao() -> list[dict]:
     """Lotes aprovados para a extensão. Marca em_execucao (um lote em execução volta à fila após 1h)."""
-    data = _load_lotes()
-    agora, out = _now(), []
-    for l in data["lotes"]:
-        travado = (l.get("status") == "em_execucao"
-                   and (core._parse_dt(l.get("execucao_iniciada_em")) or agora) < agora - timedelta(hours=1))
-        if l.get("status") == "aprovado" or travado:
-            l["status"] = "em_execucao"
-            l["execucao_iniciada_em"] = agora.isoformat(timespec="minutes")
-            out.append({"id": l["id"], "acao": "mover_para_lixeira",
-                        "itens": [{k: i[k] for k in ("message_id", "from", "subject", "date", "pasta", "conta")}
-                                  for i in l["itens"]]})
-    if out:
-        _save_lotes(data)
-    return out
+    with _trava():
+        data = _load_lotes()
+        agora, out = _now(), []
+        for l in data["lotes"]:
+            travado = (l.get("status") == "em_execucao"
+                       and (core._parse_dt(l.get("execucao_iniciada_em")) or agora) < agora - timedelta(hours=1))
+            if l.get("status") == "aprovado" or travado:
+                l["status"] = "em_execucao"
+                l["execucao_iniciada_em"] = agora.isoformat(timespec="minutes")
+                out.append({"id": l["id"], "acao": "mover_para_lixeira",
+                            "itens": [{k: i[k] for k in ("message_id", "from", "subject", "date", "pasta", "conta")}
+                                      for i in l["itens"]]})
+        if out:
+            _save_lotes(data)
+        return out
 
 
 def registrar_resultado(lid: str, itens: list[dict], executor: str = "thunderbird-ext") -> dict:
-    data = _load_lotes()
-    lote = _pegar(data, lid)
-    if lote.get("status") not in ("em_execucao", "aprovado"):
-        raise ValueError(f"{lid} está '{lote.get('status')}' — resultado não esperado")
-    validos = {i["message_id"] for i in lote["itens"]}
-    res = {}
-    for r in itens or []:
-        mid = (r or {}).get("message_id")
-        if mid in validos:
-            res[mid] = {"status": str(r.get("status") or "erro"), "detalhe": str(r.get("detalhe") or "")[:300]}
-    contagem: dict = {}
-    for i in lote["itens"]:
-        r = res.get(i["message_id"], {"status": "sem_resposta", "detalhe": ""})
-        i["resultado"] = r["status"]
-        if r["detalhe"]:
-            i["resultado_detalhe"] = r["detalhe"]
-        contagem[r["status"]] = contagem.get(r["status"], 0) + 1
-    ok = sum(contagem.get(s, 0) for s in STATUS_ITEM_OK)
-    if ok == len(lote["itens"]):
-        status = "simulado" if contagem.get("simulado") == ok else "concluido"
-    else:
-        status = "parcial" if ok else "falhou"
-    lote.update({"status": status, "executado_em": _now().isoformat(timespec="minutes"),
-                 "executor": executor, "contagem": contagem})
-    _save_lotes(data)
-    _escrever_md(lote)
-    log(f"[limpeza] {lid} → {status} {contagem}")
-    return lote
+    with _trava():
+        data = _load_lotes()
+        lote = _pegar(data, lid)
+        if lote.get("status") not in ("em_execucao", "aprovado"):
+            raise ValueError(f"{lid} está '{lote.get('status')}' — resultado não esperado")
+        validos = {i["message_id"] for i in lote["itens"]}
+        res = {}
+        for r in itens or []:
+            mid = (r or {}).get("message_id")
+            if mid in validos:
+                res[mid] = {"status": str(r.get("status") or "erro"), "detalhe": str(r.get("detalhe") or "")[:300]}
+        contagem: dict = {}
+        for i in lote["itens"]:
+            r = res.get(i["message_id"], {"status": "sem_resposta", "detalhe": ""})
+            i["resultado"] = r["status"]
+            if r["detalhe"]:
+                i["resultado_detalhe"] = r["detalhe"]
+            contagem[r["status"]] = contagem.get(r["status"], 0) + 1
+        ok = sum(contagem.get(s, 0) for s in STATUS_ITEM_OK)
+        if ok == len(lote["itens"]):
+            status = "simulado" if contagem.get("simulado") == ok else "concluido"
+        else:
+            status = "parcial" if ok else "falhou"
+        lote.update({"status": status, "executado_em": _now().isoformat(timespec="minutes"),
+                     "executor": executor, "contagem": contagem})
+        _save_lotes(data)
+        _escrever_md(lote)
+        log(f"[limpeza] {lid} → {status} {contagem}")
+        return lote
 
 
 # ══════════════════════════════════════════════════════════════

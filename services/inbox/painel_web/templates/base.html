@@ -1,0 +1,81 @@
+{#
+  Esqueleto de todas as telas do Painel do Alfred.
+  Variáveis: csrf (str), ativo ("inicio"|"pendencias"|"agenda"|"limpeza"|"sistema"),
+             contadores (dict de /painel/api/contadores; opcional), simulado (bool; opcional).
+  Blocos:    titulo (texto do <title>), conteudo (dentro de <main>), pagina (o <body> inteiro — só o login troca).
+  Sem <script> nem style= inline: a CSP só aceita painel.js e painel.css.
+#}
+{%- import "_macros.html" as m -%}
+{%- set contadores = contadores if contadores is defined and contadores else {} -%}
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {%- if csrf is defined and csrf %}
+  <meta name="csrf-token" content="{{ csrf }}">
+  {%- endif %}
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block titulo %}Painel{% endblock %} · Alfred</title>
+  <link rel="icon" href="data:,">{# sem favicon: evita um pedido a mais (e um 404) a cada página #}
+  <link rel="stylesheet" href="/painel/static/painel.css">
+  <script src="/painel/static/painel.js" defer></script>
+</head>
+<body>
+{%- block pagina %}
+  <a class="pular" href="#conteudo">Pular para o conteúdo</a>
+  <div class="estrutura">
+    <header class="lateral">
+      <a class="marca" href="/painel">
+        {{ m.icone("marca") }}
+        <span>Alfred<span class="marca__sub">Painel</span></span>
+      </a>
+
+      <nav class="nav" aria-label="Seções do painel">
+        <ul class="nav__lista">
+          {%- for chave, url, rotulo, nome_icone, contador in [
+                ("inicio",     "/painel",            "Início",     "inicio",     none),
+                ("pendencias", "/painel/pendencias", "Pendências", "pendencias", "aguardando"),
+                ("agenda",     "/painel/agenda",     "Agenda",     "agenda",     none),
+                ("limpeza",    "/painel/limpeza",    "Limpeza",    "limpeza",    "limpeza_aguardando"),
+                ("sistema",    "/painel/sistema",    "Sistema",    "sistema",    none),
+              ] %}
+          {%- set n = contadores.get(contador, 0) if contador else 0 %}
+          <li>
+            <a class="nav__link" href="{{ url }}"{% if ativo is defined and ativo == chave %} aria-current="page"{% endif %}>
+              {{ m.icone(nome_icone) }}
+              <span class="nav__rotulo">{{ rotulo }}</span>
+              {%- if contador %}
+              <span class="contador" data-contador-ocultar-zero{% if not n %} hidden{% endif %}>
+                <span data-contador="{{ contador }}">{{ n }}</span><span class="sr-only"> aguardando</span>
+              </span>
+              {%- endif %}
+            </a>
+          </li>
+          {%- endfor %}
+        </ul>
+      </nav>
+
+      <div class="lateral__rodape">
+        {%- if simulado is defined and simulado %}
+        {{ m.selo("simulado", "Modo simulado") }}
+        {%- endif %}
+        <form data-acao="/painel/sair" data-apos-sucesso="ir:/painel/login">
+          <button class="botao botao--discreto botao--pequeno" type="submit">{{ m.icone("sair") }}Sair</button>
+        </form>
+      </div>
+    </header>
+
+    <main id="conteudo" class="conteudo" tabindex="-1">
+      <noscript>
+        <div class="aviso aviso--aguardando"><p class="aviso__texto">O painel precisa de JavaScript para executar ações e se atualizar sozinho.</p></div>
+      </noscript>
+      {# Resultado de ações feitas em listas que se atualizam sozinhas + aviso de conexão do polling. #}
+      <div id="avisos" class="avisos" aria-live="polite"></div>
+      {%- block conteudo %}{% endblock %}
+    </main>
+  </div>
+{%- endblock %}
+</body>
+</html>
