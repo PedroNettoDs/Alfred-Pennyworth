@@ -2,13 +2,22 @@
 title: Alfred Vault Writer
 description: Permite ao Alfred salvar pesquisas, logs e aprendizados no seu próprio vault do Obsidian.
 author: Alfred Pennyworth
-version: 2.0.0
+version: 2.1.0
 """
 
 from pydantic import BaseModel, Field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import yaml
+
+
+def _no_vault(vault: Path, relativo: Optional[str]) -> Optional[Path]:
+    """Resolve `relativo` dentro do vault. None se sair dele (caminho absoluto, "..", symlink para fora) —
+    o container do Open WebUI roda como root: sem isso a tool lia/gravava qualquer arquivo."""
+    base = vault.resolve()
+    alvo = (base / (relativo or "")).resolve()
+    return alvo if alvo.is_relative_to(base) else None
 
 
 class Tools:
@@ -36,19 +45,31 @@ class Tools:
         :return: Confirmação com o caminho salvo
         """
         try:
-            vault = Path(self.valves.vault_path)
-            target_dir = vault / folder
+            vault = Path(self.valves.vault_path).resolve()
+            target_dir = _no_vault(vault, folder)
+            if target_dir is None:
+                return f"[erro ao salvar no vault]: pasta '{folder}' fora do vault — use um caminho relativo ao vault."
             target_dir.mkdir(parents=True, exist_ok=True)
 
-            date_str = datetime.now().strftime("%Y-%m-%d")
-            time_str = datetime.now().strftime("%H:%M")
-            safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title).strip()
+            agora = datetime.now()
+            date_str = agora.strftime("%Y-%m-%d")
+            time_str = agora.strftime("%H:%M")
+            safe_title = " ".join("".join(c if c.isalnum() or c in " -_" else "" for c in (title or "")).split())
+            if not safe_title:
+                safe_title = agora.strftime("nota-%H%M%S")   # título só de símbolos: antes virava "AAAA-MM-DD .md"
             filename = f"{date_str} {safe_title}.md"
+            n = 2
+            while (target_dir / filename).exists():           # mesmo título no mesmo dia: não sobrescreve
+                filename = f"{date_str} {safe_title} ({n}).md"
+                n += 1
             filepath = target_dir / filename
 
-            frontmatter = f"---\ntitle: {title}\ndate: {date_str}\ntime: {time_str}\nfolder: {folder}\n---\n\n"
-            filepath.write_text(frontmatter + content, encoding="utf-8")
-            return f"Nota salva em: {folder}/{filename}"
+            # yaml.safe_dump: título com ":" ("Decisão: usar QUIC") gerava frontmatter inválido
+            meta = {"title": title, "date": date_str, "time": time_str, "folder": folder}
+            frontmatter = "---\n" + yaml.safe_dump(meta, allow_unicode=True, sort_keys=False) + "---\n\n"
+            with open(filepath, "x", encoding="utf-8") as fh:
+                fh.write(frontmatter + content)
+            return f"Nota salva em: {filepath.relative_to(vault)}"
 
         except Exception as e:
             return f"[erro ao salvar no vault]: {str(e)}"
@@ -61,8 +82,10 @@ class Tools:
         :return: Lista de arquivos encontrados
         """
         try:
-            vault = Path(self.valves.vault_path)
-            target = vault / folder if folder else vault
+            vault = Path(self.valves.vault_path).resolve()
+            target = _no_vault(vault, folder)
+            if target is None:
+                return f"Pasta '{folder}' fora do vault — use um caminho relativo ao vault."
 
             if not target.exists():
                 return f"Pasta '{folder}' não encontrada no vault."
@@ -88,8 +111,10 @@ class Tools:
         :return: Notas relevantes com trechos
         """
         try:
-            vault = Path(self.valves.vault_path)
-            target = vault / folder if folder else vault
+            vault = Path(self.valves.vault_path).resolve()
+            target = _no_vault(vault, folder)
+            if target is None:
+                return f"Pasta '{folder}' fora do vault — use um caminho relativo ao vault."
 
             if not target.exists():
                 return f"Pasta '{folder}' não encontrada no vault."

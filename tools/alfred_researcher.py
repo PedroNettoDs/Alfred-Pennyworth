@@ -2,7 +2,7 @@
 title: Alfred Researcher
 description: Pesquisa um tema na web, sintetiza com IA e salva notas no vault. Use quando Pedro pedir para pesquisar ou estudar algo.
 author: Alfred Pennyworth
-version: 2.0.0
+version: 2.1.0
 """
 
 import os
@@ -42,14 +42,30 @@ class Tools:
             )
             if resp.status_code == 200:
                 data = resp.json()
+                slug = data.get("matched_slug") or data.get("slug", "")
+                if data.get("cached"):
+                    # acerto de cache (exato ou semântico): a resposta não traz sources_found nem queries_used
+                    if data.get("cache_type") == "semantic":
+                        origem = (f"do cache (semântico: tema parecido \"{data.get('matched_topic', '?')}\", "
+                                  f"similaridade {data.get('similarity', '?')})")
+                    else:
+                        origem = "do cache (exato, pesquisa dos últimos 7 dias)"
+                    return (
+                        f"Pesquisa {origem}.\n"
+                        f"- Tema: {data.get('topic', topic)}\n"
+                        f"- Vault: {data.get('vault_path', '?')}\n"
+                        f"- Arquivos: {', '.join(data.get('files') or [])}\n\n"
+                        f"{data.get('synthesis', '')}\n\n"
+                        f"Use list_vault('research/{slug}') para ver o conteúdo salvo."
+                    )
                 return (
                     f"Pesquisa concluída.\n"
-                    f"- Tema: {data['topic']}\n"
-                    f"- Fontes encontradas: {data['sources_found']}\n"
-                    f"- Vault: {data['vault_path']}\n"
-                    f"- Arquivos: {', '.join(data['files'])}\n"
-                    f"- Consultas usadas: {'; '.join(data['queries_used'])}\n\n"
-                    f"Use list_vault('research/{data['slug']}') para ver o conteúdo salvo."
+                    f"- Tema: {data.get('topic', topic)}\n"
+                    f"- Fontes encontradas: {data.get('sources_found', '?')}\n"
+                    f"- Vault: {data.get('vault_path', '?')}\n"
+                    f"- Arquivos: {', '.join(data.get('files') or [])}\n"
+                    f"- Consultas usadas: {'; '.join(data.get('queries_used') or [])}\n\n"
+                    f"Use list_vault('research/{slug}') para ver o conteúdo salvo."
                 )
             return f"Erro {resp.status_code}: {resp.text[:300]}"
         except requests.exceptions.Timeout:

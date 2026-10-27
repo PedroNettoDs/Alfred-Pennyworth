@@ -84,7 +84,8 @@ class Tools:
         :param days_back: Quantos dias atrás considerar (1 = hoje, 7 = semana)
         :return: Resumo formatado pronto para apresentar ao Pedro
         """
-        since = datetime.now() - timedelta(days=max(1, days_back or 1))
+        days_back = max(1, days_back or 1)   # o modelo pode mandar null (o parâmetro é Optional)
+        since = datetime.now() - timedelta(days=days_back)
         period = "hoje" if days_back <= 1 else f"nos últimos {days_back} dias"
         sections = []
 
@@ -120,23 +121,33 @@ class Tools:
         concluidas = [
             t for t in tasks
             if t.get("status") == "done"
-            and t.get("completed_at", "")[:10] >= since_str
+            and str(t.get("completed_at") or "")[:10] >= since_str
         ]
         if concluidas:
             items = [f"  ✓ #{t['id']} {t['title']}" for t in concluidas[:5]]
             sections.append(f"**Tarefas concluídas {period} ({len(concluidas)}):**\n" + "\n".join(items))
 
-        abertas = [t for t in tasks if t.get("status") == "open"]
-        vencidas = [t for t in abertas if t.get("due_date") and t["due_date"] < today_str]
+        # str(): data sem aspas editada à mão no tasks.yml vira date no YAML (comparar date com str quebrava)
+        abertas = [t for t in tasks if isinstance(t, dict) and t.get("status") == "open"]
+
+        def _venc(t):   # due_date como AAAA-MM-DD (texto ou date do YAML); inválida ("2026-10-1x") → None
+            try:
+                return date.fromisoformat(str(t.get("due_date"))[:10]).isoformat() if t.get("due_date") else None
+            except ValueError:
+                return None
+        vencidas = [t for t in abertas if _venc(t) and _venc(t) < today_str]
         proximas = [
             t for t in abertas
-            if t.get("due_date")
-            and today_str <= t["due_date"] <= (date.today() + timedelta(days=7)).isoformat()
+            if _venc(t) and today_str <= _venc(t) <= (date.today() + timedelta(days=7)).isoformat()
         ]
+        invalidas = [t for t in abertas if t.get("due_date") and not _venc(t)]
 
         if vencidas:
             items = [f"  ⚠️ #{t['id']} {t['title']} (venceu {t['due_date']})" for t in vencidas[:3]]
             sections.append(f"**Tarefas vencidas ({len(vencidas)}):**\n" + "\n".join(items))
+        if invalidas:
+            items = [f"  ? #{t['id']} {t['title']} (data inválida: {t['due_date']})" for t in invalidas[:3]]
+            sections.append(f"**Tarefas com data inválida ({len(invalidas)}):**\n" + "\n".join(items))
 
         if proximas:
             items = [f"  → #{t['id']} {t['title']} (vence {t['due_date']})" for t in proximas[:3]]
@@ -147,9 +158,9 @@ class Tools:
         expirando = []
         limite = (date.today() + timedelta(days=7)).isoformat()
         for m in memories:
-            exp = m.get("expires_at")
+            exp = str(m.get("expires_at") or "")
             if exp and today_str <= exp[:10] <= limite:
-                expirando.append(f"  • {m['key']}: {m['value']} (expira {exp[:10]})")
+                expirando.append(f"  • {m.get('key')}: {m.get('value')} (expira {exp[:10]})")
         if expirando:
             sections.append(f"**Memórias expirando em 7 dias:**\n" + "\n".join(expirando[:3]))
 

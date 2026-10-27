@@ -2,7 +2,7 @@
 title: Alfred Shell Executor
 description: Executa comandos reais no sistema do Pedro via Shell Executor local. Use para docker, disco, memória, GPU, rede e processos.
 author: Alfred Pennyworth
-version: 2.0.0
+version: 2.1.0
 """
 
 import requests
@@ -29,15 +29,19 @@ class Tools:
         Executa um comando shell no sistema do Pedro e retorna o output real.
 
         Quando usar: sempre que Pedro perguntar sobre estado do sistema.
-        Exemplos: "docker ps", "df -h", "free -h", "nvidia-smi", "systemctl status alfred-executor", "uptime"
+        Exemplos: "docker ps", "df -h", "free -h", "nvidia-smi", "systemctl --user status alfred-executor --no-pager",
+        "journalctl --user -u alfred-inbox -n 30 --no-pager", "uptime"
+        (as units do Alfred são de usuário: sempre "systemctl --user"). Só pipes simples ("a | b") são aceitos;
+        ; && || $( ) crase < > são recusados.
 
         REGRA: nunca invente ou suponha o resultado.
         Execute e retorne o output real.
 
         :param command: Comando a executar. Ex: "docker ps", "nvidia-smi", "df -h"
-        :param timeout: Timeout em segundos (padrão 15)
+        :param timeout: Timeout em segundos (padrão 15, máximo 1800)
         :return: Output real do comando
         """
+        timeout = min(max(int(timeout or 15), 1), 1800)
         try:
             resp = requests.post(
                 f"{self.valves.executor_url}/execute",
@@ -69,7 +73,7 @@ class Tools:
                 return f"[erro {resp.status_code}]: {detail}"
 
         except requests.exceptions.ConnectionError:
-            return "[erro]: Shell Executor offline. Verifique: systemctl status alfred-executor"
+            return "[erro]: Shell Executor offline. Verifique: systemctl --user status alfred-executor"
         except requests.exceptions.Timeout:
             return f"[erro]: comando excedeu {timeout}s de timeout."
         except Exception as e:

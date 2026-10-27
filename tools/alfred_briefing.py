@@ -2,7 +2,7 @@
 title: Alfred Tech Briefing
 description: Gera briefing de notícias tech com síntese IA e áudio TTS. Use quando Pedro pedir notícias, briefing ou novidades de tecnologia.
 author: Alfred Pennyworth
-version: 1.0.0
+version: 1.2.0
 """
 
 import time
@@ -27,11 +27,20 @@ class Tools:
             default="/vaults/alfred",
             description="Caminho do vault do Alfred dentro do container",
         )
+        alfred_dir_host: str = Field(
+            default="/home/netto/Alfred-Pennyworth",
+            description="Pasta do repositório do Alfred NO HOST (a do services/scripts/instalar.sh)",
+        )
+        vault_alfred_host: str = Field(
+            default="/home/netto/Documentos/Obsidian - Alfred",
+            description="VAULT_ALFRED do .env (caminho no host) — para achar o briefing dentro do container",
+        )
 
     def __init__(self):
         self.valves = self.Valves()
 
-    def _exec(self, cmd: str, timeout: int = 600) -> str:
+    def _exec(self, cmd: str, timeout: int = 600) -> tuple:
+        """(saída, returncode). returncode None quando o executor não rodou o comando (HTTP ≠ 200, rede, timeout)."""
         try:
             resp = requests.post(
                 f"{self.valves.executor_url}/execute",
@@ -44,12 +53,32 @@ class Tools:
             )
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("stdout", "") + data.get("stderr", "")
-            return f"[erro {resp.status_code}]: {resp.json().get('detail', '')}"
+                return data.get("stdout", "") + data.get("stderr", ""), data.get("returncode")
+            try:
+                detalhe = resp.json().get("detail", "")
+            except Exception:
+                detalhe = ""
+            return f"[erro {resp.status_code}]: {detalhe}", None
         except requests.exceptions.Timeout:
-            return f"[timeout]: briefing excedeu {timeout}s"
+            return f"[timeout]: briefing excedeu {timeout}s", None
         except Exception as e:
-            return f"[erro]: {e}"
+            return f"[erro]: {e}", None
+
+    @staticmethod
+    def _corpo(path: Path) -> str:
+        raw = path.read_text(encoding="utf-8")
+        if raw.startswith("---"):
+            parts = raw.split("---", 2)
+            return parts[2].strip() if len(parts) >= 3 else raw
+        return raw
+
+    def _no_container(self, briefing_file: str) -> Path:
+        """BRIEFING_FILE (caminho no host) → caminho no container, pela Valve vault_path (antes "/vaults/alfred" fixo)."""
+        host = str(Path(self.valves.vault_alfred_host)).rstrip("/")
+        vault = Path(self.valves.vault_path)
+        if briefing_file.startswith(host + "/"):
+            return vault / briefing_file[len(host) + 1:]
+        return vault / "briefings" / Path(briefing_file).name   # Valve vault_alfred_host desatualizada
 
     def gerar_briefing(self) -> str:
         """
@@ -66,11 +95,20 @@ class Tools:
         logs = []
         logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] Iniciando Tech Briefing...")
 
-        cmd = "/home/netto/Alfred-Pennyworth/services/briefing/run.sh"
-        output = self._exec(cmd, timeout=600)
+        cmd = f"{self.valves.alfred_dir_host.rstrip('/')}/services/briefing/run.sh"
+        output, returncode = self._exec(cmd, timeout=600)
 
         elapsed = time.time() - start
         logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] Concluído em {elapsed:.0f}s")
+
+        if returncode != 0:
+            # falhou (Ollama fora, sem notícias, executor recusou...): nunca mostrar um briefing antigo como novo
+            fim = "\n".join(output.strip().splitlines()[-25:])
+            situacao = f"código de saída {returncode}" if returncode is not None else "o executor não rodou o script"
+            return (
+                f"**Falha ao gerar o briefing** ({situacao}, {elapsed:.0f}s). Nenhum briefing novo foi criado.\n\n"
+                f"Fim do log:\n```\n{fim}\n```"
+            )
 
         # Extrair logs relevantes
         briefing_file = ""
@@ -87,37 +125,22 @@ class Tools:
 
         # Primeiro: tentar via path impresso pelo script
         if briefing_file:
-            # Converter path do host para path do container
-            container_path = briefing_file.replace(
-                str(Path("/home/netto/Documentos/Obsidian - Alfred")),
-                "/vaults/alfred"
-            )
             try:
-                p = Path(container_path)
+                p = self._no_container(briefing_file)
                 if p.exists():
-                    raw = p.read_text(encoding="utf-8")
-                    if raw.startswith("---"):
-                        parts = raw.split("---", 2)
-                        report_content = parts[2].strip() if len(parts) >= 3 else raw
-                    else:
-                        report_content = raw
+                    report_content = self._corpo(p)
+                    logs.append(f"  Lido: {p.name}")
             except Exception:
                 pass
 
-        # Fallback: buscar o mais recente na pasta briefings
+        # Fallback: o mais recente (por data de modificação) — só se foi gravado durante esta execução
         if not report_content:
-            vault = Path(self.valves.vault_path)
-            briefing_dir = vault / "briefings"
+            briefing_dir = Path(self.valves.vault_path) / "briefings"
             if briefing_dir.exists():
-                md_files = sorted(briefing_dir.glob("*.md"), reverse=True)
-                if md_files:
+                md_files = sorted(briefing_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
+                if md_files and md_files[0].stat().st_mtime >= start - 5:
                     try:
-                        raw = md_files[0].read_text(encoding="utf-8")
-                        if raw.startswith("---"):
-                            parts = raw.split("---", 2)
-                            report_content = parts[2].strip() if len(parts) >= 3 else raw
-                        else:
-                            report_content = raw
+                        report_content = self._corpo(md_files[0])
                         logs.append(f"  Lido: {md_files[0].name}")
                     except Exception as e:
                         logs.append(f"  Erro ao ler: {e}")
@@ -151,7 +174,9 @@ class Tools:
         if not briefing_dir.exists():
             return "Nenhum briefing encontrado. Use `gerar_briefing()` para criar o primeiro."
 
-        md_files = sorted(briefing_dir.glob("*.md"), reverse=True)[:quantidade]
+        # mais recentes por data de modificação (o nome antigo AAAA-MM-DD_<slug> não tinha hora)
+        md_files = sorted(briefing_dir.glob("*.md"), key=lambda f: f.stat().st_mtime,
+                          reverse=True)[:max(1, quantidade or 5)]
 
         if not md_files:
             return "Pasta de briefings vazia."
@@ -170,7 +195,7 @@ class Tools:
 
                 # Verificar se tem áudio
                 mp3 = f.with_suffix(".mp3")
-                audio_flag = " (com áudio)" if mp3.exists() else ""
+                audio_flag = " (com áudio)" if mp3.exists() and mp3.stat().st_size > 0 else ""
 
                 lines.append(f"- **{title}**{audio_flag}\n  Arquivo: `{f.name}`")
             except Exception:
@@ -185,14 +210,17 @@ class Tools:
         :param arquivo: Nome do arquivo (ex: "2026-04-06_0700_ia-revoluciona-saude.md")
         :return: Conteúdo do briefing
         """
-        vault = Path(self.valves.vault_path)
-        filepath = vault / "briefings" / arquivo
+        pasta = (Path(self.valves.vault_path) / "briefings").resolve()
+        filepath = (pasta / arquivo).resolve()
 
         if not filepath.exists():
             # Tentar sem extensão
-            filepath = vault / "briefings" / f"{arquivo}.md"
+            filepath = (pasta / f"{arquivo}.md").resolve()
 
-        if not filepath.exists():
+        if not filepath.is_relative_to(pasta):
+            return f"Caminho fora da pasta de briefings: {arquivo}"
+
+        if not filepath.is_file():
             return f"Briefing não encontrado: {arquivo}\nUse `ver_briefings()` para listar os disponíveis."
 
         try:

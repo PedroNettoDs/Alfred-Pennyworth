@@ -21,6 +21,21 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+def _herdar_dono(caminho, referencia) -> None:
+    """Rodando como root (container do Open WebUI), o arquivo novo herda dono e grupo de `referencia`
+    (a pasta do arquivo, do usuário do host): sem isso, cada gravação deixava pendencias.yml / tasks.yml de root no vault."""
+    if os.geteuid() != 0:
+        return
+    try:
+        st = os.stat(referencia)
+        if isinstance(caminho, int):
+            os.fchown(caminho, st.st_uid, st.st_gid)
+        else:
+            os.chown(caminho, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+
+
 class Tools:
     class Valves(BaseModel):
         vault_path: str = Field(
@@ -72,6 +87,7 @@ class Tools:
         lock.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o666)
+            _herdar_dono(fd, lock.parent)
         except PermissionError:
             fd = os.open(str(lock), os.O_RDONLY)
         try:
@@ -102,6 +118,7 @@ class Tools:
             os.chmod(tmp, f.stat().st_mode & 0o777)
         except OSError:
             pass
+        _herdar_dono(tmp, f.parent)
         os.replace(tmp, f)
 
     def _save(self, data: dict):
@@ -110,13 +127,19 @@ class Tools:
 
     def _add_task(self, title: str, due_date: Optional[str], tags: list) -> Optional[int]:
         f = self._vault() / "tasks.yml"
+        self._erro_tasks = None
         with self._trava(f):
             try:
                 data = yaml.safe_load(f.read_text(encoding="utf-8")) if f.exists() else None
-            except Exception:
-                data = None
+            except Exception as e:
+                # ilegível: NÃO grava por cima (apagaria todas as tarefas e reaproveitaria os ids)
+                self._erro_tasks = f"tasks.yml ilegível ({type(e).__name__}) — tarefa não criada; corrija o arquivo"
+                return None
+            if data is None or (isinstance(data, dict) and data.get("tasks") is None):
+                data = {**(data or {}), "tasks": []}
             if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
-                data = {"tasks": []}
+                self._erro_tasks = "tasks.yml fora do formato (tasks: lista) — tarefa não criada; corrija o arquivo"
+                return None
             tid = max((t.get("id", 0) for t in data["tasks"]), default=0) + 1
             data["tasks"].append({
                 "id": tid, "title": title, "status": "open", "priority": "normal", "tags": tags,
@@ -276,7 +299,8 @@ class Tools:
 
         rotulo = {"vou": "VOU", "nao_vou": "NÃO VOU", "ignorada": "IGNORADA"}[r]
         return f"Anotado: {rotulo} para \"{p.get('titulo')}\"." + \
-               (f" Tarefa #{task_id} criada em tasks.yml." if task_id else "")
+               (f" Tarefa #{task_id} criada em tasks.yml." if task_id else "") + \
+               (f" Atenção: {self._erro_tasks}." if r == "vou" and getattr(self, "_erro_tasks", None) else "")
 
     def _responder_whatsapp(self, p: dict, texto: str, nota: str) -> str:
         """Texto livre → API do inbox (que grava e envia pela Evolution API). Sem API: só registra no YAML."""
