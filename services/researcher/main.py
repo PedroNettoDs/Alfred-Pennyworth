@@ -8,6 +8,7 @@ POST /research  {"topic": "...", "num_queries": 4, "results_per_query": 8,
 GET  /health
 """
 
+import hashlib
 import json
 import os
 import re
@@ -36,6 +37,7 @@ VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
 WEBUI_TOKEN  = os.getenv("WEBUI_API_TOKEN", "")
 WEBUI_URL    = os.getenv("WEBUI_URL", "http://localhost:3000")
 SCRIPTS_DIR  = Path(__file__).parent.parent / "scripts"
+SYNC_LOG     = Path(__file__).resolve().parent.parent.parent / "logs" / "sync-knowledge.log"
 CACHE_DAYS   = 7
 CHROMA_COLLECTION = "research_alfred"
 SEMANTIC_DIST_MAX = 0.25   # distância coseno ≤ 0.25 ≡ similaridade ≥ 0.75
@@ -100,12 +102,25 @@ def _index_synthesis(slug: str, topic: str, date_str: str, topic_dir: Path, synt
 
 
 # ── Cache exato ───────────────────────────────────────────────
+def _synthesis_vazia(texto: str) -> bool:
+    """True se a síntese não tem conteúdo além do título "# tema" e do rodapé "*Sintetizado em ...*"
+    (o que ficava gravado quando o Ollama falhava)."""
+    corpo = re.sub(r"^# .*\n?", "", texto.strip(), count=1)
+    corpo = re.sub(r"(^|\n)---\s*\n\*Sintetizado em [^\n]*\*\s*$", "", corpo.strip())
+    return not corpo.strip()
+
+
 def _cache_valid(synthesis_path: Path) -> bool:
-    """True se synthesis.md existe e tem menos de CACHE_DAYS dias."""
+    """True se synthesis.md existe, tem conteúdo e tem menos de CACHE_DAYS dias."""
     if not synthesis_path.exists():
         return False
     age = datetime.now() - datetime.fromtimestamp(synthesis_path.stat().st_mtime)
-    return age < timedelta(days=CACHE_DAYS)
+    if age >= timedelta(days=CACHE_DAYS):
+        return False
+    try:
+        return not _synthesis_vazia(_read_synthesis(synthesis_path))
+    except OSError:
+        return False
 
 
 def _read_synthesis(synthesis_path: Path) -> str:
@@ -158,9 +173,12 @@ def check_semantic_cache(topic: str) -> Optional[dict]:
         vault_path = Path(vault_path_str) if vault_path_str else VAULT_ALFRED / "research" / matched_slug
         synthesis_path = vault_path / "synthesis.md"
 
-        # Confirma que o arquivo ainda existe no disco
+        # Confirma que o arquivo ainda existe no disco (e não é uma síntese vazia de quando o LLM falhou)
         if not synthesis_path.exists():
             log(f"[researcher] Semantic hit {matched_slug} mas synthesis.md não existe — ignorando")
+            continue
+        if _synthesis_vazia(_read_synthesis(synthesis_path)):
+            log(f"[researcher] Semantic hit {matched_slug} mas synthesis.md está vazio — ignorando")
             continue
 
         similarity = round(1.0 - distance, 4)
@@ -197,16 +215,26 @@ def _build_perfil_context(perfil_nome: str) -> str:
 
 # ── Sync ──────────────────────────────────────────────────────
 def trigger_sync():
-    """Dispara sync incremental assíncrono do vault para a Knowledge Base."""
+    """Dispara sync incremental assíncrono do vault para a Knowledge Base.
+    Roda com o Python deste venv (o python3 do sistema não tem as libs) e grava a saída em
+    logs/sync-knowledge.log (antes ia para DEVNULL e toda falha passava em silêncio)."""
     sync_script = SCRIPTS_DIR / "sync-knowledge.py"
     if sync_script.exists() and WEBUI_TOKEN:
         env = {**os.environ, "WEBUI_API_TOKEN": WEBUI_TOKEN, "WEBUI_URL": WEBUI_URL}
-        subprocess.Popen(
-            ["python3", str(sync_script)],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            SYNC_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(SYNC_LOG, "a", encoding="utf-8") as saida:
+                saida.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} sync disparado pelo researcher ===\n")
+                saida.flush()
+                subprocess.Popen(
+                    [sys.executable, str(sync_script)],
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=saida,
+                    stderr=subprocess.STDOUT,
+                )
+        except OSError as e:
+            log(f"[researcher] Falha ao disparar sync-knowledge: {e}")
 
 
 # ── Main endpoint ─────────────────────────────────────────────
@@ -215,7 +243,10 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
 
     topic     = req.topic.strip()
-    slug      = slugify(topic)
+    if not topic:
+        raise HTTPException(status_code=422, detail="Tema vazio")
+    # tema só de símbolos/emoji vira slug vazio: gravaria em research/ e serviria de "cache exato" a qualquer outro
+    slug      = slugify(topic) or "tema-" + hashlib.sha1(topic.encode("utf-8")).hexdigest()[:8]
     topic_dir = VAULT_ALFRED / "research" / slug
     synthesis_path = topic_dir / "synthesis.md"
 
@@ -254,7 +285,6 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
             }
 
     # ── 3. Pesquisa nova ──────────────────────────────────────
-    topic_dir.mkdir(parents=True, exist_ok=True)
     now      = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     dt_str   = now.strftime("%d/%m/%Y %H:%M")
@@ -313,6 +343,10 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     )
 
     synthesis = ollama_generate(synthesis_prompt, timeout=180)
+    if not synthesis.strip():
+        # ollama_generate devolve "" em erro/timeout: nada é gravado nem cacheado (antes ficava 7 dias no cache)
+        log(f"[researcher] LLM não devolveu síntese para {slug!r} — nada gravado")
+        raise HTTPException(status_code=503, detail="O LLM não respondeu (síntese vazia). Tente de novo em instantes.")
 
     # ── 4. Salvar no vault ────────────────────────────────────
     sources_body = (

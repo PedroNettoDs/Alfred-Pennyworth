@@ -297,6 +297,41 @@ def _build_keywords_section(interesses: list[str], max_termos: int = 3) -> str:
     return "## Palavras-chave\n\n" + "\n\n".join(blocos)
 
 
+# ── Seleção equilibrada entre fontes ──────────────────────────
+def _intercalar_fontes(itens: list[dict], grupos: list[list[dict]]) -> list[dict]:
+    """Reordena `itens` em rodízio entre os grupos de coleta (cada feed RSS e cada query do SearXNG):
+    1º de cada fonte, depois o 2º de cada uma... O corte em max_items*2 vem depois — antes era pela ordem de
+    coleta e só as primeiras fontes do perfis.yml entravam (6 dos 10 feeds RSS nunca apareciam)."""
+    grupo_de = {id(it): gi for gi, g in enumerate(grupos) for it in g}
+    filas: dict[int, list[dict]] = {}
+    for it in itens:
+        filas.setdefault(grupo_de.get(id(it), -1), []).append(it)
+    saida, rodada = [], 0
+    while len(saida) < len(itens):
+        for fila in filas.values():
+            if rodada < len(fila):
+                saida.append(fila[rodada])
+        rodada += 1
+    return saida
+
+
+def _gerar_audio(texto: str, voz: str, mp3_path: Path) -> bool:
+    """TTS que não derruba o briefing: em erro (edge-tts fora, voz inválida) loga, apaga o .mp3 parcial
+    (antes ficava um arquivo de 0 byte que a tool listava como "com áudio") e devolve False."""
+    try:
+        asyncio.run(generate_tts(texto, voz, mp3_path))
+        if mp3_path.exists() and mp3_path.stat().st_size > 0:
+            return True
+        log("[AVISO] TTS não gerou áudio — seguindo sem áudio")
+    except Exception as e:
+        log(f"[AVISO] Falha no TTS ({e}) — seguindo sem áudio")
+    try:
+        mp3_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False
+
+
 # ── Fluxo briefing nomeado ────────────────────────────────────
 def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
     perfil = briefing_cfg["_perfil"]
@@ -314,31 +349,39 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
 
     # ── Coletar ───────────────────────────────────────────────
     all_items: list[dict] = []
+    grupos: list[list[dict]] = []      # um grupo por query/feed — para o rodízio antes do corte
     for fonte in fontes:
         tipo = fonte.get("tipo", "")
         if tipo == "searxng":
             for q in fonte.get("queries", []):
                 results = searxng_search(q["q"], categories=q.get("cat", "news,it"), max_results=10)
                 all_items.extend(results)
+                grupos.append(results)
                 log(f"[SearXNG] '{q['q']}': {len(results)} resultados")
         elif tipo == "rss":
             for feed in fonte.get("feeds", []):
-                all_items.extend(fetch_rss(feed))
+                itens_feed = fetch_rss(feed)
+                all_items.extend(itens_feed)
+                grupos.append(itens_feed)
         else:
             log(f"[AVISO] Tipo de fonte desconhecido: {tipo!r} — pulando")
 
     log(f"[Total] {len(all_items)} itens coletados")
 
     max_items = briefing_cfg.get("max_items", config.get("max_items", 15))
-    unique = deduplicate_by_url_and_title(all_items)[: max_items * 2]
-    log(f"[Dedup] {len(unique)} itens únicos")
+    todos = _intercalar_fontes(deduplicate_by_url_and_title(all_items), grupos)
+    # ── Memória 24h — separar novas de continuações ───────────
+    # O corte em max_items*2 vem DEPOIS da memória: notícias novas primeiro, as continuações só completam.
+    # Cortando antes, a 2ª execução do dia recebia os mesmos itens (todos "continuações") e os demais nunca entravam.
+    seen = load_seen()
+    novas_todas, cont_todas = split_new_vs_continuation(todos, seen)
+    unique = (novas_todas + cont_todas)[: max_items * 2]
+    log(f"[Dedup] {len(todos)} itens únicos, {len(unique)} usados")
 
     if not unique:
         log("[ERRO] Nenhuma notícia coletada. Abortando.")
         sys.exit(1)
 
-    # ── Memória 24h — separar novas de continuações ───────────
-    seen = load_seen()
     novas, continuacoes = split_new_vs_continuation(unique, seen)
     log(f"[Seen] {len(novas)} novas, {len(continuacoes)} continuações")
 
@@ -410,7 +453,8 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
     log("[Ollama] Extraindo título...")
     titulo_manchete = generate_title_via_llm(briefing_text)
     titulo_slug     = slugify(titulo_manchete)
-    filename_base   = f"{date_str}_{titulo_slug}" if titulo_slug else f"{date_str}_{briefing_name}"
+    # AAAA-MM-DD_HHMM_<briefing>_<slug> (about.md): matinal e vespertino do mesmo dia não se sobrescrevem
+    filename_base   = f"{timestamp}_{briefing_name}_{titulo_slug}" if titulo_slug else f"{timestamp}_{briefing_name}"
 
     log(f"[Título] {titulo_manchete}")
     log(f"[Slug]   {titulo_slug}")
@@ -469,6 +513,11 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
     md_path.write_text(md_content, encoding="utf-8")
     log(f"[Vault] Markdown salvo: {md_path.name}")
 
+    # ── Persistir memória (logo após o .md: falha no áudio não faz repetir as notícias) ──
+    mark_seen(unique, seen)
+    save_seen(seen)
+    log(f"[Seen] Salvo: {len(seen)} URLs na janela de {SEEN_WINDOW_HOURS}h")
+
     # ── Áudio via template ────────────────────────────────────
     mp3_path = None
     if "audio" in briefing_cfg.get("formato", []):
@@ -488,8 +537,10 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         voice    = briefing_cfg.get("tts_voice") or config.get("tts_voice", "pt-BR-FranciscaNeural")
         mp3_path = briefing_dir / f"{filename_base}.mp3"
         log(f"[TTS] Gerando áudio com voz {voice}...")
-        asyncio.run(generate_tts(audio_text, voice, mp3_path))
-        log(f"[TTS] Áudio salvo: {mp3_path.name}")
+        if _gerar_audio(audio_text, voice, mp3_path):
+            log(f"[TTS] Áudio salvo: {mp3_path.name}")
+        else:
+            mp3_path = None
     else:
         log("[Áudio] Formato não inclui áudio — pulando TTS.")
 
@@ -503,11 +554,6 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         ], timeout=5, capture_output=True)
     except Exception:
         pass
-
-    # ── Persistir memória ─────────────────────────────────────
-    mark_seen(unique, seen)
-    save_seen(seen)
-    log(f"[Seen] Salvo: {len(seen)} URLs na janela de {SEEN_WINDOW_HOURS}h")
 
     log("=== Briefing concluído ===")
     log(f"  Briefing: {briefing_name}")
@@ -582,7 +628,7 @@ def _run_adhoc(tema: str):
     titulo = generate_title_via_llm(resumo)
     if not titulo or titulo == "Tech Briefing":
         titulo = tema.title()
-    filename_base = f"{date_str}_{slug}"
+    filename_base = f"{timestamp}_adhoc_{slug}" if slug else f"{timestamp}_adhoc"
 
     log(f"[Título] {titulo}")
     log(f"[Arquivo] {filename_base}")
@@ -636,8 +682,10 @@ def _run_adhoc(tema: str):
     voice    = config.get("tts_voice", "pt-BR-FranciscaNeural")
     mp3_path = briefing_dir / f"{filename_base}.mp3"
     log(f"[TTS] Gerando áudio com voz {voice}...")
-    asyncio.run(generate_tts(audio_text, voice, mp3_path))
-    log(f"[TTS] Áudio salvo: {mp3_path}")
+    if _gerar_audio(audio_text, voice, mp3_path):
+        log(f"[TTS] Áudio salvo: {mp3_path}")
+    else:
+        mp3_path = None
 
     # ── Notificação ───────────────────────────────────────────
     try:
@@ -653,7 +701,7 @@ def _run_adhoc(tema: str):
     log(f"  Tema:     {tema}")
     log(f"  Título:   {titulo}")
     log(f"  Markdown: {md_path.name}")
-    log(f"  Áudio:    {mp3_path.name}")
+    log(f"  Áudio:    {mp3_path.name if mp3_path else '(sem áudio)'}")
 
     print(f"BRIEFING_FILE={md_path}")
 
@@ -661,15 +709,29 @@ def _run_adhoc(tema: str):
 # ── Main ──────────────────────────────────────────────────────
 def main():
     argumento = sys.argv[1] if len(sys.argv) > 1 else "matinal_tech"
+    if argumento in ("-h", "--help", "help", "ajuda"):
+        # antes virava um briefing ad-hoc sobre o tema "--help" (LLM + TTS + arquivo no vault)
+        print("Uso: run.sh [nome_do_briefing | \"tema livre\"]   (padrão: matinal_tech)\n"
+              "Briefings nomeados: seção briefings: do services/_shared/perfis.yml (ex.: matinal_tech, vespertino_mercado)")
+        return
 
+    # Só o get_briefing decide entre nomeado e ad-hoc: um KeyError dentro do fluxo não vira "tema de pesquisa"
     try:
         briefing_cfg = get_briefing(argumento)
-        _run_briefing_nomeado(briefing_cfg, argumento)
     except KeyError:
-        log(f"[ad-hoc] '{argumento}' não é um briefing nomeado — tratando como tema de pesquisa")
-        _run_adhoc(argumento)
+        briefing_cfg = None
     except Exception as e:
         log(f"[ERRO] Falha ao carregar perfis.yml: {e}")
+        sys.exit(1)
+
+    try:
+        if briefing_cfg is None:
+            log(f"[ad-hoc] '{argumento}' não é um briefing nomeado — tratando como tema de pesquisa")
+            _run_adhoc(argumento)
+        else:
+            _run_briefing_nomeado(briefing_cfg, argumento)
+    except Exception as e:
+        log(f"[ERRO] Falha no briefing '{argumento}': {type(e).__name__}: {e}")
         sys.exit(1)
 
 
