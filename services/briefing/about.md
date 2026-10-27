@@ -22,6 +22,8 @@ Coletar fontes (RSS + SearXNG)
     ↓
 Deduplicar por URL/título
     ↓
+Rodízio entre as fontes (cada feed RSS / query SearXNG) e corte em max_items × 2
+    ↓
 Memória 24h → separar novas × continuações
     ↓
 _cluster_items()     → embeddings dos títulos via nomic-embed + AgglomerativeClustering
@@ -36,13 +38,18 @@ generate_title_via_llm() → título via JSON (fallback: heurística)
     ↓
 Salvar .md no vault (VAULT_ALFRED/briefings/)
     ↓
+mark_seen() + save_seen()  → atualiza logs/briefing_seen.json
+    ↓
 [se formato incluir áudio]
   render_template(audio_tecnico.md / audio_executivo.md)
   ollama_generate() → roteiro de áudio
-  edge-tts → .mp3 no vault
-    ↓
-mark_seen() + save_seen()  → atualiza logs/briefing_seen.json
+  edge-tts → .mp3 no vault (falha no TTS: loga, apaga o .mp3 parcial e segue sem áudio)
 ```
+
+O corte em `max_items × 2` acontece depois de um **rodízio** entre as fontes de coleta (1º item de cada feed/query,
+depois o 2º de cada...): antes era pela ordem de coleta e só as primeiras fontes do `perfis.yml` entravam (no
+matinal, 6 dos 10 feeds RSS; no vespertino, nenhum RSS). A memória de 24h é gravada logo depois do `.md` — uma falha
+no áudio não faz a próxima execução repetir as mesmas notícias como novas.
 
 ## Clustering semântico
 
@@ -76,15 +83,15 @@ O arquivo `logs/briefing_seen.json` guarda `{url: iso_timestamp}` das notícias 
 - Entradas com mais de 24h são purgadas automaticamente no carregamento.
 - Itens cujas URLs estão em `seen` vão para `continuacoes` (formato curto no template).
 - Itens novos passam pelo clustering e vão para `destaques` + `radar`.
-- Ao final, todas as URLs (novas + continuações) são marcadas com timestamp atual.
+- Logo após salvar o `.md`, todas as URLs (novas + continuações) são marcadas com timestamp atual.
 
 ## Modo ad-hoc
 
 Se o argumento não for um briefing nomeado em `perfis.yml`, o script trata como tema livre:
 - Busca no SearXNG com `categories="general,news"`.
 - Usa o template neutro `briefing_adhoc.md` (sem perfil de usuário).
-- Gera áudio com `audio_adhoc.md` se a variável `TTS_ADHOC=true` estiver no `.env`.
-- Salva em `VAULT_ALFRED/briefings/` com slug derivado do tema.
+- Gera áudio **sempre**, com `audio_adhoc.md` (não há variável para desligar; falha no TTS só deixa o briefing sem áudio).
+- Salva em `VAULT_ALFRED/briefings/AAAA-MM-DD_HHMM_adhoc_<slug-do-tema>.md` (+ `.mp3`).
 
 ## Saída no vault
 
@@ -93,9 +100,14 @@ Cada execução produz arquivos nomeados como:
 VAULT_ALFRED/briefings/
   2026-04-10_0700_matinal_tech_<slug-do-titulo>.md
   2026-04-10_0700_matinal_tech_<slug-do-titulo>.mp3  (se formato incluir áudio)
+  2026-04-10_1532_adhoc_<slug-do-tema>.md            (modo ad-hoc)
 ```
 
-O `.md` tem frontmatter YAML (`title`, `date`, `time`, `briefing`, `perfil`, `sources`) seguido do corpo gerado pelo LLM e uma seção "## Fontes coletadas" com todos os links.
+Hora e nome do briefing no nome do arquivo (desde 26/10/2026; antes era `AAAA-MM-DD_<slug>.md`): matinal e
+vespertino do mesmo dia, ou o mesmo tema ad-hoc pedido duas vezes, não se sobrescrevem. O prefixo `AAAA-MM-DD_`
+continua — é o que o podcast do inbox (`semanal.py`) usa para achar os briefings do período.
+
+O `.md` tem frontmatter YAML (`title`, `date`, `time`, `briefing`, `perfil`, `sources`) seguido do corpo gerado pelo LLM e uma seção "## Fontes citadas" (ad-hoc: "## Fontes coletadas") com os links.
 
 ## Dependências
 
@@ -113,15 +125,27 @@ E as libs compartilhadas: `lib_alfred`, `lib_templates`, `perfis`.
 ## Agendamento (units de usuário)
 
 Desde 20/10/2026 as units são de **usuário** (mesmo padrão do inbox: sem sudo, com acesso à sessão gráfica
-para o `notify-send`) e apontam para `~/dev/Alfred-Pennyworth`:
+para o `notify-send`). Os `.service` deste diretório são **modelos**: o `services/scripts/instalar.sh` troca
+`@ALFRED_DIR@` pelo caminho do repositório, grava as units em `~/.config/systemd/user/` e habilita os timers — não
+copie os arquivos direto (ver [README → Setup](../../README.md#4-setup)).
 
 ```bash
-cp alfred-briefing-matinal.service alfred-briefing-matinal.timer ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now alfred-briefing-matinal.timer     # 07:00 todo dia (ativo nesta máquina)
-# vespertino_mercado (AttanoTech, 18:00): mesmo procedimento com alfred-briefing-vespertino.* (não ativado)
+services/scripts/instalar.sh                                    # na raiz do repositório: gera e habilita as units
+systemctl --user list-timers 'alfred-briefing-*'                # matinal_tech 07:00 · vespertino_mercado 18:00
+systemctl --user start alfred-briefing-matinal.service          # roda agora
 journalctl --user -fu alfred-briefing-matinal
+systemctl --user disable --now alfred-briefing-vespertino.timer # desligar o vespertino (AttanoTech)
 ```
+
+Numa instalação nova os dois timers são habilitados. Timer que já estava instalado e **desabilitado** continua
+desabilitado — é o caso do vespertino na máquina original, onde só o matinal está ativo; o `instalar.sh` mantém e
+avisa. Se o `alfred-briefing-vespertino.timer` nunca tinha sido copiado para `~/.config/systemd/user/`, o
+`instalar.sh` o instala e habilita como qualquer outro: desligue com o último comando acima. O
+`alfred-switch.sh off` (modo jogo) para os dois briefings e o `on` só religa os timers habilitados.
+
+Sob demanda pelo chat: tool **Alfred Tech Briefing** (`tools/alfred_briefing.py`), que roda
+`<alfred_dir_host>/services/briefing/run.sh` pelo shell executor — Valves `alfred_dir_host` (pasta do repositório)
+e `vault_alfred_host` (`VAULT_ALFRED` do `.env`); ver [README → Tools](../../README.md#configurar-os-tokens-nas-valves).
 
 O podcast do Alfred (`services/inbox`, a cada 3 dias) usa estes briefings como fonte de notícias além das
 newsletters do e-mail (`perfis.yml → inbox.<nome>.podcast.incluir_briefings`).

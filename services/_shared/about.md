@@ -68,7 +68,7 @@ Distância coseno: `0.0` = idênticos, `0.25` = limiar de "similar" (similaridad
 
 ### `lib_mail.py`
 Leitura de e-mails sem rede e sem senha, direto dos arquivos do Thunderbird (cópias offline):
-- `find_thunderbird_profile()` → descobre o perfil (snap `~/snap/thunderbird/current/.config/thunderbird`, deb `~/.thunderbird`, flatpak) ou usa `THUNDERBIRD_PROFILE`
+- `find_thunderbird_profile()` → descobre o perfil (snap `~/snap/thunderbird/current/.config/thunderbird`, Thunderbird ≥ 158 `$XDG_CONFIG_HOME/thunderbird` — padrão `~/.config/thunderbird` —, deb/tarball antigo `~/.thunderbird`, flatpak) ou usa `THUNDERBIRD_PROFILE`
 - `list_accounts(profile)` → contas a partir do `prefs.js` (hostname, diretório, mbox × maildir)
 - `fetch_messages(accounts, pastas, desde, conta)` → mensagens normalizadas em dict (`subject`, `from_*`, `text`, `links`, `ics`, `is_bulk`, `read`...)
 - `parse_message(msg)` → HTML→texto com extração de links, anexos `.ics` → eventos (`icalendar` com fallback regex), flags `X-Mozilla-Status`
@@ -156,7 +156,7 @@ from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
 | `VAULT_ALFRED` | `""` | Caminho do vault Obsidian |
 | `OLLAMA_THINK` | `""` | `false` desliga o thinking (gemma4/qwen3); vazio não envia o campo |
 | `OLLAMA_NUM_CTX` | `""` | `options.num_ctx` enviado ao Ollama (ex.: 8192) |
-| `THUNDERBIRD_PROFILE` | `""` | Vazio = descoberta automática do perfil |
+| `THUNDERBIRD_PROFILE` | `""` | Vazio = descoberta automática do perfil (inclui `~/.config/thunderbird` do Thunderbird ≥ 158) |
 | `MODEL_TRANSCRIBE` | `""` | Modelo com entrada de áudio para `lib_audio` (vazio = `MODEL_CHAT`; gemma4 funciona) |
 | `EVOLUTION_URL` / `EVOLUTION_API_KEY` / `EVOLUTION_INSTANCE` | `""` / `""` / `alfred` | Evolution API (`lib_whatsapp`). URL vazia = envios simulados |
 | `WHATSAPP_NUMERO_PEDRO` | `""` | Número de Pedro (DDI + DDD + número, só dígitos) que recebe os resumos |

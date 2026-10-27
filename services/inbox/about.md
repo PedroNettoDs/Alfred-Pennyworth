@@ -190,7 +190,7 @@ resposta, agenda ou limpeza.
 2. Abra `http://127.0.0.1:7072/painel` e informe o `SHELL_EXECUTOR_TOKEN` do `.env`. Sem token no `.env`, o login
    avisa "SHELL_EXECUTOR_TOKEN não definido no .env"; token errado → "Token inválido" (depois de 0,5 s; o que foi
    digitado nunca é ecoado).
-3. Modo desligado (modo jogo): a API não está no ar, então o painel simplesmente não abre. O `alfred-switch.sh` não mudou.
+3. Modo desligado (modo jogo): a API não está no ar, então o painel simplesmente não abre (o painel não alterou o `alfred-switch.sh`).
 
 ### Sessão e segurança
 
@@ -326,20 +326,53 @@ Importe primeiro o sub-workflow, copie o ID dele para o nó "Aguardar resposta" 
 ## Agendamento (systemd de usuário — sem sudo, com acesso à sessão gráfica)
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp alfred-inbox.service alfred-inbox.timer alfred-inbox-api.service \
-   alfred-semanal.service alfred-semanal.timer alfred-vigia.service alfred-vigia.timer ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now alfred-inbox.timer      # ciclo de e-mail 07:30 e 18:30
-systemctl --user enable --now alfred-semanal.timer    # podcast semanal, domingo 19:00
-systemctl --user enable --now alfred-vigia.timer      # vigia: 2 min após o login e a cada 10 min
-systemctl --user enable --now alfred-inbox-api        # API (WhatsApp, extensões do Thunderbird, N8N, Painel)
+services/scripts/instalar.sh                          # gera as units (modelos com @ALFRED_DIR@) e habilita API + timers
+systemctl --user list-timers 'alfred-*'               # ciclo 07:30/18:30 · podcast 19:00 · vigia a cada 10 min · briefings
+systemctl --user status alfred-inbox-api              # API (WhatsApp, extensões do Thunderbird, N8N, Painel)
 journalctl --user -fu alfred-vigia
 ```
 
-Tudo sobe sozinho com o computador: Docker (`enabled`) traz a Evolution API (`restart: unless-stopped`), o
-linger do usuário mantém as units de usuário, e `~/.config/autostart/alfred-thunderbird.desktop` abre o
-Thunderbird no login (sem ele aberto não há e-mail novo nem gravação na agenda).
+Os arquivos `.service` deste diretório são **modelos**: o caminho do repositório (`@ALFRED_DIR@`) é preenchido pelo
+`instalar.sh`, que grava as units em `~/.config/systemd/user/` — não copie os arquivos direto (ver
+[README → Setup](../../README.md#4-setup)). O que o `instalar.sh` faz com elas (e com o resto) desde 26/10/2026:
+
+- unit ou timer que já estava instalado e **desabilitado** (ex.: briefing vespertino na máquina original) continua
+  desabilitado, com aviso;
+- unit já instalada que aponta para **outro** repositório que ainda existe não é sobrescrita (aviso);
+  `instalar.sh --forcar-units` regrava com o repositório atual;
+- em modo jogo (`logs/alfred_desligado`) habilita as units sem iniciá-las e **não sobe a Evolution** nem o banco dela;
+- venv quebrado ou criado em outra pasta (repositório movido) é recriado;
+- não cria vault vazio quando o `.env` aponta para um caminho fora do repositório que não existe (repositório
+  movido?) — marca como faltando para você ajustar o `.env`;
+- sai com código 1 se algo ficou faltando (lista em "Ainda falta" no resumo).
+
+Mudanças nas próprias units e no liga/desliga:
+
+- `alfred-inbox.timer` e `alfred-semanal.timer` não têm mais `Requires=` da `.service` — com ele, cada start do timer
+  (login, `instalar.sh`, `alfred-switch.sh on`) rodava o ciclo do e-mail e o podcast na hora, fora do horário;
+- `alfred-vigia.timer` não tem mais `OnBootSec=2min`, que vencia antes do login e fazia o vigia rodar junto com a API
+  ainda subindo (e reiniciá-la); fica `OnStartupSec=2min` + `OnUnitActiveSec=10min`;
+- o `alfred-switch.sh` também para o briefing vespertino e, no `on`, só religa os timers habilitados;
+- o `run.sh` do shell executor e o do researcher leem o `.env` literalmente, como o deste diretório (antes faziam
+  `source`, e um valor com `$` ou `(` derrubava o serviço).
+
+Docker (`enabled`) traz a Evolution API de volta com o computador (`restart: unless-stopped`) e as units de usuário
+sobem no login. O Thunderbird precisa estar aberto — sem ele não há e-mail novo nem gravação na agenda. Na máquina
+original, duas coisas foram configuradas **à mão** (o `instalar.sh` não cria nenhuma delas):
+
+```bash
+loginctl enable-linger "$USER"     # opcional: units de usuário sobem já no boot, sem esperar o login (pode pedir senha)
+
+mkdir -p ~/.config/autostart       # abre o Thunderbird no login
+cat > ~/.config/autostart/alfred-thunderbird.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Thunderbird (Alfred)
+Exec=thunderbird
+EOF
+```
+
+Thunderbird por flatpak: `Exec=flatpak run org.mozilla.Thunderbird`.
 
 As notificações que esperam clique nascem como **units transitórias** (`systemd-run --user`, nomes
 `alfred-aguardar-*` / `alfred-vigia-qr-*`): um filho comum de uma unit oneshot morria quando o ciclo
@@ -375,7 +408,7 @@ de `VAULT_ALFRED/pendencias/` são tocados — áudios de e-mail, jornal e podca
 ./run.sh whatsapp limpar-audios --dias 2      # apaga (o vigia faz isso a cada 10 min)
 ```
 
-Se preferir o padrão dos outros serviços (unit de sistema com `User=netto`), lembre que `notify-send` e áudio precisam de `DBUS_SESSION_BUS_ADDRESS` — a unit de usuário já tem isso.
+Se preferir unit de sistema (como o executor e o researcher na máquina original, com `User=netto`), lembre que `notify-send` e áudio precisam de `DBUS_SESSION_BUS_ADDRESS` — a unit de usuário já tem isso.
 
 ## Configuração (`services/_shared/perfis.yml` → `inbox:`)
 
@@ -581,7 +614,7 @@ curl -X POST :7072/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '
 
 **Configuração** (`perfis.yml → inbox.<nome>.podcast`): `vozes`, `max_temas`, `min_noticias`, `palavras_por_tema`, `pausa_ms`, `vinheta`, `formato`, `template_segmento`, `template_moldura`. Os pesos das fontes vêm de `jornal.pesos_fontes`.
 
-**Agendamento (proposto, não ativado):** `alfred-semanal.service` + `alfred-semanal.timer` (domingo 19:00, `Persistent=true`). Se o PC estava desligado e o timer só roda na segunda, o default já cai na semana anterior. Para instalar, siga o cabeçalho do `.service`.
+**Agendamento:** `alfred-semanal.service` + `alfred-semanal.timer` (todo dia às 19:00 com `--se-devido`, `Persistent=true` — ver o início desta seção), instalados e habilitados pelo `services/scripts/instalar.sh` (ver [Agendamento](#agendamento-systemd-de-usuário--sem-sudo-com-acesso-à-sessão-gráfica)).
 
 **Testes:** `venv/bin/python -m unittest tests.test_semanal -v` (offline: semana ISO, parser de diálogo, leitura de edição antiga, resolução de e-mails).
 
