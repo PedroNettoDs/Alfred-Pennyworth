@@ -95,7 +95,8 @@ def _load() -> dict:
     try:
         data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
     except Exception as e:
-        log(f"[agenda] YAML ilegível ({e}) — começando vazio")
+        # cópia do original antes de a próxima gravação substituir o arquivo (mesma regra de pendencias.yml)
+        core.preservar_corrompido(f, f"YAML inválido: {e}", "agenda")
         return {"itens": []}
     if not isinstance(data, dict) or not isinstance(data.get("itens"), list):
         return {"itens": []}
@@ -418,6 +419,10 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
         now = core._now().isoformat(timespec="minutes")
         if acao == "remover":
             item["status"] = "desfeito" if ok else "desfazer"
+        elif item.get("status") in ("desfazer", "cancelado", "desfeito"):
+            # Pedro desfez enquanto a extensão criava: o evento que acabou de nascer precisa sair
+            # (ok → "desfazer", a extensão recebe "remover"); se a criação falhou, não há o que remover
+            item["status"] = "desfazer" if ok else "cancelado"
         elif ok:
             item["status"] = "no_calendario"
             item["no_calendario_em"] = now
@@ -443,7 +448,7 @@ def desfazer(aid: str) -> dict:
         if not item:
             raise KeyError(f"Item da agenda não encontrado: {aid}")
         st = item.get("status")
-        if st in ("desfeito", "cancelado"):
+        if st in ("desfeito", "cancelado", "desfazer"):   # idempotente: 2º "Desfazer" não vira "cancelado"
             return item
         item["status"] = "desfazer" if st in ("no_calendario", "em_execucao") else "cancelado"
         item["atualizado_em"] = core._now().isoformat(timespec="minutes")

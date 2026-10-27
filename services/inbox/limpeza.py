@@ -84,8 +84,11 @@ def lotes_file() -> Path:
 
 
 def manifestos_dir() -> Optional[Path]:
-    v = os.getenv("VAULT_NOTICIAS", "").strip()
-    return Path(v) / "podcast" / "manifestos" if v else None
+    """Mesmo lugar onde o podcast grava (semanal): VAULT_NOTICIAS vazio → VAULT_ALFRED."""
+    try:
+        return core.vault_noticias() / "podcast" / "manifestos"
+    except RuntimeError:   # nem VAULT_NOTICIAS nem VAULT_ALFRED
+        return None
 
 
 def _now() -> datetime:
@@ -357,7 +360,7 @@ def resumo_lote(lote: dict, max_itens: int = 10) -> str:
     txt = f"Posso apagar estes {lote['total']} e-mails (vão para a Lixeira)? {partes}."
     for i in (lote.get("itens") or [])[:max_itens]:
         txt += f"\n• {i['date'][:10]} {i['from']} — {(i['subject'] or '')[:60]}"
-    if lote["total"] > max_itens:
+    if max_itens > 0 and lote["total"] > max_itens:   # max_itens=0: quem chama lista os itens à parte
         txt += f"\n… e mais {lote['total'] - max_itens}."
     return txt
 
@@ -593,6 +596,6 @@ def cmd_limpeza(args) -> int:
             print(f"✔ {args.id} recusado — nada será apagado.")
             return 0
     except (KeyError, ValueError, RuntimeError) as e:
-        print(f"[limpeza] {e}", file=sys.stderr)
+        print(f"[limpeza] {e.args[0] if isinstance(e, KeyError) and e.args else e}", file=sys.stderr)
         return 1
     return 2

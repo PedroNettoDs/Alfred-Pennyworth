@@ -63,7 +63,10 @@ def intervalo_semana(semana: str) -> tuple[date, date]:
     m = re.fullmatch(r"(\d{4})-?W(\d{1,2})", semana.strip(), re.I)
     if not m:
         raise ValueError(f"Semana inválida: {semana!r} (use AAAA-Www, ex.: 2026-W43)")
-    ini = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    try:
+        ini = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    except ValueError:   # W00, W54...
+        raise ValueError(f"Semana inválida: {semana!r} (semana {int(m.group(2))} não existe em {m.group(1)})") from None
     return ini, ini + timedelta(days=6)
 
 
@@ -442,6 +445,8 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
     `semana` ("AAAA-Www") → modo antigo, semana ISO. Sem `semana` → últimos `dias` dias (padrão
     perfis.yml podcast.intervalo_dias = 3) terminando `hoje`. O id do período nomeia .md/.mp3/manifesto.
     """
+    if dias is not None and int(dias) < 1:
+        raise ValueError(f"dias inválido: {dias} (use 1 ou mais)")
     nome, cfg = core.carregar_cfg(inbox_name)
     pcfg = cfg.get("podcast") or {}
     perfil = cfg.get("_perfil") or {}
@@ -494,7 +499,7 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
     agora = core._now().isoformat(timespec="seconds")
     palavras = sum(len(t.split()) for _, t in falas)
 
-    md = ["---", f'title: "{titulo}"', f"semana: {semana}", f'periodo: "{periodo}"', "type: podcast",
+    md = ["---", f"title: {json.dumps(titulo, ensure_ascii=False)}", f"semana: {semana}", f'periodo: "{periodo}"', "type: podcast",
           f"inbox: {nome}", f"edicoes: {len(edicoes)}", f"noticias: {len(itens)}", f"temas: {len(temas)}",
           f"emails: {len(emails)}", f"palavras: {palavras}",
           f"duracao_min: {dur / 60:.1f}" if audio_ok else "duracao_min: 0", f"gerado_em: {agora}",

@@ -47,13 +47,20 @@ except ImportError:  # execução direta pra debug
 #  1. Descoberta do perfil do Thunderbird
 # ══════════════════════════════════════════════════════════════
 
-CANDIDATOS_PROFILES_INI = [
-    Path.home() / "snap/thunderbird/current/.config/thunderbird/profiles.ini",   # snap (Ubuntu)
-    Path.home() / "snap/thunderbird/common/.thunderbird/profiles.ini",           # snap antigo
-    Path.home() / ".thunderbird/profiles.ini",                                   # deb / tarball
-    Path.home() / ".var/app/org.mozilla.Thunderbird/.thunderbird/profiles.ini",  # flatpak
-    Path.home() / ".mozilla-thunderbird/profiles.ini",                           # legado
-]
+def _candidatos_profiles_ini() -> list[Path]:
+    """Onde procurar o profiles.ini (calculado na hora: respeita HOME/XDG_CONFIG_HOME do processo)."""
+    xdg = Path(os.getenv("XDG_CONFIG_HOME", "").strip() or Path.home() / ".config")
+    return [
+        Path.home() / "snap/thunderbird/current/.config/thunderbird/profiles.ini",   # snap (Ubuntu)
+        Path.home() / "snap/thunderbird/common/.thunderbird/profiles.ini",           # snap antigo
+        xdg / "thunderbird/profiles.ini",                                            # Thunderbird ≥ 158 (XDG)
+        Path.home() / ".thunderbird/profiles.ini",                                   # deb / tarball (antigo)
+        Path.home() / ".var/app/org.mozilla.Thunderbird/.thunderbird/profiles.ini",  # flatpak
+        Path.home() / ".mozilla-thunderbird/profiles.ini",                           # legado
+    ]
+
+
+CANDIDATOS_PROFILES_INI = _candidatos_profiles_ini()
 
 
 def _parse_profiles_ini(ini: Path) -> Optional[Path]:
@@ -96,7 +103,7 @@ def find_thunderbird_profile(explicit: Optional[str] = None) -> Optional[Path]:
         log(f"[mail] THUNDERBIRD_PROFILE aponta pra diretório inexistente: {p}")
         return None
 
-    for ini in CANDIDATOS_PROFILES_INI:
+    for ini in _candidatos_profiles_ini():
         if ini.exists():
             prof = _parse_profiles_ini(ini)
             if prof:
@@ -350,6 +357,27 @@ def limpar_url(url: str) -> str:
 _URL_NO_TEXTO = re.compile(r"[\(\[<]?\s*https?://\S+?\s*[\)\]>]|https?://\S+")
 
 
+_URL_SOLTA = re.compile(r"https?://[^\s<>()\[\]\"']+")
+
+
+def _links_do_texto(text: str) -> list[tuple[str, str]]:
+    """URLs soltas de um texto puro → [(âncora, url)]. Âncora = o texto antes da URL na mesma linha
+    (ou a linha não vazia anterior), para o _link_de_acao reconhecer "Inscreva-se: https://..."."""
+    out: list[tuple[str, str]] = []
+    anterior = ""
+    for linha in (text or "").splitlines():
+        pos = 0
+        for mt in _URL_SOLTA.finditer(linha):
+            url = mt.group(0).rstrip(".,;:!?*")
+            antes = linha[pos:mt.start()].strip(" \t-–—:|>*•([")
+            out.append(((antes or anterior).strip(), url))
+            anterior = ""          # a linha anterior só serve de âncora para a 1ª URL depois dela
+            pos = mt.end()
+        if pos == 0 and linha.strip():
+            anterior = linha.strip(" \t-–—:|>*•")
+    return out
+
+
 def compactar_urls(text: str, max_len: int = 80) -> str:
     """Corpo para prompt: URLs longas (rastreamento) viram '[link]' — os links reais vão na lista LINKS."""
     def _sub(mt):
@@ -431,6 +459,7 @@ def parse_ics(raw) -> list[dict]:
     try:
         from icalendar import Calendar  # type: ignore
         cal = Calendar.from_ical(raw_s)
+        metodo = str(cal.get("METHOD") or "").strip().upper()
         for comp in cal.walk("VEVENT"):
             def _g(k):
                 v = comp.get(k)
@@ -448,6 +477,9 @@ def parse_ics(raw) -> list[dict]:
                 "url":         _g("URL"),
                 "organizer":   _g("ORGANIZER").replace("mailto:", "").replace("MAILTO:", ""),
                 "description": _g("DESCRIPTION")[:600],
+                # METHOD do VCALENDAR (REQUEST/PUBLISH/CANCEL/REPLY...) e STATUS do evento (CANCELLED...)
+                "method":      metodo,
+                "status":      _g("STATUS").strip().upper(),
             })
         return eventos
     except ImportError:
@@ -458,16 +490,20 @@ def parse_ics(raw) -> list[dict]:
     # fallback: unfold + regex
     unfolded = re.sub(r"\r?\n[ \t]", "", raw_s)
     cur: Optional[dict] = None
+    metodo = ""
     for line in unfolded.splitlines():
         if line.strip() == "BEGIN:VEVENT":
             cur = {"summary": "", "dtstart": None, "dtend": None, "location": "",
-                   "url": "", "organizer": "", "description": ""}
+                   "url": "", "organizer": "", "description": "", "method": metodo, "status": ""}
             continue
         if line.strip() == "END:VEVENT" and cur is not None:
             eventos.append(cur)
             cur = None
             continue
         if cur is None:
+            mm = _ICS_LINE.match(line.strip())
+            if mm and mm.group("key") == "METHOD":
+                metodo = mm.group("val").strip().upper()
             continue
         m = _ICS_LINE.match(line.strip())
         if not m:
@@ -480,6 +516,7 @@ def parse_ics(raw) -> list[dict]:
         elif k == "URL":         cur["url"] = v
         elif k == "ORGANIZER":   cur["organizer"] = v.replace("mailto:", "").replace("MAILTO:", "")
         elif k == "DESCRIPTION": cur["description"] = v[:600]
+        elif k == "STATUS":      cur["status"] = v.strip().upper()
     return eventos
 
 
@@ -536,7 +573,12 @@ def parse_message(msg, folder: str = "", account: str = "", max_text: int = 1200
         disp = part.get_content_disposition()
         if ct == "text/calendar" or fn.lower().endswith(".ics"):
             try:
-                ics_events.extend(parse_ics(part.get_payload(decode=True) or b""))
+                evs = parse_ics(part.get_payload(decode=True) or b"")
+                metodo_ct = str(part.get_param("method") or "").strip().upper()   # text/calendar; method=CANCEL
+                for ev in evs:
+                    if not ev.get("method") and metodo_ct:
+                        ev["method"] = metodo_ct
+                ics_events.extend(evs)
             except Exception as e:
                 log(f"[mail] .ics ilegível em '{subject[:40]}': {e}")
             if fn:
@@ -568,6 +610,13 @@ def parse_message(msg, folder: str = "", account: str = "", max_text: int = 1200
     seen_urls: set[str] = set()
     uniq_links: list[tuple[str, str]] = []
     for t, u in links:
+        u = limpar_url(u)
+        if u in seen_urls:
+            continue
+        seen_urls.add(u)
+        uniq_links.append((t[:120], u))
+    # e-mail só em texto puro (ou URL que só aparece no text/plain): as URLs do corpo também valem
+    for t, u in _links_do_texto(plain_norm):
         u = limpar_url(u)
         if u in seen_urls:
             continue
