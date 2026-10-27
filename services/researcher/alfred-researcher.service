@@ -1,15 +1,19 @@
 [Unit]
-Description=Alfred Research Service
-After=network.target
+Description=Alfred Research Service (FastAPI :PORT_RESEARCHER, padrão 7071)
+After=network-online.target
+# Unit de USUÁRIO, como as do inbox: roda com o mesmo usuário que antes ia em User= (sem sudo).
+# run.sh carrega o .env da raiz e escolhe a porta (PORT_RESEARCHER).
 
 [Service]
 Type=simple
-User=netto
-WorkingDirectory=/home/netto/Alfred-Pennyworth/services/researcher
-EnvironmentFile=/home/netto/Alfred-Pennyworth/.env
-ExecStart=/home/netto/Alfred-Pennyworth/services/researcher/venv/bin/uvicorn main:app --host 0.0.0.0 --port 7071
+WorkingDirectory=@ALFRED_DIR@/services/researcher
+ExecStart="@ALFRED_DIR@/services/researcher/run.sh"
 Restart=on-failure
 RestartSec=3
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
+
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/. Máquina que já tem a unit de SISTEMA antiga
+# (/etc/systemd/system/alfred-researcher.service): o instalar.sh não instala esta e avisa.

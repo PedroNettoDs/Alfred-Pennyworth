@@ -4,7 +4,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../../.env"
 
 if [[ -f "$ENV_FILE" ]]; then
-    set -a; source "$ENV_FILE"; set +a
+    # leitura literal (como services/inbox/run.sh): `source` executaria o .env como shell — senha com $ ou ( derrubava o serviço
+    while IFS='=' read -r key value; do
+        [[ -z "$key" || "$key" =~ ^# ]] && continue
+        export "$key"="$value"
+    done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$ENV_FILE")
 fi
 
 cd "$SCRIPT_DIR"

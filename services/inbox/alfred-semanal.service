@@ -6,8 +6,8 @@ After=network-online.target
 [Service]
 Environment=ALFRED_AUTOMACAO=1
 Type=oneshot
-WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
-ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh podcast --se-devido
+WorkingDirectory=@ALFRED_DIR@/services/inbox
+ExecStart="@ALFRED_DIR@/services/inbox/run.sh" podcast --se-devido
 StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=3600
@@ -15,8 +15,5 @@ TimeoutStartSec=3600
 [Install]
 WantedBy=default.target
 
-# INSTALAÇÃO (sem sudo):
-#   cp alfred-semanal.service alfred-semanal.timer ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now alfred-semanal.timer
-#   journalctl --user -fu alfred-semanal
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).

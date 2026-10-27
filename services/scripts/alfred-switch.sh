@@ -27,8 +27,8 @@ DESKTOP_FILE="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")/alfred
 APP_FILE="$HOME/.local/share/applications/alfred-switch.desktop"
 OLLAMA="${OLLAMA_BASE_URL:-http://localhost:11434}"
 
-TIMERS=(alfred-briefing-matinal.timer alfred-inbox.timer alfred-semanal.timer alfred-vigia.timer)
-SERVICOS=(alfred-briefing-matinal.service alfred-inbox.service alfred-semanal.service alfred-vigia.service)
+TIMERS=(alfred-briefing-matinal.timer alfred-briefing-vespertino.timer alfred-inbox.timer alfred-semanal.timer alfred-vigia.timer)
+SERVICOS=(alfred-briefing-matinal.service alfred-briefing-vespertino.service alfred-inbox.service alfred-semanal.service alfred-vigia.service)
 CONTAINERS_ORDEM_LIGAR=(alfred-evolution-db alfred-evolution)
 CONTAINERS_ORDEM_DESLIGAR=(alfred-evolution alfred-evolution-db)
 
@@ -136,7 +136,12 @@ ligar() {
         done
     fi
     systemctl --user start alfred-inbox-api.service 2>/dev/null && log "API do Alfred iniciada"
-    systemctl --user start "${TIMERS[@]}" 2>/dev/null && log "timers religados"
+    # só os timers habilitados: um timer desligado de propósito (ex.: briefing vespertino) não volta com o "on"
+    local t religados=()
+    for t in "${TIMERS[@]}"; do
+        systemctl --user is-enabled --quiet "$t" 2>/dev/null && systemctl --user start "$t" 2>/dev/null && religados+=("$t")
+    done
+    [[ ${#religados[@]} -gt 0 ]] && log "timers religados: ${religados[*]}"
     reabrir_aguardadores
     atualizar_atalho
     log "Alfred LIGADO."
