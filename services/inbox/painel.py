@@ -556,6 +556,16 @@ def _conexao_whatsapp(st: dict) -> dict:
     if est in ("close", "closed", "desconhecido"):
         return {"tom": "erro", "rotulo": "Desconectado", "estado": "erro",
                 "detalhe": f"Instância {st.get('instancia')}: {est}"}
+    if est == "inexistente":
+        return {"tom": "erro", "rotulo": "Sem instância", "estado": "erro",
+                "detalhe": f"A instância {st.get('instancia')} não existe na Evolution — "
+                           f"rode ./run.sh whatsapp qrcode para criar e parear"}
+    if est in ("HTTP 401", "HTTP 403"):
+        return {"tom": "erro", "rotulo": "Chave recusada", "estado": "erro",
+                "detalhe": f"Evolution API respondeu {est}: confira EVOLUTION_API_KEY no .env"}
+    if est.startswith("HTTP "):
+        return {"tom": "erro", "rotulo": "Erro na Evolution", "estado": "erro",
+                "detalhe": f"Evolution API respondeu {est[:120]}"}
     return {"tom": "neutro", "rotulo": "Indisponível", "estado": "indisponivel",
             "detalhe": f"Evolution API sem resposta ({est[:120] or 'erro'})"}
 
@@ -624,7 +634,8 @@ def _dados_inicio() -> dict:
     aguard = _lista_pendencias("aguardando", "", "")
     recentes = sorted(aguard, key=lambda x: -_ts(x["iso"]))[:5]
     ativos, _ = _agenda()
-    proximos = [i for i in ativos if (_ts(i["iso"]) or 0) >= (agora - timedelta(hours=1)).timestamp()][:4]
+    proximos = [i for i in ativos if i["status"] != "desfazer"   # Pedro mandou tirar do calendário
+                and (_ts(i["iso"]) or 0) >= (agora - timedelta(hours=1)).timestamp()][:4]
     lotes, _erro_lim = _limpeza()
     lotes_aguard = [l for l in lotes if l["status"] == "aguardando"]
     return {
@@ -1097,11 +1108,19 @@ async def acao_agendar(request: Request, pid: str):
     p, erro = _pendencia_para_acao(pid, True)
     if erro:
         return erro
-    lido = whatsapp.interpretar_quando(quando_txt)
+    try:
+        lido = whatsapp.interpretar_quando(quando_txt)
+    except ValueError:   # data inexistente nunca vira 500
+        lido = None
     if not lido:
         return _erro(400, "Não entendi a data. Use, por exemplo: 20/10 14:00, amanhã 10h, terça 15h ou 16:00.",
                      campo="quando")
     quando, tem_hora = lido
+    agora = core._now()
+    if (quando < agora - timedelta(minutes=1)) if tem_hora else (quando.date() < agora.date()):
+        # "hoje 10h" às 18:40: tarefa e lembrete nasceriam no passado
+        return _erro(400, f"Esse horário já passou ({quando.strftime('%d/%m/%Y %H:%M' if tem_hora else '%d/%m/%Y')}). "
+                          "Escolha um horário futuro.", campo="quando")
     try:
         r = await run_in_threadpool(whatsapp.agendar_pendencia, pid, quando, tem_hora)
     except core.PendenciaJaResolvida as e:
@@ -1186,6 +1205,8 @@ async def _acao_lote(request: Request, lid: str, aprovar: bool):
                 return (limpeza.aprovar if aprovar else limpeza.recusar)(lid, nota)
             except ValueError as e:
                 return _erro(400, str(e))
+            except KeyError as e:   # ex.: a inbox do lote não existe mais no perfis.yml
+                return _erro(400, str(e).strip("'\"") + (" — recuse o lote." if aprovar else ""))
 
     try:
         r = await run_in_threadpool(_fazer)
@@ -1194,10 +1215,12 @@ async def _acao_lote(request: Request, lid: str, aprovar: bool):
     if isinstance(r, Response):
         return r
     if aprovar:
-        msg = (f"Lote aprovado: {r.get('total')} e-mails irão para a Lixeira quando a extensão do Thunderbird passar.")
+        n = r.get("total")
+        msg = (f"Lote aprovado: {n} e-mail{'' if n == 1 else 's'} {'irá' if n == 1 else 'irão'} para a Lixeira "
+               f"quando a extensão do Thunderbird passar.")
         fora = len(r.get("removidos_na_aprovacao") or [])
         if fora:
-            msg += f" {fora} saíram do lote na revalidação."
+            msg += f" {fora} {'saiu' if fora == 1 else 'saíram'} do lote na revalidação."
     else:
         msg = "Lote recusado. Nenhum e-mail será movido."
     return JSONResponse({"ok": True, "mensagem": msg, "status": r.get("status"), "total": r.get("total")})

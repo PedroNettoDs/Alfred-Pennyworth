@@ -694,13 +694,14 @@ def _montar_pendencia_whatsapp(pid: str, msg: dict, cat: dict, cfg: dict, nome: 
     return entry
 
 
-def agrupar_mensagem(entry_id: str, msg: dict, conteudo: str) -> Optional[dict]:
+def agrupar_mensagem(entry_id: str, msg: dict, conteudo: str, erro: str = "") -> Optional[dict]:
     """
     Nova mensagem do mesmo contato → entra na pendência aberta (sem novo LLM/áudio).
     A decisão de agrupar vem de uma leitura feita antes da transcrição/classificação (segundos a minutos):
     dentro da trava a pendência é conferida de novo. Se outro processo (notificação no PC, CLI, tool) já a
     resolveu, ou ela não é mais do mesmo contato, devolve None sem gravar nada — quem chamou segue o fluxo
     normal (fila ou pendência nova) e a mensagem não se perde. KeyError se o id não existe.
+    `erro`: por que o áudio não foi transcrito (vai para whatsapp.mensagens e para o .md).
     """
     with core.trava_pendencias():
         data = core._load_pend()
@@ -712,20 +713,24 @@ def agrupar_mensagem(entry_id: str, msg: dict, conteudo: str) -> Optional[dict]:
             log(f"[whatsapp] {entry_id} não está mais aguardando ({entry.get('status')}) — mensagem nova não agrupada")
             return None
         wa = entry.setdefault("whatsapp", {})
-        wa.setdefault("mensagens", []).append({"message_id": msg.get("message_id"), "tipo": msg.get("tipo_msg"),
-                                               "texto": conteudo, "em": msg.get("timestamp")})
+        nova = {"message_id": msg.get("message_id"), "tipo": msg.get("tipo_msg"), "texto": conteudo,
+                "em": msg.get("timestamp")}
+        if erro and not conteudo:
+            nova["erro"] = erro
+        wa.setdefault("mensagens", []).append(nova)
         wa["atualizado_em"] = core._now().isoformat(timespec="minutes")
         wa["texto"] = ((wa.get("texto") or "") + "\n" + conteudo).strip()
-        wa["key"] = msg.get("key") or wa.get("key")               # a resposta cita a última mensagem
-        if conteudo:
-            wa["quoted_message"] = {"conversation": conteudo[:500]}
+        if msg.get("key"):   # a resposta cita a última mensagem: key e quoted_message sempre da mesma
+            wa["key"] = msg["key"]
+            wa["quoted_message"] = {"conversation": conteudo[:500]} if conteudo else None
         core._save_pend(data)
     md = core.vault() / ((entry.get("arquivos") or {}).get("md") or "")
     if md.is_file():
         txt = md.read_text(encoding="utf-8").rstrip()
         if "## Mensagens posteriores" not in txt:
             txt += "\n\n## Mensagens posteriores\n"
-        txt += f"\n- {msg.get('timestamp', '')[:16]} ({msg.get('tipo_msg')}): {conteudo or '(sem texto)'}"
+        sem_texto = f"áudio não transcrito: {erro}" if erro else "(sem texto)"
+        txt += f"\n- {msg.get('timestamp', '')[:16]} ({msg.get('tipo_msg')}): {conteudo or sem_texto}"
         md.write_text(txt + "\n", encoding="utf-8")
     log(f"[whatsapp] Mensagem agrupada na pendência {entry_id}")
     return entry
@@ -884,7 +889,7 @@ def processar_fila(todos: bool = False, enviar: Optional[bool] = None) -> list[d
     """
     Itens com prazo vencido (todos=True: a fila inteira) → pendência + áudio + avisos, com as opções que o
     webhook pediu (enviar=False sobrepõe: nunca chama a Evolution). O item só sai da fila depois da pendência
-    gravada; se der erro, tenta de novo na próxima volta (até 3 vezes).
+    gravada; se der erro, tenta de novo na próxima volta (até 3 vezes). No fim, disparar_lembretes().
     """
     agora = core._now()
     resultados = []
@@ -916,6 +921,10 @@ def processar_fila(todos: bool = False, enviar: Optional[bool] = None) -> list[d
                     else:
                         fila.remove(atual)
                 _save_fila(fila)
+    try:   # mesma volta da thread da API: lembretes do "Agendar" (painel / notificação) que venceram
+        disparar_lembretes(agora)
+    except Exception as e:
+        log(f"[whatsapp] lembretes: erro ({e})")
     return resultados
 
 
@@ -1107,7 +1116,9 @@ _DIAS_SEMANA = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "do
 def interpretar_quando(texto: str, agora: Optional[datetime] = None) -> Optional[tuple[datetime, bool]]:
     """
     '20/10 14:00' · '20/10/2026' · '2026-10-20 09:30' · 'amanhã 10h' · 'hoje 18:00' · 'terça 15h' · '16:00'
-    → (datetime local, tem_hora). None se não entender. Datas sem ano que já passaram vão para o ano seguinte.
+    · 'dia 30 às 14h' → (datetime local, tem_hora). None se não entender ou se a data não existir (31/02,
+    12/13, 29/02 fora de ano bissexto). Datas sem ano que já passaram vão para o ano seguinte; 'dia N' é o
+    próximo dia N (este mês ou o seguinte que o tenha); só a hora, já passada hoje, vai para amanhã.
     """
     agora = agora or core._now()
     t = core._ascii((texto or "").strip().lower())
@@ -1126,14 +1137,34 @@ def interpretar_quando(texto: str, agora: Optional[datetime] = None) -> Optional
         ano = int(m.group(3)) if m.group(3) else agora.year
         ano += 2000 if ano < 100 else 0
         dia = (ano, int(m.group(2)), int(m.group(1)))
-        if not m.group(3) and datetime(ano, dia[1], dia[2]).date() < agora.date():
-            dia = (ano + 1, dia[1], dia[2])
+        try:
+            if not m.group(3) and datetime(*dia).date() < agora.date():
+                dia = (ano + 1, dia[1], dia[2])
+        except ValueError:   # 31/02, 12/13, 29/02 em ano não bissexto...
+            return None
+    elif m := re.search(r"\bdia\s+(\d{1,2})\b", t_sem_hora):
+        n = int(m.group(1))
+        if not 1 <= n <= 31:
+            return None
+        a, mes = agora.year, agora.month
+        for _ in range(13):   # este mês ou o próximo que tenha o dia N (dia 31 pula meses de 30)
+            try:
+                cand = datetime(a, mes, n, hh, mm, tzinfo=agora.tzinfo)
+                if cand.date() > agora.date() or (cand.date() == agora.date() and (not tem_hora or cand > agora)):
+                    dia = (a, mes, n)
+                    break
+            except ValueError:
+                pass
+            a, mes = (a + 1, 1) if mes == 12 else (a, mes + 1)
     elif "depois de amanha" in t_sem_hora:
         d = agora.date() + timedelta(days=2); dia = (d.year, d.month, d.day)
     elif "amanha" in t_sem_hora:
         d = agora.date() + timedelta(days=1); dia = (d.year, d.month, d.day)
-    elif "hoje" in t_sem_hora or (tem_hora and not re.search(r"[a-z]{4,}", t_sem_hora)):
+    elif "hoje" in t_sem_hora:
         dia = (agora.year, agora.month, agora.day)
+    elif tem_hora and not re.search(r"[a-z]{4,}", t_sem_hora):   # só a hora: hoje, ou amanhã se já passou
+        d = agora.date() + timedelta(days=1 if (hh, mm) <= (agora.hour, agora.minute) else 0)
+        dia = (d.year, d.month, d.day)
     else:
         for i, nome in enumerate(_DIAS_SEMANA):
             if core._ascii(nome) in t_sem_hora:
@@ -1177,8 +1208,10 @@ def google_agenda_url(titulo: str, inicio: datetime, tem_hora: bool, detalhes: s
 def agendar_pendencia(pid: str, quando: datetime, tem_hora: bool = True, titulo: str = "") -> dict:
     """
     "Anotar na agenda para mais tarde": cria tarefa em VAULT_ALFRED/tasks.yml (due_date = dia), guarda
-    whatsapp.lembrar_em (a notificação volta nesse horário; a pendência continua aguardando) e devolve o
-    link do Google Agenda. → {"task_id", "lembrar_em", "google_url", "titulo"}.
+    whatsapp.lembrar_em (a notificação volta nesse horário — disparar_lembretes(), na thread da fila da API;
+    a pendência continua aguardando) e devolve o link do Google Agenda.
+    Reagendar atualiza a tarefa anterior (título/due_date) em vez de criar outra, se ela ainda estiver aberta.
+    → {"task_id", "lembrar_em", "google_url", "titulo"}.
     """
     with core.trava_pendencias():   # tarefa em tasks.yml aninhada (ordem pendências → tasks)
         data = core._load_pend()
@@ -1192,8 +1225,11 @@ def agendar_pendencia(pid: str, quando: datetime, tem_hora: bool = True, titulo:
         titulo = (titulo or ((wa.get("compromisso") or {}).get("titulo")) or f"Responder {contato} (WhatsApp)").strip()
         resumo = (entry.get("evento") or {}).get("resumo") or ""
         detalhes = f"{resumo}\n\nMensagem de {contato}: “{(wa.get('texto') or '')[:400]}”\nPendência Alfred: {pid}"
-        tid = core._add_task(f"{titulo}" + (f" — {quando:%H:%M}" if tem_hora else ""),
-                             quando.strftime("%Y-%m-%d"), ["whatsapp", "alfred", core._ascii(contato).lower()[:30]])
+        titulo_task = f"{titulo}" + (f" — {quando:%H:%M}" if tem_hora else "")
+        tid = (wa.get("agenda") or {}).get("task_id")
+        if not (tid and _atualizar_tarefa(tid, titulo_task, quando.strftime("%Y-%m-%d"))):   # reagendar: mesma tarefa
+            tid = core._add_task(titulo_task, quando.strftime("%Y-%m-%d"),
+                                 ["whatsapp", "alfred", core._ascii(contato).lower()[:30]])
         url = google_agenda_url(titulo, quando, tem_hora, detalhes)
         wa["lembrar_em"] = quando.isoformat(timespec="minutes")
         wa["agenda"] = {"task_id": tid, "quando": wa["lembrar_em"], "tem_hora": tem_hora, "titulo": titulo,
@@ -1202,6 +1238,67 @@ def agendar_pendencia(pid: str, quando: datetime, tem_hora: bool = True, titulo:
     _anexar_agenda_md(entry, titulo, quando, tem_hora, tid)
     log(f"[whatsapp] {pid} → agenda: tarefa #{tid}, lembrete {wa['lembrar_em']}")
     return {"task_id": tid, "lembrar_em": wa["lembrar_em"], "google_url": url, "titulo": titulo}
+
+
+def _atualizar_tarefa(tid, titulo: str, due_date: str) -> bool:
+    """Tarefa aberta #tid de tasks.yml → novo título/due_date (mesma trava de core._add_task). False se ela não
+    existe mais ou já foi concluída (aí quem chamou cria outra)."""
+    import yaml
+    f = core.vault() / "tasks.yml"
+    with core.trava_arquivo(f):
+        try:
+            data = yaml.safe_load(f.read_text(encoding="utf-8")) if f.exists() else None
+        except Exception:
+            return False
+        tasks = data.get("tasks") if isinstance(data, dict) else None
+        t = next((t for t in tasks or [] if isinstance(t, dict) and t.get("id") == tid), None)
+        if not t or t.get("status") != "open":
+            return False
+        t["title"], t["due_date"] = titulo, due_date
+        core.gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))
+    return True
+
+
+def marcar_lembrete(pid: str, quando_iso: Optional[str] = None) -> bool:
+    """
+    "Reserva" o lembrete agendado da pendência: dentro da trava, se ela ainda aguarda, tem whatsapp.lembrar_em
+    (igual a `quando_iso`, se dado) e ninguém o disparou para esse horário, grava lembrete_disparado_em =
+    lembrar_em e devolve True. Assim a thread da API e o aguardador da notificação (que dorme até o horário)
+    não mostram o mesmo lembrete duas vezes.
+    """
+    with core.trava_pendencias():
+        data = core._load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+        wa = (entry or {}).get("whatsapp") or {}
+        lembrar = wa.get("lembrar_em")
+        if (not entry or entry.get("status") != "aguardando" or not lembrar
+                or (quando_iso and lembrar != quando_iso) or wa.get("lembrete_disparado_em") == lembrar):
+            return False
+        wa["lembrete_disparado_em"] = lembrar
+        core._save_pend(data)
+    return True
+
+
+def disparar_lembretes(agora: Optional[datetime] = None) -> list[str]:
+    """Pendências de WhatsApp aguardando com whatsapp.lembrar_em vencido e ainda não lembradas para esse horário
+    → a notificação com botões volta (core.notificar_pendencia). Chamada por processar_fila (thread da API)."""
+    agora = agora or core._now()
+    vencidas = []
+    for p in core.listar_pendencias("aguardando"):
+        wa = p.get("whatsapp") or {}
+        lembrar = wa.get("lembrar_em")
+        if p.get("tipo") != "whatsapp" or not lembrar or wa.get("lembrete_disparado_em") == lembrar:
+            continue
+        dt = core._parse_dt(lembrar)
+        if dt and dt <= agora and marcar_lembrete(p["id"], lembrar):
+            vencidas.append(p)
+    for p in vencidas:
+        log(f"[whatsapp] {p['id']}: lembrete agendado para {p['whatsapp']['lembrar_em']} — notificação de volta")
+        try:
+            core.notificar_pendencia(core.obter_pendencia(p["id"]) or p)
+        except Exception as e:
+            log(f"[whatsapp] {p['id']}: lembrete não notificado ({e})")
+    return [p["id"] for p in vencidas]
 
 
 def _anexar_agenda_md(entry: dict, titulo: str, quando: datetime, tem_hora: bool, tid) -> None:
@@ -1706,11 +1803,13 @@ def processar_mensagem_whatsapp(
     # devolve None se outro processo resolveu a pendência no meio → segue para a fila / pendência nova.
     aberta = _pendencia_aberta_do_contato(existentes, msg, cfg)
     try:
-        entry = agrupar_mensagem(aberta["id"], msg, conteudo) if aberta else None
+        erro_tr = "" if conteudo else str((transcricao or {}).get("erro") or "")
+        entry = agrupar_mensagem(aberta["id"], msg, conteudo, erro=erro_tr) if aberta else None
     except KeyError:   # some do yml no meio (não acontece hoje, mas nunca perde a mensagem)
         entry = None
     if entry:
-        agr = {"tipo_msg": msg.get("tipo_msg"), "texto": conteudo}
+        agr = {"tipo_msg": msg.get("tipo_msg"),
+               "texto": conteudo or (f"(áudio não transcrito: {erro_tr})" if erro_tr else "")}
         res.update(acao="agrupada", motivo=f"contato já tem a pendência {aberta['id']} aberta", pendencia=entry,
                    notificacao=mensagem_para_pedro(entry, agrupada=agr))
         if notificar and enviar:
@@ -1747,7 +1846,10 @@ def status(timeout: Optional[float] = None) -> dict:
     cfg = resumo_config()
     if cfg["configurado"]:
         est = estado_instancia() if timeout is None else estado_instancia(timeout=timeout)
-        cfg["estado_instancia"] = est.get("estado") or est.get("erro") or f"HTTP {est.get('status')}"
+        # 404 = a Evolution respondeu, mas a instância não existe (falta ./run.sh whatsapp qrcode);
+        # "erro" (sem status) = rede/timeout; outros códigos ficam "HTTP nnn" (401/403: chave recusada)
+        cfg["estado_instancia"] = est.get("estado") or ("inexistente" if est.get("status") == 404 else
+                                                        est.get("erro") or f"HTTP {est.get('status')}")
     aguard = [p for p in core.listar_pendencias("aguardando") if p.get("tipo") == "whatsapp"]
     cfg["pendencias_whatsapp_aguardando"] = len(aguard)
     cfg["fila_espera"] = listar_fila()

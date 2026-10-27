@@ -570,7 +570,8 @@ class TestNotificacaoPC(Base):
         from datetime import datetime
         agora = datetime(2026, 10, 19, 16, 40).astimezone()
         casos = {"20/10 14:00": "20/10/2026 14:00", "amanhã 10h": "20/10/2026 10:00", "terça 15h": "20/10/2026 15:00",
-                 "2026-10-21 09:30": "21/10/2026 09:30", "01/01": "01/01/2027 09:00", "16:00": "19/10/2026 16:00"}
+                 "2026-10-21 09:30": "21/10/2026 09:30", "01/01": "01/01/2027 09:00", "16:00": "20/10/2026 16:00",   # só hora, já passou → amanhã
+                 "17:00": "19/10/2026 17:00"}
         for txt, esperado in casos.items():
             self.assertEqual(whatsapp.interpretar_quando(txt, agora)[0].strftime("%d/%m/%Y %H:%M"), esperado, txt)
         self.assertIsNone(whatsapp.interpretar_quando("sei lá", agora))

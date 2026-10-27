@@ -14,7 +14,7 @@
   <p class="lote__meta">Proposto em {{ l.criado }}{% if l.status == "aguardando" and l.expira %} · expira em {{ l.expira }}{% endif %}{% if l.motivo %} · Motivo: {{ l.motivo }}{% endif %}</p>
   {%- if l.nota %}<p class="pequeno">Nota: {{ l.nota }}</p>{% endif %}
   <details class="recolhivel" id="lote-{{ l.id }}-emails">
-    <summary>Ver os {{ l.itens|length }} e-mails</summary>
+    <summary>{{ "Ver o e-mail" if l.itens|length == 1 else "Ver os " ~ l.itens|length ~ " e-mails" }}</summary>
     <div class="recolhivel__corpo">
       <table class="tabela">
         <thead><tr><th scope="col">Remetente</th><th scope="col">Assunto</th><th scope="col">Data</th></tr></thead>
@@ -32,7 +32,8 @@
     <div class="acoes">
       {{ m.botao("Aprovar", "primario", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/aprovar",
           "data-confirmar": "dialogo-limpeza", "data-apos-sucesso": "encerrar", "data-texto-ocupado": "Aprovando…",
-          "data-dialogo-mensagem": "Os " ~ l.total ~ " e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente."}) }}
+          "data-dialogo-mensagem": ("O e-mail irá" if l.total == 1 else "Os " ~ l.total ~ " e-mails irão")
+                                   ~ " para a Lixeira da conta. Nada é apagado de forma permanente."}) }}
       {{ m.botao("Recusar", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/recusar", "data-apos-sucesso": "encerrar",
           "data-texto-ocupado": "Recusando…"}) }}
     </div>
