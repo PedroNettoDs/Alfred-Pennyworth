@@ -131,6 +131,7 @@ inbox:
       - lojareversa.com.br
       - melhoramigo.gringo.com.vc
     confianca_minima: 0.55        # abaixo disso o e-mail vai pra "outro"
+    cache_classificacao: true     # remetente de envio em massa que o LLM classificou 3x como promoção/transacional pula o LLM (SQLite)
 
     jornal:
       formato: [markdown, audio]
@@ -187,12 +188,15 @@ whatsapp:
     pessoal_vira_pendencia: true  # false = só "profissional" vira pendência
     so_se_requer_resposta: true   # false = toda mensagem relevante vira pendência, mesmo "ok, obrigado"
     confianca_minima: 0.5         # abaixo disso a categoria vira "outro" (sem pendência)
-    atraso_minutos: 20            # espera isso sem resposta de Pedro na conversa antes de resumir/avisar (0 = na hora)
+    atraso_minutos: 10            # espera isso sem resposta de Pedro na conversa antes de resumir/avisar (0 = na hora)
     agrupar_minutos: 30           # novas mensagens do mesmo contato entram na pendência aberta
     audio_max_segundos: 600       # transcreve no máximo isso (gemma4 ouve em fatias de 30 s)
     contatos_ignorar: []          # substrings de número ou nome que nunca viram pendência
     contatos_sempre: []           # substrings de número ou nome que viram pendência sem passar pelo LLM
     audio_reter_dias: 2           # áudios de resumo (.mp3) são apagados depois disso — a cópia fica no WhatsApp
+    historico: true               # grava o texto das conversas (não ignoradas) em alfred.db (SQLite FTS5): contexto do prompt + busca
+    historico_dias: 90            # apaga mensagens gravadas há mais que isso (0 = guarda tudo)
+    cache_classificacao: true     # contato que o LLM classificou 3x como automático/spam pula o LLM (nunca para gente)
 
     pendencias:
       tts_voice: "pt-BR-AntonioNeural"

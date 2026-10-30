@@ -24,6 +24,9 @@ POST /whatsapp/webhook[?notificar=1&async=1]   ← webhook messages.upsert (text
 POST /pendencias/{id}/responder-texto  {texto, enviar?, nota?} → registra e envia pelo WhatsApp (simulado sem EVOLUTION_URL)
 POST /pendencias/{id}/notificar-whatsapp        → manda a Pedro o resumo + áudio da pergunta (via Evolution API)
 GET  /whatsapp/status                            → configuração, estado da instância, fila
+GET  /whatsapp/buscar?q=&jid=&limite=            → busca FTS5 no histórico das conversas (alfred.db)
+POST /indexar                                    → reindexa os cofres (FTS5) e poda o histórico além de historico_dias
+GET  /busca?q=&cofre=&pasta=&limite=             → busca FTS5 nas notas dos cofres
 GET/POST /agenda, /agenda/fila, /agenda/{id}/resultado, /agenda/{id}/desfazer, /agenda/alfred.ics (ver bloco Agenda)
 
 Com `atraso_minutos` > 0 (perfis.yml → whatsapp:) o webhook só enfileira (acao=agendada + prazo); uma thread
@@ -50,6 +53,7 @@ load_env(override=False)
 import core  # noqa: E402
 import whatsapp  # noqa: E402
 import semanal  # noqa: E402
+from _shared import lib_db  # noqa: E402
 from _shared.lib_mail import find_thunderbird_profile  # noqa: E402
 from _shared.lib_whatsapp import resumo_config as whatsapp_config  # noqa: E402
 
@@ -146,6 +150,7 @@ def health():
         "thunderbird_profile": str(prof) if prof else None,
         "pendencias_aguardando": aguardando,
         "whatsapp": whatsapp_config(),
+        "db": lib_db.estatisticas(),
     }
 
 
@@ -354,6 +359,25 @@ def pendencia_notificar_whatsapp(pid: str, authorization: Optional[str] = Header
 def whatsapp_status(authorization: Optional[str] = Header(None)):
     check_auth(authorization)
     return whatsapp.status()
+
+
+@app.get("/whatsapp/buscar")
+def whatsapp_buscar(q: str, jid: Optional[str] = None, limite: int = 10, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    return {"q": q, "resultados": lib_db.buscar_wa(q, jid=jid, limite=max(1, min(limite, 50)))}
+
+
+@app.get("/busca")
+def busca_notas(q: str, cofre: Optional[str] = None, pasta: str = "", limite: int = 5,
+                authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    return {"q": q, "resultados": lib_db.buscar_notas(q, cofre=cofre, pasta=pasta, limite=max(1, min(limite, 50)))}
+
+
+@app.post("/indexar")
+def indexar(authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    return {"indice": core.indexar_cofres(), "db": lib_db.estatisticas()}
 
 
 # ══════════════════════════════════════════════════════════════

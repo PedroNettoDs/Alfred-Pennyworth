@@ -38,5 +38,5 @@ DATA DE HOJE: {data_hoje}
 MENSAGEM RECEBIDA:
 {mensagem}
 
-MENSAGENS ANTERIORES DO MESMO CONTATO NESTA PENDÊNCIA:
+CONVERSA RECENTE COM ESTE CONTATO (mais antigas primeiro; "nenhuma" se não há histórico):
 {historico}

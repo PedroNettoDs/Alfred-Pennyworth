@@ -69,6 +69,7 @@ VAULT_ALFRED/
 logs/inbox_seen.json                                 ← message-ids de e-mail processados (janela 14 dias)
 logs/whatsapp_seen.json · whatsapp_enviados.jsonl    ← ids de WhatsApp processados · envios simulados (dry-run)
 logs/whatsapp_fila.json                              ← mensagens esperando atraso_minutos (texto/transcrição, sem o áudio)
+VAULT_ALFRED/.alfred/alfred.db                       ← SQLite FTS5 (ver "Busca e histórico"): índice dos cofres, histórico do WhatsApp, cache
 ```
 
 ## Como responder "vou / não vou"
@@ -221,7 +222,7 @@ O webhook devolve `{"acao": pendencia_criada | agendada | agrupada | resposta_re
 
 ### Espera antes de resumir (`atraso_minutos`)
 
-Com a instância no próprio número, toda conversa passa pelo Alfred — inclusive as que Pedro está respondendo em tempo real. Por isso a parte cara e barulhenta espera `atraso_minutos` (20 no `perfis.yml`) **sem resposta de Pedro naquela conversa**:
+Com a instância no próprio número, toda conversa passa pelo Alfred — inclusive as que Pedro está respondendo em tempo real. Por isso a parte cara e barulhenta espera `atraso_minutos` (10 no `perfis.yml`) **sem resposta de Pedro naquela conversa**:
 
 - **Na hora** (o webhook continua rápido): normalizar → transcrever o áudio (só se puder virar pendência — grupo ignorado e `contatos_ignorar` não são transcritos) → classificar → decidir a relevância → dedup em `whatsapp_seen.json`. Mensagem relevante entra em `logs/whatsapp_fila.json` (mensagem normalizada sem o base64, transcrição, classificação, prazo e as opções `enviar`/`notificar` do webhook) e o webhook responde `acao: agendada` com o `prazo`.
 - **Pedro escreve na mesma conversa antes do prazo** (mensagem `fromMe` no mesmo `remote_jid` — direto pelo celular): o item sai da fila e nada é gerado (`acao: fila_cancelada`). Ecos das respostas que o próprio Alfred envia **não** cancelam: Pedro respondeu a pendência anterior e pode não ter visto a mensagem nova.
@@ -292,7 +293,7 @@ Divergências do formato real e correções (cobertas por `tests/payloads/evolut
 | duas mensagens simultâneas (webhook-async = uma thread por mensagem) | `criar_pendencia_whatsapp` lê o yml, gasta ~15 s em LLM/TTS e grava → **uma pendência sumia** (ficavam só o .md/.mp3) | `_LOCK` (RLock) serializa `processar_mensagem_whatsapp`, `responder_texto`, `notificar_pedro`, `agendar_pendencia` |
 
 Observações da validação:
-- Com a instância no próprio número, **toda** conversa passa pelo gemma4 (local): uma conversa real em andamento virou pendência "profissional". Grupos são ignorados (`grupos: ignorar`). Resolvido depois com a [espera antes de resumir](#espera-antes-de-resumir-atraso_minutos) (`atraso_minutos: 20`).
+- Com a instância no próprio número, **toda** conversa passa pelo gemma4 (local): uma conversa real em andamento virou pendência "profissional". Grupos são ignorados (`grupos: ignorar`). Resolvido depois com a [espera antes de resumir](#espera-antes-de-resumir-atraso_minutos) (`atraso_minutos: 10`).
 - Tudo o que Pedro escreve citando o resumo vai ao contato — inclusive instruções para o Alfred ("(coloque na minha agenda também)" foi entregue). Roadmap: comandos para o Alfred pelo WhatsApp.
 - O log da API (`./run.sh serve`) imprime os primeiros 60 caracteres de cada mensagem recebida — inclusive de grupos e conversas pessoais.
 - N8N: **não validado** (stack Docker do Alfred fora do ar nesta máquina); `n8n/alfred-whatsapp.json` continua escrito à mão.
@@ -309,6 +310,8 @@ Observações da validação:
 | `agrupar_minutos` | mensagens seguidas do mesmo contato entram na pendência aberta (sem novo LLM/áudio) |
 | `audio_max_segundos` | corta a transcrição depois disso |
 | `contatos_ignorar` / `contatos_sempre` | substrings de número ou nome: nunca / sempre viram pendência (sem LLM) |
+| `historico` / `historico_dias` | grava o texto das conversas não ignoradas em `alfred.db` (90 dias; `0` = para sempre; `historico: false` desliga). Alimenta o contexto do prompt e a busca |
+| `cache_classificacao` | contato que o LLM classificou 3x seguidas como `automatico`/`spam` (confiança ≥ 0,9) pula o LLM por 30 dias; nunca vale para `profissional`/`pessoal` |
 | `pendencias.*` | voz, templates, `lembrar_a_cada_horas` |
 
 ### Testes
@@ -321,7 +324,31 @@ venv/bin/python tests/gerar_payloads.py [--audio]              # regrava tests/p
 ./run.sh whatsapp simular tests/payloads/evolution_audio.json --sem-enviar --imediato   # um payload contra o seu .env
 ```
 
-Os payloads em `tests/payloads/` seguem o formato do evento `messages.upsert` da Evolution API v2 (texto, áudio OGG/Opus em base64 gerado com edge-tts, grupo, resposta de Pedro citando a pergunta, "ignorar", `fromMe`, spam, pessoal sem pedido). Os `evolution_v237_*.json` reproduzem o **formato real capturado na validação** (conteúdo sintético): `data.contextInfo`, áudio sem base64 com `mediaKey` em bytes JSON, resposta citada na conversa "Você", resposta direta citando o contato, grupo com `@lid`. 50 testes, incluindo a regressão de concorrência, a notificação no PC com a GUI simulada e a fila de espera (`TestFilaAtraso`, relógio mockado em `core._now`: agendada, cancelamento por `fromMe`, mensagens seguidas, criação ao vencer, thread da API, CLI). As outras classes rodam com `atraso_minutos: 0` (fluxo imediato). Os testes nunca chamam a Evolution: `EVOLUTION_URL` fica vazio.
+Os payloads em `tests/payloads/` seguem o formato do evento `messages.upsert` da Evolution API v2 (texto, áudio OGG/Opus em base64 gerado com edge-tts, grupo, resposta de Pedro citando a pergunta, "ignorar", `fromMe`, spam, pessoal sem pedido). Os `evolution_v237_*.json` reproduzem o **formato real capturado na validação** (conteúdo sintético): `data.contextInfo`, áudio sem base64 com `mediaKey` em bytes JSON, resposta citada na conversa "Você", resposta direta citando o contato, grupo com `@lid`. 65 testes (inclui `TestHistoricoECache` e `TestCacheEmail`: histórico, prompt com contexto, cache e endpoints de busca), incluindo a regressão de concorrência, a notificação no PC com a GUI simulada e a fila de espera (`TestFilaAtraso`, relógio mockado em `core._now`: agendada, cancelamento por `fromMe`, mensagens seguidas, criação ao vencer, thread da API, CLI). As outras classes rodam com `atraso_minutos: 0` (fluxo imediato). Os testes nunca chamam a Evolution: `EVOLUTION_URL` fica vazio.
+
+## Busca e histórico — SQLite FTS5 (`_shared/lib_db.py`)
+
+Um arquivo só, `VAULT_ALFRED/.alfred/alfred.db` (o Obsidian ignora a pasta com ponto; o container do Open WebUI enxerga o mesmo arquivo em `/vaults/alfred/.alfred/`; `ALFRED_DB` no `.env` troca o caminho). Os `.md` e o YAML continuam sendo a fonte de verdade; só o histórico do WhatsApp é gravado direto.
+
+| Tabela | O que guarda | Quem usa |
+|--------|--------------|----------|
+| `notas` (FTS5, derivada) | os `.md` de `VAULT_ALFRED` e `VAULT_PEDRO`, sem `.obsidian/` e pastas com ponto. Sem acento, prefixo (`pendência` acha `pendências`), bm25 com título pesando 8x | tools `alfred_vault_reader` / `alfred_vault_writer` (`search_vault`), `GET /busca`, `./run.sh buscar` |
+| `wa_msgs` + `wa_fts` | texto (ou transcrição) das mensagens de WhatsApp, inclusive as de Pedro. Pula grupo ignorado, `contatos_ignorar`, reação/figurinha | as 5 últimas da conversa vão no campo `historico` do prompt `pergunta_whatsapp.md`; `GET /whatsapp/buscar`, `./run.sh buscar --whatsapp` |
+| `cache_classif` | e-mail de envio em massa classificado 3x como `promocao`/`transacional`, WhatsApp 3x como `automatico`/`spam` | `core.classificar` e `whatsapp.classificar_whatsapp` pulam o gemma4 (`origem: "cache"`) |
+
+- **Reindexação**: ao fim de cada `ciclo` (07:30 / 18:30), por `./run.sh indexar` ou `POST /indexar`. É incremental por `mtime`; apagar o `.db` reconstrói tudo (menos o histórico do WhatsApp e o cache, que recomeçam do zero). A mesma rotina poda o histórico além de `historico_dias`.
+- **Tools do Open WebUI**: usam o índice quando o `.db` existe (valve `db_path`) e voltam à busca por substring quando não existe ou quando o índice não acha nada (nota recém-salva ainda não indexada).
+- **Cache — por que é conservador**: só categorias não acionáveis, só com confiança ≥ 0,9, só depois de 3 respostas iguais do LLM, com validade de 30 dias (depois, uma resposta do LLM o revalida). Uma categoria diferente zera a contagem. Errar uma promoção custa um item a mais no jornal; errar uma mensagem de gente custaria uma resposta perdida, por isso `profissional`/`pessoal` nunca entram. `cache_classificacao: false` (em `inbox:` e `whatsapp:`) desliga na hora; `origem: "cache"` aparece no log (`[cache] ...`) e no resumo do ciclo, e `GET /health` traz as contagens (`db.cache_usos`).
+- **Privacidade**: o histórico guarda conversas em texto claro, no cofre do Alfred (fora do git). O Postgres da Evolution já guarda o mesmo. Ajuste `historico_dias` ou desligue com `historico: false`.
+- **Fora do escopo (próximo passo)**: o comando "perguntar ao Alfred pelo WhatsApp" (recuperar trechos com `buscar_wa`/`buscar_notas` e deixar o gemma4 só redigir a resposta). A infraestrutura de busca já está pronta; falta tratar a mensagem de Pedro sem `ref:` (`whatsapp.py`, ramo `_eh_pedro`).
+
+```bash
+cd services/inbox
+./run.sh indexar                                  # (re)indexa os cofres e poda o histórico
+./run.sh buscar orçamento servidor --cofre pedro  # notas
+./run.sh buscar orçamento --whatsapp              # histórico das conversas
+venv/bin/python -m unittest tests.test_db -v      # índice, histórico, cache e as tools do Open WebUI
+```
 
 ## Podcast — "Resumo do Alfred", a cada 3 dias (`semanal.py`)
 

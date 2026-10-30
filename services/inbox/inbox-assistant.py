@@ -43,6 +43,7 @@ load_env(override=False)  # .env da raiz; variáveis já exportadas (run.sh, tes
 
 import core  # noqa: E402
 import whatsapp  # noqa: E402
+from _shared import lib_db  # noqa: E402
 from _shared.lib_tts import tocar_audio, iniciar_audio, parar_audio, tocando  # noqa: E402
 
 
@@ -79,6 +80,17 @@ def _tabela_classificacao(linhas: list[dict]):
     for r in linhas:
         print(f"{r['categoria']:<12} {r['confianca']:>4.2f}  {r['date'][:16]:<16} {r['from'][:28]:<28} {r['subject'][:48]}")
     print()
+
+
+def cmd_buscar(args):
+    q = " ".join(args.consulta)
+    if args.whatsapp:
+        for r in lib_db.buscar_wa(q, limite=args.max):
+            print(f"{r['ts'][:16]}  {'Pedro' if r['from_me'] else r['contato']:<22} {r['trecho']}")
+    else:
+        for r in lib_db.buscar_notas(q, cofre=args.cofre, limite=args.max):
+            print(f"{r['score']:>6}  [{r['cofre']}] {r['caminho']}\n        {r['trecho'][:160]}")
+    return 0
 
 
 def cmd_pendencias(args):
@@ -729,6 +741,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--sem-audio", action="store_true", help="só roteiro e .md (sem edge-tts)")
     sp.add_argument("--dry-run", action="store_true", help="só mostra a seleção de notícias (nada gravado)")
     sp.add_argument("--json", action="store_true")
+    sp = sub.add_parser("indexar", help="reindexa os cofres em alfred.db (SQLite FTS5) e poda o histórico do WhatsApp")
+    sp = sub.add_parser("buscar", help="busca FTS5: notas dos cofres (padrão) ou --whatsapp (histórico das conversas)")
+    sp.add_argument("consulta", nargs="+"); sp.add_argument("--whatsapp", action="store_true")
+    sp.add_argument("--cofre", default=None, help="alfred | pedro"); sp.add_argument("--max", type=int, default=5)
     sp = sub.add_parser("_aguardar-resposta"); sp.add_argument("id")
     import limpeza
     limpeza.adicionar_parser(sub)
@@ -752,6 +768,11 @@ def main() -> int:
         return cmd_ciclo(args, dry_run=True)
     if args.cmd == "jornal":
         return cmd_ciclo(args, so_jornal=True)
+    if args.cmd == "indexar":
+        print(json.dumps({"indice": core.indexar_cofres(), "db": lib_db.estatisticas()}, ensure_ascii=False, indent=2))
+        return 0
+    if args.cmd == "buscar":
+        return cmd_buscar(args)
     if args.cmd == "limpeza":
         import limpeza
         return limpeza.cmd_limpeza(args)

@@ -40,6 +40,7 @@ from _shared.lib_alfred import (  # noqa: E402
 from _shared.lib_mail import (  # noqa: E402
     find_thunderbird_profile, list_accounts, fetch_messages, imap_fetch,
 )
+from _shared import lib_db  # noqa: E402
 from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text  # noqa: E402
 from _shared.lib_titulo import generate_title_via_llm  # noqa: E402
 from _shared.lib_tts import tts_save, limpar_para_fala, tocar_audio  # noqa: E402
@@ -106,6 +107,10 @@ SCHEMA_EVENTO = {
 }
 OPTS_JSON = {"temperature": 0.1, "num_predict": 1200}
 ACIONAVEIS = ("noticia", "evento", "contato")
+# Só estas categorias podem pular o LLM via lib_db (cache por remetente de envio em massa): errar uma delas
+# custa uma promoção a mais no jornal, nunca uma mensagem perdida.
+CACHEAVEIS = ("promocao", "transacional")
+CACHE_CONFIANCA_MINIMA = 0.9
 STATUS_FINAIS = ("vou", "nao_vou", "expirada", "ignorada", "respondida", "respondida_manual")
 
 
@@ -273,6 +278,15 @@ def classificar(m: dict, cfg: dict) -> dict:
         return {"categoria": "noticia", "confianca": 0.9, "resumo": m["subject"],
                 "motivo": "remetentes_noticia", "origem": "heuristica"}
 
+    # Remetente de envio em massa que o LLM já classificou igual várias vezes → sem LLM (lib_db.cache_get)
+    chave_cache = None
+    if m.get("is_bulk") and m.get("from_addr") and cfg.get("cache_classificacao", True):
+        chave_cache = m["from_addr"].lower()
+        hit = lib_db.cache_get("email", chave_cache)
+        if hit:
+            log(f"[cache] {chave_cache} → {hit['categoria']} (sem LLM)")
+            return {**hit, "resumo": m["subject"], "origem": "cache"}   # o resumo guardado é de outro e-mail
+
     dicas = []
     if m.get("is_bulk"):
         dicas.append("envio em massa (List-Unsubscribe/List-Id)")
@@ -305,8 +319,11 @@ def classificar(m: dict, cfg: dict) -> dict:
     if cat in ACIONAVEIS and conf < minimo:
         motivo = f"baixa confiança ({conf:.2f} < {minimo}) para '{cat}'; " + motivo
         cat = "outro"
-    return {"categoria": cat, "confianca": round(conf, 2), "resumo": str(data.get("resumo", "")).strip()[:300],
-            "motivo": motivo[:200], "origem": "llm"}
+    res = {"categoria": cat, "confianca": round(conf, 2), "resumo": str(data.get("resumo", "")).strip()[:300],
+           "motivo": motivo[:200], "origem": "llm"}
+    if chave_cache:
+        lib_db.cache_put("email", chave_cache, res, cacheavel=cat in CACHEAVEIS and conf >= CACHE_CONFIANCA_MINIMA)
+    return res
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1013,6 +1030,26 @@ def _notify(titulo: str, corpo: str):
         pass
 
 
+def indexar_cofres() -> dict:
+    """
+    Reindexa os cofres em lib_db (FTS5: VAULT_ALFRED e VAULT_PEDRO, o que estiver definido) e poda o histórico
+    do WhatsApp além de `historico_dias` (perfis.yml, default 90; 0 = guarda tudo). Nunca levanta.
+    """
+    res: dict = {}
+    for nome, var in (("alfred", "VAULT_ALFRED"), ("pedro", "VAULT_PEDRO")):
+        caminho = os.getenv(var, "").strip()
+        if caminho:
+            res[nome] = lib_db.indexar_cofre(Path(caminho), nome)
+    try:
+        import whatsapp
+        dias = float(whatsapp.carregar_cfg()[1].get("historico_dias", 90))
+    except Exception:
+        dias = 90.0
+    res["wa_podadas"] = lib_db.podar_wa(dias)
+    log(f"[indice] {res}")
+    return res
+
+
 def _resumo_msg(m: dict, c: dict) -> dict:
     return {
         "message_id": m["message_id"], "from": m["from_addr"], "from_name": m["from_name"],
@@ -1100,6 +1137,7 @@ def ciclo(
     limpeza.registrar_classificacoes(resumo["classificacao"])
 
     resumo["manutencao"] = expirar_e_lembrar(cfg)
+    resumo["manutencao"]["indice"] = indexar_cofres()
     resumo["pendencias_aguardando"] = listar_pendencias("aguardando")
     resumo["fim"] = _now().isoformat(timespec="minutes")
     resumo["duracao_s"] = int((_now() - inicio).total_seconds())

@@ -10,6 +10,7 @@
 #   ./run.sh responder-texto ID "texto"   → pendência de WhatsApp (envia pela Evolution API)
 #   ./run.sh whatsapp status|qrcode|webhook URL|simular payload.json|notificar ID|fila|processar-fila
 #   ./run.sh limpeza [candidatos|propor|lotes|ver ID|aprovar ID|recusar ID] → limpeza pós-podcast (LIMPEZA.md)
+#   ./run.sh indexar|buscar TERMO [--whatsapp] → índice SQLite FTS5 dos cofres e do histórico do WhatsApp
 #   ./run.sh serve           → API HTTP (FastAPI) na porta PORT_INBOX, para o N8N / Evolution
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

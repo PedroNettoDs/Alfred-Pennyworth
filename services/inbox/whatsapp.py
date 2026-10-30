@@ -36,6 +36,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import log, ollama_generate, ollama_generate_json  # noqa: E402
+from _shared import lib_db  # noqa: E402
 from _shared.lib_audio import transcrever_audio  # noqa: E402
 from _shared.lib_templates import render_template  # noqa: E402
 from _shared.lib_tts import tts_save, limpar_para_fala  # noqa: E402
@@ -67,6 +68,9 @@ def _serializado(fn):
     return wrapper
 
 CATEGORIAS_WA = ("profissional", "pessoal", "grupo", "automatico", "spam")
+# Só estas podem pular o LLM via lib_db (cache por contato+tipo): perder uma mensagem de gente é pior que gastar GPU.
+CACHEAVEIS_WA = ("automatico", "spam")
+CACHE_CONFIANCA_MINIMA = 0.9
 SCHEMA_CLASSIFICACAO_WA = {
     "type": "object",
     "properties": {
@@ -364,6 +368,15 @@ def classificar_whatsapp(msg: dict, cfg: dict, texto: Optional[str] = None) -> d
                      requer=True, urg="media")
         return h("outro", f"{msg.get('tipo_msg')} de {contato} sem legenda", "sem texto para classificar")
 
+    # Contato que o LLM já classificou como automático/spam várias vezes seguidas → sem LLM (lib_db.cache_get)
+    chave_cache = None
+    if cfg.get("cache_classificacao", True) and msg.get("remote_jid") and not msg.get("grupo"):
+        chave_cache = f"{msg['remote_jid']}|{msg.get('tipo_msg', 'texto')}"
+        hit = lib_db.cache_get("whatsapp", chave_cache)
+        if hit:
+            log(f"[cache] {contato[:30]} → {hit['categoria']} (sem LLM)")
+            return {**hit, "resumo": f"{contato}: {texto[:160]}", "origem": "cache"}
+
     dicas = []
     if msg.get("tipo_msg") == "audio":
         dicas.append(f"áudio de {msg['audio'].get('segundos') or '?'}s transcrito automaticamente")
@@ -405,13 +418,16 @@ def classificar_whatsapp(msg: dict, cfg: dict, texto: Optional[str] = None) -> d
         motivo = f"baixa confiança ({conf:.2f} < {minimo}) para '{cat}'; " + motivo
         cat = "outro"
     urg = str(data.get("urgencia", "baixa")).lower()
-    return {
+    res = {
         "categoria": cat, "confianca": round(conf, 2),
         "requer_resposta": bool(data.get("requer_resposta", True)),
         "urgencia": urg if urg in ("baixa", "media", "alta") else "baixa",
         "resumo": str(data.get("resumo", "")).strip()[:300] or f"{contato}: {texto[:160]}",
         "motivo": motivo[:200], "origem": "llm",
     }
+    if chave_cache:
+        lib_db.cache_put("whatsapp", chave_cache, res, cacheavel=cat in CACHEAVEIS_WA and conf >= CACHE_CONFIANCA_MINIMA)
+    return res
 
 
 def _relevante(cat: dict, cfg: dict) -> tuple[bool, str]:
@@ -557,7 +573,8 @@ def criar_pendencia_whatsapp(msg: dict, cat: dict, cfg: dict, nome: str, transcr
         "categoria":        cat.get("categoria", ""),
         "urgencia":         cat.get("urgencia", "baixa"),
         "mensagem":         conteudo[:3000] or "(sem texto legível)",
-        "historico":        "nenhuma",
+        "historico":        lib_db.historico_contato(
+            msg.get("remote_jid"), n=5, excluir=[x.get("message_id") for x in mensagens]) or "nenhuma",
     })
     log(f"[whatsapp] Escrevendo pergunta para '{titulo[:60]}'...")
     texto = ollama_generate(prompt, timeout=180) or _texto_fallback_wa(msg, cat, conteudo)
@@ -1338,6 +1355,16 @@ def _nota_para_mim(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: boo
     return res
 
 
+def _registrar_historico(msg: dict, texto: str, cfg: dict) -> None:
+    """Grava a mensagem no histórico FTS5 (lib_db). Pula o que `_descarte_sem_texto` descarta (grupo ignorado,
+    contatos_ignorar, reação/figurinha); `historico: false` em perfis.yml desliga a gravação."""
+    if not cfg.get("historico", True) or _descarte_sem_texto(msg, cfg):
+        return
+    lib_db.registrar_wa(msg.get("message_id") or "", msg.get("remote_jid") or "", _contato_legivel(msg), texto,
+                        grupo=bool(msg.get("grupo")), from_me=bool(msg.get("from_me")),
+                        tipo=msg.get("tipo_msg") or "texto", ts=msg.get("timestamp"))
+
+
 @_serializado
 def processar_mensagem_whatsapp(
     payload: dict,
@@ -1431,6 +1458,7 @@ def processar_mensagem_whatsapp(
         if _conversa_comigo(msg):
             return _nota_para_mim(msg, cfg, res, enviar=enviar, notificar=notificar)
         if msg.get("from_me") and not msg.get("grupo"):
+            _registrar_historico(msg, msg.get("texto") or "", cfg)
             p = _pendencia_aguardando_do_jid(msg.get("remote_jid"))
             if p:
                 res["pendencia"] = _fechar_manual(p["id"], msg.get("texto") or "", msg)
@@ -1466,6 +1494,7 @@ def processar_mensagem_whatsapp(
     # ── classificação ───────────────────────────────────────────
     cat = classificar_whatsapp(msg, cfg, texto=conteudo)
     res["classificacao"] = cat
+    _registrar_historico(msg, conteudo, cfg)
     log(f"[whatsapp] {cat['categoria']:<12} {cat['confianca']:.2f} resp={cat.get('requer_resposta')} "
         f"{_contato_legivel(msg)[:24]:<24} {(conteudo or msg.get('tipo_msg'))[:60]!r}")
     if mid:

@@ -79,6 +79,9 @@ Divide o mbox pelo separador real do Thunderbird (`From - <data>`), evitando os 
 ### `lib_cluster.py`
 `cluster_items()`, `rank_clusters()`, `build_clustered_news_text()` — extraídos do `tech-briefing.py` para serem usados também pelo inbox. Comportamento idêntico ao original; `pesos_fontes` virou parâmetro.
 
+### `lib_db.py`
+SQLite + FTS5 em `VAULT_ALFRED/.alfred/alfred.db` (`ALFRED_DB` troca): `indexar_cofre()` / `buscar_notas()` (índice derivado dos `.md`), `registrar_wa()` / `historico_contato()` / `buscar_wa()` / `podar_wa()` (histórico do WhatsApp) e `cache_get()` / `cache_put()` (cache de classificação do LLM). Nenhuma função levanta: sem banco, devolve vazio/None e o chamador segue pelo caminho antigo. Detalhes e regras do cache em [`inbox/about.md`](../inbox/about.md#busca-e-histórico--sqlite-fts5-_sharedlib_dbpy).
+
 ### `lib_tts.py`
 `generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open; com `bloquear=True` passa ao próximo player se um sair com erro).
 

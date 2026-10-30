@@ -46,7 +46,7 @@ if not LIVE:
 import core        # noqa: E402
 import whatsapp    # noqa: E402
 import main        # noqa: E402
-from _shared import lib_whatsapp  # noqa: E402
+from _shared import lib_db, lib_whatsapp  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 PAYLOADS = AQUI / "payloads"
@@ -802,6 +802,166 @@ class TestFilaAtraso(Base):
         self.assertIn("Carlos Fatec", out.getvalue()); self.assertIn("pendencia_criada", out.getvalue())
         self.assertEqual(len(self.pendencias()), 1)
         self.assertEqual(self.enviados(), [])         # --sem-enviar sobrepõe o notificar=true do webhook
+
+
+class TestHistoricoECache(Base):
+    """SQLite/FTS5 (_shared/lib_db.py): histórico das conversas e cache de classificação."""
+    JID_CARLOS = "5514988887777@s.whatsapp.net"
+    JID_SPAM = "5511900001111@s.whatsapp.net"
+
+    def setUp(self):
+        super().setUp()
+        for f in (TMP / "vault" / ".alfred").glob("alfred.db*") if (TMP / "vault" / ".alfred").is_dir() else []:
+            f.unlink()
+
+    def test_mensagem_vai_para_o_historico(self):
+        self.post_webhook("evolution_texto.json", enviar="false")
+        h = lib_db.historico_contato(self.JID_CARLOS)
+        self.assertIn("Carlos Fatec: Pedro, bom dia! Conseguiu ver o orçamento", h)
+        self.assertEqual(len(lib_db.buscar_wa("orcamento")), 1)       # sem acento também acha
+        self.post_webhook("evolution_texto.json", enviar="false")      # duplicada: não grava de novo
+        self.assertEqual(lib_db.estatisticas()["wa_msgs"], 1)
+
+    def test_grupo_ignorado_nao_grava(self):
+        self.post_webhook("evolution_grupo.json", enviar="false")
+        self.assertEqual(lib_db.estatisticas().get("wa_msgs", 0), 0)
+
+    def test_historico_desligado_no_perfil(self):
+        with mock.patch.object(whatsapp, "carregar_cfg", lambda n=None: ("t", {**_CARREGAR_CFG(n)[1], "atraso_minutos": 0, "historico": False})):
+            self.post_webhook("evolution_texto.json", enviar="false")
+        self.assertEqual(lib_db.estatisticas().get("wa_msgs", 0), 0)
+
+    def test_historico_entra_no_prompt_sem_repetir_a_mensagem_atual(self):
+        lib_db.registrar_wa("ANTIGA-1", self.JID_CARLOS, "Carlos Fatec", "Semana passada falamos do rack de 42U")
+        prompts = []
+
+        def captura(prompt, **kw):
+            prompts.append(prompt)
+            return _fake_generate(prompt, **kw)
+
+        with mock.patch.object(whatsapp, "ollama_generate", captura):
+            self.post_webhook("evolution_texto.json", enviar="false")
+        pergunta = next(p for p in prompts if "CONVERSA RECENTE" in p)
+        trecho = pergunta.split("CONVERSA RECENTE", 1)[1]
+        self.assertIn("rack de 42U", trecho)
+        self.assertNotIn("Conseguiu ver o orçamento", trecho)   # a mensagem atual já vai em MENSAGEM RECEBIDA
+
+    def test_sem_historico_prompt_diz_nenhuma(self):
+        prompts = []
+        with mock.patch.object(whatsapp, "ollama_generate", lambda p, **kw: prompts.append(p) or _fake_generate(p)):
+            self.post_webhook("evolution_texto.json", enviar="false")
+        self.assertTrue(next(p for p in prompts if "CONVERSA RECENTE" in p).rstrip().endswith("nenhuma"))
+
+    def _semear_cache_spam(self):
+        res = {"categoria": "spam", "confianca": 0.95, "requer_resposta": False, "urgencia": "baixa",
+               "resumo": "x", "motivo": "golpe", "origem": "llm"}
+        for _ in range(lib_db.MINIMO_CONFIRMACOES):
+            lib_db.cache_put("whatsapp", f"{self.JID_SPAM}|texto", res)
+
+    def test_cache_pula_o_llm_para_contato_spam(self):
+        self._semear_cache_spam()
+
+        def nao_deveria(prompt, **kw):
+            raise AssertionError("o LLM não devia ser chamado — o contato está no cache")
+
+        with mock.patch.object(whatsapp, "ollama_generate_json", nao_deveria):
+            r = self.post_webhook("evolution_spam.json", enviar="false")
+        c = r.json()["classificacao"]
+        self.assertEqual((c["categoria"], c["origem"]), ("spam", "cache"))
+        self.assertEqual(r.json()["acao"], "ignorada")
+
+    def test_cache_aprende_com_o_llm_e_so_ativa_na_terceira(self):
+        for i in range(3):
+            p = payload("evolution_spam.json")
+            p["data"]["key"]["id"] = f"SPAM-{i}"
+            origem = self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p,
+                                      headers={"apikey": "CHAVE-DE-TESTE"}).json()["classificacao"]["origem"]
+            self.assertEqual(origem, "llm", f"mensagem {i} já veio do cache")
+        p = payload("evolution_spam.json")
+        p["data"]["key"]["id"] = "SPAM-3"
+        r = self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p, headers={"apikey": "CHAVE-DE-TESTE"})
+        self.assertEqual(r.json()["classificacao"]["origem"], "cache")
+
+    def test_cache_nunca_vale_para_categoria_de_gente(self):
+        # profissional/pessoal não entram no cache, mesmo repetidos
+        for i in range(4):
+            p = payload("evolution_texto.json")
+            p["data"]["key"]["id"] = f"CARLOS-{i}"
+            r = self.client.post("/whatsapp/webhook", params={"enviar": "false"}, json=p, headers={"apikey": "CHAVE-DE-TESTE"})
+            self.assertNotEqual(r.json()["classificacao"]["origem"], "cache")
+        self.assertEqual(lib_db.estatisticas()["cache_entradas"], 0)
+
+    def test_endpoints_de_busca_e_indexacao(self):
+        self.post_webhook("evolution_texto.json", enviar="false")
+        (TMP / "vault" / "notas").mkdir(parents=True, exist_ok=True)
+        (TMP / "vault" / "notas" / "servidor.md").write_text("# Servidor\nOrçamento do servidor novo", encoding="utf-8")
+        self.assertEqual(self.client.get("/busca", params={"q": "servidor"}).status_code, 401)   # exige Bearer
+        r = self.client.post("/indexar", headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertGreaterEqual(r.json()["indice"]["alfred"]["total"], 1)
+        r = self.client.get("/busca", params={"q": "orcamento servidor", "cofre": "alfred"}, headers=self.auth)
+        self.assertIn("notas/servidor.md", [x["caminho"] for x in r.json()["resultados"]])
+        r = self.client.get("/whatsapp/buscar", params={"q": "orcamento", "jid": self.JID_CARLOS}, headers=self.auth)
+        self.assertEqual(len(r.json()["resultados"]), 1)
+        self.assertEqual(self.client.get("/health").json()["db"]["wa_msgs"], 1)
+
+    def test_cache_desligado_no_perfil(self):
+        self._semear_cache_spam()
+        with mock.patch.object(whatsapp, "carregar_cfg", lambda n=None: ("t", {**_CARREGAR_CFG(n)[1], "atraso_minutos": 0, "cache_classificacao": False})):
+            r = self.post_webhook("evolution_spam.json", enviar="false")
+        self.assertEqual(r.json()["classificacao"]["origem"], "llm")
+
+
+class TestCacheEmail(unittest.TestCase):
+    """core.classificar + lib_db: remetente de envio em massa que cai sempre numa categoria não acionável."""
+
+    def setUp(self):
+        for f in (TMP / "vault" / ".alfred").glob("alfred.db*") if (TMP / "vault" / ".alfred").is_dir() else []:
+            f.unlink()
+        self.chamadas = []
+
+    def _llm(self, categoria, confianca=0.95):
+        def f(prompt, **kw):
+            self.chamadas.append(prompt)
+            return {"categoria": categoria, "confianca": confianca, "resumo": "r", "motivo": "m"}
+        return mock.patch.object(core, "ollama_generate_json", f)
+
+    @staticmethod
+    def _email(addr="ofertas@loja.com", assunto="Oferta", bulk=True):
+        return {"from_addr": addr, "from_domain": addr.split("@")[1], "from_name": "Loja", "subject": assunto,
+                "date_iso": "2026-10-23T08:00", "is_bulk": bulk, "attachments": [], "read": False, "ics": [],
+                "text": "corpo", "message_id": "<x@y>"}
+
+    def test_promocao_recorrente_pula_o_llm_na_quarta(self):
+        with self._llm("promocao"):
+            origens = [core.classificar(self._email(assunto=f"Oferta {i}"), {})["origem"] for i in range(4)]
+        self.assertEqual(origens, ["llm", "llm", "llm", "cache"])
+        self.assertEqual(len(self.chamadas), 3)
+
+    def test_resumo_do_cache_e_o_assunto_do_email_atual(self):
+        with self._llm("promocao"):
+            for i in range(3):
+                core.classificar(self._email(assunto=f"Oferta {i}"), {})
+            c = core.classificar(self._email(assunto="Black Friday"), {})
+        self.assertEqual((c["origem"], c["resumo"]), ("cache", "Black Friday"))
+
+    def test_so_envio_em_massa_e_so_categoria_nao_acionavel(self):
+        with self._llm("promocao"):
+            for _ in range(4):
+                core.classificar(self._email(bulk=False), {})          # e-mail individual: nunca cacheia
+        self.assertEqual(len(self.chamadas), 4)
+        self.chamadas.clear()
+        with self._llm("evento"):
+            for _ in range(4):
+                core.classificar(self._email(addr="eventos@x.com"), {})   # acionável: nunca cacheia
+        self.assertEqual(len(self.chamadas), 4)
+        self.assertEqual(lib_db.estatisticas()["cache_entradas"], 0)
+
+    def test_desligado_no_perfil(self):
+        with self._llm("promocao"):
+            for _ in range(5):
+                core.classificar(self._email(), {"cache_classificacao": False})
+        self.assertEqual(len(self.chamadas), 5)
 
 
 class TestArtefatos(unittest.TestCase):
