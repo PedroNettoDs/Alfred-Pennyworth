@@ -7,8 +7,8 @@ After=network-online.target
 [Service]
 Environment=ALFRED_AUTOMACAO=1
 Type=oneshot
-WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
-ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh ciclo
+WorkingDirectory=@ALFRED_DIR@/services/inbox
+ExecStart="@ALFRED_DIR@/services/inbox/run.sh" ciclo
 StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=1800
@@ -16,10 +16,5 @@ TimeoutStartSec=1800
 [Install]
 WantedBy=default.target
 
-# INSTALAÇÃO (sem sudo):
-#   mkdir -p ~/.config/systemd/user
-#   cp alfred-inbox.service alfred-inbox.timer ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now alfred-inbox.timer
-#   systemctl --user list-timers alfred-inbox.timer
-#   journalctl --user -fu alfred-inbox
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).

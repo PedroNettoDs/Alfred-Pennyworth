@@ -1,6 +1,7 @@
 [Unit]
 Description=Timer — Alfred podcast (confere todo dia às 19:00; gera a cada 3 dias com --se-devido)
-Requires=alfred-semanal.service
+# Sem Requires=alfred-semanal.service: o timer já ativa a .service de mesmo nome; com Requires= cada start do
+# timer (login, instalar.sh, alfred-switch.sh on) rodava a .service na hora, fora do horário.
 
 [Timer]
 # O systemd não tem "a cada 3 dias" ancorado no calendário sem saltos na virada do mês; por isso o

@@ -5,16 +5,13 @@ After=network-online.target
 [Service]
 Environment=ALFRED_AUTOMACAO=1
 Type=simple
-WorkingDirectory=%h/dev/Alfred-Pennyworth/services/inbox
-ExecStart=%h/dev/Alfred-Pennyworth/services/inbox/run.sh serve
+WorkingDirectory=@ALFRED_DIR@/services/inbox
+ExecStart="@ALFRED_DIR@/services/inbox/run.sh" serve
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 
-# INSTALAÇÃO (sem sudo):
-#   cp alfred-inbox-api.service ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now alfred-inbox-api
-#   curl -s http://localhost:7072/health
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).

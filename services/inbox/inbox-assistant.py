@@ -47,6 +47,11 @@ from _shared import lib_db  # noqa: E402
 from _shared.lib_tts import tocar_audio, iniciar_audio, parar_audio, tocando  # noqa: E402
 
 
+def _msg_erro(e: Exception) -> str:
+    """str(KeyError("x")) vira "'x'" (com aspas) — para KeyError mostra a mensagem crua."""
+    return str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
+
+
 # ── Subcomandos ───────────────────────────────────────────────
 
 def cmd_ciclo(args, dry_run=False, so_jornal=False, so_pendencias=False):
@@ -117,7 +122,7 @@ def cmd_ver(args):
     if not p:
         print(f"Pendência não encontrada: {args.id}")
         return 1
-    md = core.vault() / (p.get("arquivos") or {}).get("md", "")
+    md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")   # respondida na espera: md = None
     if md.is_file():
         print(md.read_text(encoding="utf-8"))
     else:
@@ -139,13 +144,16 @@ def cmd_ouvir(args):
 
 
 def cmd_responder(args):
+    antes = (core.obter_pendencia(args.id) or {}).get("task_id")
     try:
-        p = core.responder(args.id, args.resposta, args.nota or "")
+        p = core.responder(args.id, args.resposta, args.nota or "", origem="via terminal")
     except (KeyError, ValueError) as e:
-        print(f"Erro: {e}")
+        print(f"Erro: {_msg_erro(e)}")
         return 1
     rotulo = {"vou": "VOU", "nao_vou": "NÃO VOU", "ignorada": "IGNORADA"}.get(p["status"], p["status"])
-    print(f"{p['id']} → {rotulo}" + (f" · tarefa #{p['task_id']} criada em tasks.yml" if p.get("task_id") else ""))
+    # só diz "criada" se a tarefa nasceu nesta chamada (re-resposta não cria outra)
+    criada = p["_task_criada"] if "_task_criada" in p else bool(p.get("task_id")) and p.get("task_id") != antes
+    print(f"{p['id']} → {rotulo}" + (f" · tarefa #{p['task_id']} criada em tasks.yml" if criada and p.get("task_id") else ""))
     return 0
 
 
@@ -154,7 +162,7 @@ def cmd_responder_texto(args):
     try:
         p = whatsapp.responder_texto(args.id, texto, enviar=not args.sem_enviar, origem="via terminal", nota=args.nota or "")
     except (KeyError, ValueError) as e:
-        print(f"Erro: {e}")
+        print(f"Erro: {_msg_erro(e)}")
         return 1
     wa = p.get("whatsapp") or {}
     envio = wa.get("envio") or {}
@@ -180,6 +188,13 @@ def cmd_whatsapp(args):
             print("EVOLUTION_URL / EVOLUTION_API_KEY não configurados no .env")
             return 1
         est = lw.estado_instancia()
+        if not est.get("ok") and est.get("status") in (401, 403):
+            print(f"A Evolution API recusou a chave (HTTP {est['status']}) — confira EVOLUTION_API_KEY no .env.")
+            return 1
+        if not est.get("ok") and est.get("status") != 404:   # rede/timeout ou outro erro: não é "instância não existe"
+            print(f"Evolution API inacessível em {lw.url_base()}: "
+                  f"{est.get('erro') or ('HTTP ' + str(est.get('status')))} — confira se o container está no ar.")
+            return 1
         if not est.get("ok"):
             print(f"Instância '{lw.instancia()}' não existe ainda — criando...")
             r = lw.criar_instancia()
@@ -253,7 +268,7 @@ def cmd_whatsapp(args):
         try:
             r = whatsapp.notificar_pedro(args.arg)
         except KeyError as e:
-            print(f"Erro: {e}")
+            print(f"Erro: {_msg_erro(e)}")
             return 1
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
         return 0
@@ -334,10 +349,13 @@ def _perguntar_gui(titulo: str, corpo: str, tem_audio: bool) -> str:
 
 
 def _registrar_escolha(pid: str, escolha: str, origem: str) -> bool:
-    atual = core.obter_pendencia(pid)
-    if not atual or atual.get("status") != "aguardando":
+    """`origem` continua indo na nota (como antes); respondido_via = "notificação no PC".
+    Checar e gravar na mesma transação: se outro caminho respondeu no meio, nada muda."""
+    try:
+        atual = core.responder(pid, "vou" if escolha == "vou" else "nao_vou", origem,
+                               origem="via notificação no PC", so_se_aguardando=True)
+    except (KeyError, core.PendenciaJaResolvida):
         return False
-    core.responder(pid, "vou" if escolha == "vou" else "nao_vou", origem)
     core._notify("Alfred", f"Anotado: {'VOU' if escolha == 'vou' else 'NÃO VOU'} — {atual['titulo'][:50]}")
     return True
 
@@ -468,7 +486,10 @@ def _agendar_gui(p: dict) -> Optional[dict]:
         txt = _caixa_texto_gui("Alfred — anotar na agenda", pergunta, inicial, multilinha=False)
         if txt is None:
             return None
-        q = whatsapp.interpretar_quando(txt)
+        try:
+            q = whatsapp.interpretar_quando(txt)
+        except ValueError:   # data inexistente: pergunta de novo em vez de derrubar o aguardador
+            q = None
         if q:
             break
         pergunta, inicial = f"Não entendi “{txt}”. Use dia/mês e hora, ex.: 20/10 14:00", txt
@@ -591,6 +612,10 @@ def cmd_aguardar_whatsapp(args):
             r = _agendar_gui(p)
             if r:
                 _dormir_ate(r["lembrar_em"], args.id)
+                # a thread da API (disparar_lembretes) também lembra nesse horário: só um dos dois mostra
+                if not whatsapp.marcar_lembrete(args.id, r["lembrar_em"]):
+                    parar_audio(player)
+                    return 0
             continue
         return 0
     return 0
@@ -619,7 +644,7 @@ def _perguntar_whatsapp(p: dict, ouvir: bool) -> str:
             tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
             continue
         if low in ("ver", "v"):
-            md = core.vault() / (p.get("arquivos") or {}).get("md", "")
+            md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")
             print(md.read_text(encoding="utf-8") if md.is_file() else "(sem texto)")
             continue
         try:
@@ -674,13 +699,18 @@ def cmd_perguntar(args):
                 tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
                 continue
             if r in ("ver", "v"):
-                md = core.vault() / (p.get("arquivos") or {}).get("md", "")
+                md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")
                 print(md.read_text(encoding="utf-8") if md.is_file() else "(sem texto)")
                 continue
             if r in ("vou", "sim", "s", "v+", "nao", "não", "n", "nao vou", "não vou"):
                 escolha = "vou" if r in ("vou", "sim", "s", "v+") else "nao"
-                nota = input("  Nota (opcional) › ").strip()
-                core.responder(p["id"], "vou" if escolha == "vou" else "nao_vou", nota or "via terminal")
+                try:
+                    nota = input("  Nota (opcional) › ").strip()
+                except EOFError:   # stdin acabou: grava a resposta sem nota
+                    print()
+                    nota = ""
+                core.responder(p["id"], "vou" if escolha == "vou" else "nao_vou", nota or "via terminal",
+                               origem="via terminal")
                 print(f"  ✔ anotado: {'VOU' if escolha == 'vou' else 'NÃO VOU'}")
                 break
             print("  responda: vou | nao | ouvir | ver | pular | sair")
@@ -778,7 +808,14 @@ def main() -> int:
         return limpeza.cmd_limpeza(args)
     if args.cmd in ("semanal", "podcast"):
         import semanal
-        return semanal.cmd_semanal(args)
+        if args.dias is not None and args.dias < 1:
+            print(f"Erro: --dias precisa ser 1 ou mais (recebi {args.dias}).")
+            return 2
+        try:
+            return semanal.cmd_semanal(args)
+        except ValueError as e:   # semana/dias inválidos: mensagem, sem traceback
+            print(f"Erro: {_msg_erro(e)}")
+            return 2
     if args.cmd == "pendencias":
         return cmd_pendencias(args)
     if args.cmd == "perguntar":

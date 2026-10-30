@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Agenda{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Agenda", "Compromissos anotados pelo Alfred, a caminho do calendário do Thunderbird") }}
+<div class="pilha" data-poll-url="/painel/parcial/agenda">{% include "_agenda_lista.html" %}</div>
+{% endblock %}

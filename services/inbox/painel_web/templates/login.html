@@ -1,0 +1,33 @@
+{#
+  Login do painel. Variável opcional: erro (str) — ex.: "Token inválido" ou
+  "SHELL_EXECUTOR_TOKEN não definido no .env"; proximo (str) — caminho /painel… para voltar após entrar.
+  O campo nunca recebe value: o token digitado não volta na página.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Entrar{% endblock %}
+{% block pagina %}
+  <main id="conteudo" class="login">
+    <div class="cartao login__cartao">
+      <div class="login__marca">
+        {{ m.icone("marca") }}
+        <h1 class="tela-titulo">Painel do Alfred</h1>
+      </div>
+      <p class="login__texto">Senhor, para continuar, informe o token de acesso do Alfred
+        (o mesmo SHELL_EXECUTOR_TOKEN do .env). Ele só será pedido de novo quando a sessão expirar.</p>
+
+      {%- if erro is defined and erro %}
+      {{ m.aviso("erro", erro) }}
+      {%- endif %}
+
+      <form method="post" action="/painel/login">
+        {%- if proximo is defined and proximo %}
+        <input type="hidden" name="proximo" value="{{ proximo }}">
+        {%- endif %}
+        {{ m.campo("token", "Token de acesso", tipo="password", id="token", obrigatorio=true,
+                   attrs={"autocomplete": "current-password", "autofocus": "autofocus", "spellcheck": "false"}) }}
+        <button class="botao botao--primario botao--largo" type="submit">Entrar</button>
+      </form>
+    </div>
+  </main>
+{% endblock %}

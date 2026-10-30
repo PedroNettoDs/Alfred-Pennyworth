@@ -142,7 +142,7 @@ def aguardar_qr(estado: str) -> int:
     """Chamado pelo `_vigia-qr`: mostra o aviso e, se Pedro clicar, gera e abre o QR code."""
     corpo = (f"A conexão do WhatsApp caiu (estado: {estado}). Até reconectar, o Alfred não vê as mensagens.\n\n"
              "Clique em “Mostrar QR code” e escaneie em WhatsApp → Aparelhos conectados → Conectar aparelho.")
-    acao = ""
+    acao = None   # None = sem notificação com botões (script ausente, rc≠0, exceção) → aviso simples
     py = shutil.which("python3", path="/usr/bin:/bin")
     if py and NOTIFICAR_DBUS.exists():
         try:
@@ -151,11 +151,16 @@ def aguardar_qr(estado: str) -> int:
                                                    "icone": "network-disconnect",
                                                    "acoes": [["qr", "Mostrar QR code"], ["depois", "Depois"]]}),
                                  capture_output=True, text=True, timeout=60 * 60 * 6)
-            acao = out.stdout.strip() if out.returncode == 0 else ""
+            acao = out.stdout.strip() if out.returncode == 0 else None
+        except subprocess.TimeoutExpired:
+            acao = ""   # o aviso ficou na tela sem clique: não repete
         except Exception:
-            acao = ""
-    else:
-        core._notify("Alfred — WhatsApp desconectado", corpo + "\n\nrun.sh whatsapp qrcode")
+            acao = None
+    if acao is None:   # aviso simples, sem botão: o caminho é o comando
+        core._notify("Alfred — WhatsApp desconectado",
+                     f"A conexão do WhatsApp caiu (estado: {estado}). Até reconectar, o Alfred não vê as mensagens.\n\n"
+                     "Para parear de novo: services/inbox/run.sh whatsapp qrcode e escaneie em WhatsApp → "
+                     "Aparelhos conectados → Conectar aparelho.")
     if acao == "qr":
         subprocess.run([sys.executable, str(Path(__file__).parent / "inbox-assistant.py"), "whatsapp", "qrcode"],
                        capture_output=True, text=True, timeout=120)

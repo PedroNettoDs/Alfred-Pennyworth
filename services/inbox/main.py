@@ -28,12 +28,14 @@ GET  /whatsapp/buscar?q=&jid=&limite=            → busca FTS5 no histórico da
 POST /indexar                                    → reindexa os cofres (FTS5) e poda o histórico além de historico_dias
 GET  /busca?q=&cofre=&pasta=&limite=             → busca FTS5 nas notas dos cofres
 GET/POST /agenda, /agenda/fila, /agenda/{id}/resultado, /agenda/{id}/desfazer, /agenda/alfred.ics (ver bloco Agenda)
+GET  /painel                                     → Painel do Alfred (painel.py; só 127.0.0.1, login com o token)
 
 Com `atraso_minutos` > 0 (perfis.yml → whatsapp:) o webhook só enfileira (acao=agendada + prazo); uma thread
 de fundo iniciada com a API passa a cada FILA_INTERVALO_S pela fila e cria pendência + áudio + avisos dos
 itens vencidos. Rode um único processo (sem --workers / --reload) para não duplicar a thread.
 """
 
+import json
 import os
 import sys
 import threading
@@ -41,7 +43,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -54,6 +56,13 @@ import core  # noqa: E402
 import whatsapp  # noqa: E402
 import semanal  # noqa: E402
 from _shared import lib_db  # noqa: E402
+try:
+    import painel  # noqa: E402  (Painel do Alfred: /painel, só 127.0.0.1)
+except ImportError as e:
+    # venv criado antes do painel (o run.sh só instala o requirements ao criar o venv): sem o jinja2 a API
+    # continua subindo — webhook do WhatsApp, N8N, extensões e tools —, só sem as rotas /painel.
+    painel = None
+    log(f"[painel] Painel desativado: {e}. Rode venv/bin/pip install -r requirements.txt e reinicie a API.")
 from _shared.lib_mail import find_thunderbird_profile  # noqa: E402
 from _shared.lib_whatsapp import resumo_config as whatsapp_config  # noqa: E402
 
@@ -81,6 +90,11 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Alfred Inbox", version="1.1.0", lifespan=lifespan)
+
+
+def _msg_erro(e: Exception) -> str:
+    """str(KeyError("x")) vira "'x'" (com aspas) — para KeyError usa a mensagem crua."""
+    return str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
 
 
 def check_auth(authorization: Optional[str]):
@@ -164,7 +178,7 @@ def ciclo(req: CicloRequest, authorization: Optional[str] = Header(None)):
             max_emails=req.max_emails, notificar=req.notificar,
         )
     except (KeyError, RuntimeError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_msg_erro(e))
 
 
 @app.post("/scan")
@@ -196,8 +210,11 @@ class SemanalRequest(BaseModel):
 @app.post("/semanal")
 def semanal_post(req: SemanalRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
-    res = semanal.gerar_semanal(semana=req.semana, inbox_name=req.inbox, com_audio=not req.sem_audio,
-                                dry_run=req.dry_run, dias=req.dias)
+    try:
+        res = semanal.gerar_semanal(semana=req.semana, inbox_name=req.inbox, com_audio=not req.sem_audio,
+                                    dry_run=req.dry_run, dias=req.dias)
+    except ValueError as e:   # semana inválida, dias < 1
+        raise HTTPException(status_code=400, detail=str(e))
     if not res:
         raise HTTPException(status_code=404, detail="Sem edições do jornal nessa semana")
     return res
@@ -214,7 +231,11 @@ def jornal_ultimo(authorization: Optional[str] = Header(None)):
     titulo = md.stem
     for line in texto.splitlines()[:12]:
         if line.startswith("title:"):
-            titulo = line[6:].strip().strip('"')
+            bruto = line[6:].strip()
+            try:   # gravado com json.dumps (aspas internas escapadas)
+                titulo = json.loads(bruto) if bruto.startswith('"') else bruto
+            except ValueError:
+                titulo = bruto.strip('"')
             break
     return {"titulo": titulo, "md": str(md), "mp3": str(mp3) if mp3.exists() else None, "texto": texto}
 
@@ -247,8 +268,11 @@ def pendencia(pid: str, authorization: Optional[str] = Header(None)):
 
 
 @app.get("/pendencias/{pid}/audio")
-def pendencia_audio(pid: str, authorization: Optional[str] = Header(None)):
-    check_auth(authorization)
+def pendencia_audio(pid: str, request: Request, authorization: Optional[str] = Header(None)):
+    # Bearer (N8N, tools) OU sessão do Painel do Alfred (o <audio> do navegador não manda Bearer).
+    # O Bearer vem primeiro: um cookie do painel estragado nunca atrapalha quem usa o token.
+    if not (TOKEN and authorization == f"Bearer {TOKEN}") and not (painel and painel.sessao_valida(request)):
+        check_auth(authorization)
     p = core.obter_pendencia(pid)
     mp3 = (p or {}).get("arquivos", {}).get("mp3")
     path = core.vault() / mp3 if mp3 else None
@@ -261,11 +285,11 @@ def pendencia_audio(pid: str, authorization: Optional[str] = Header(None)):
 def pendencia_responder(pid: str, req: RespostaRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
     try:
-        return core.responder(pid, req.resposta, req.nota or "")
+        return core.responder(pid, req.resposta, req.nota or "", origem="via API")
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_msg_erro(e))
 
 
 @app.post("/pendencias/{pid}/links")
@@ -274,7 +298,7 @@ def pendencia_links(pid: str, req: LinksRequest, authorization: Optional[str] = 
     try:
         return core.registrar_links_resposta(pid, req.model_dump())
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -285,7 +309,7 @@ def _processar_webhook(payload: dict, notificar: bool, enviar: bool) -> dict:
     try:
         return whatsapp.processar_mensagem_whatsapp(payload, notificar=notificar, enviar=enviar)
     except (KeyError, RuntimeError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_msg_erro(e))
 
 
 @app.post("/whatsapp/webhook")
@@ -336,9 +360,9 @@ def pendencia_responder_texto(pid: str, req: RespostaTextoRequest, authorization
     try:
         entry = whatsapp.responder_texto(pid, req.texto, enviar=req.enviar, origem="via API", nota=req.nota or "")
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_msg_erro(e))
     envio = (entry.get("whatsapp") or {}).get("envio") or {}
     if req.enviar and entry.get("status") == "aguardando":
         raise HTTPException(status_code=502, detail={"erro": envio.get("erro") or "envio falhou", "pendencia": entry})
@@ -352,7 +376,7 @@ def pendencia_notificar_whatsapp(pid: str, authorization: Optional[str] = Header
     try:
         return whatsapp.notificar_pedro(pid)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
 
 
 @app.get("/whatsapp/status")
@@ -408,9 +432,9 @@ def _limpeza_erros(fn, *a):
     try:
         return fn(*a)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_msg_erro(e))
 
 
 @app.get("/limpeza/candidatos")
@@ -520,7 +544,7 @@ def agenda_resultado(aid: str, req: AgendaResultadoRequest, authorization: Optio
     try:
         return agenda.registrar_resultado(aid, req.acao, req.ok, req.calendario or "", req.erro or "")
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
 
 
 @app.post("/agenda/{aid}/desfazer")
@@ -529,7 +553,7 @@ def agenda_desfazer(aid: str, authorization: Optional[str] = Header(None)):
     try:
         return agenda.desfazer(aid)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
 
 
 @app.get("/agenda/alfred.ics")
@@ -540,6 +564,11 @@ def agenda_ics(request: Request):
     if host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="feed .ics só para 127.0.0.1")
     return Response(content=agenda.feed_ics(), media_type="text/calendar; charset=utf-8")
+
+
+# Painel do Alfred (interface web local de aprovações) — rotas em painel.py (fora se faltar o jinja2)
+if painel is not None:
+    app.include_router(painel.router)
 
 
 if __name__ == "__main__":

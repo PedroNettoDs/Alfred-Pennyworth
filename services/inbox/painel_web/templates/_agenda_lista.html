@@ -1,0 +1,38 @@
+{# Miolo da Agenda (página e /painel/parcial/agenda). Vars: ativos, inativos (de painel._agenda_vm). #}
+{% import "_macros.html" as m %}
+{% macro item(i) -%}
+<li class="agenda-item{% if i.inativo %} agenda-item--inativo{% endif %}">
+  {{ m.tempo(i.iso, i.quando, i.relativo, "agenda-item__quando") }}
+  <div>
+    <p class="agenda-item__titulo">{{ i.titulo }}</p>
+    <span class="agenda-item__origem">{{ i.origem }}{% if i.local %} · {{ i.local }}{% endif %}</span>
+    {%- if i.erro %}<span class="agenda-item__origem"> · Erro: {{ i.erro }}</span>{% endif %}
+  </div>
+  {{ m.selo_status(i.status) }}
+  {%- if i.pode_desfazer %}
+  <form data-acao="/painel/api/agenda/{{ i.id }}/desfazer" data-apos-sucesso="encerrar">
+    {{ m.botao("Desfazer", pequeno=true, attrs={"data-texto-ocupado": "Desfazendo…", "aria-label": "Desfazer " ~ i.titulo}) }}
+  </form>
+  {%- else %}
+  <span></span>
+  {%- endif %}
+</li>
+{%- endmacro %}
+{%- if not ativos and not inativos %}
+{{ m.vazio("A agenda está vazia.", "agenda") }}
+{%- else %}
+<section aria-labelledby="ag-proximos">
+  <h2 class="secao-titulo" id="ag-proximos">Próximos</h2>
+  {%- if ativos %}
+  <ul class="lista">{% for i in ativos %}{{ item(i) }}{% endfor %}</ul>
+  {%- else %}
+  {{ m.vazio("Nada pendente na agenda.", "agenda", compacto=true) }}
+  {%- endif %}
+</section>
+{%- if inativos %}
+<section aria-labelledby="ag-inativos">
+  <h2 class="secao-titulo" id="ag-inativos">Desfeitos e cancelados</h2>
+  <ul class="lista">{% for i in inativos %}{{ item(i) }}{% endfor %}</ul>
+</section>
+{%- endif %}
+{%- endif %}

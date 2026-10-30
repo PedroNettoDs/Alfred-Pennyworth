@@ -70,9 +70,9 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | ChromaDB         | 8000  | Docker        | Banco vetorial para RAG com embeddings                   |
 | N8N              | 5678  | Docker        | Automação de workflows (futuro)                          |
 | Ollama           | 11434 | Host (nativo) | Servidor de LLMs; serve llama3.1:8b e nomic-embed       |
-| Shell Executor   | 7070  | Host (systemd)| API REST que executa comandos no host sob whitelist       |
-| Researcher       | 7071  | Host (systemd)| Orquestra busca web → síntese LLM → escrita no vault     |
-| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N) |
+| Shell Executor   | 7070  | Host (systemd --user; sistema na máquina original) | API REST que executa comandos no host sob whitelist       |
+| Researcher       | 7071  | Host (systemd --user; sistema na máquina original) | Orquestra busca web → síntese LLM → escrita no vault     |
+| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N); **Painel do Alfred** em `/painel` (só 127.0.0.1, login com o `SHELL_EXECUTOR_TOKEN`) |
 | Evolution API    | 8080 (127.0.0.1) | Docker  | WhatsApp pareado por QR code; entrega mensagens/áudios por webhook e envia as respostas de Pedro (+ PostgreSQL `evolution-postgres`) |
 
 ### Comunicação entre Serviços
@@ -145,7 +145,7 @@ Alfred-Pennyworth/
 │
 ├── services/
 │   ├── researcher/
-│   │   ├── alfred-researcher.service  # Unit file do systemd
+│   │   ├── alfred-researcher.service  # Modelo de unit de usuário (@ALFRED_DIR@ — preenchido pelo instalar.sh)
 │   │   ├── main.py                    # FastAPI — orquestrador de pesquisa
 │   │   ├── requirements.txt           # fastapi, uvicorn, httpx
 │   │   ├── run.sh                     # Script de inicialização manual
@@ -159,25 +159,29 @@ Alfred-Pennyworth/
 │   │   ├── thunderbird-ext-agenda/    # Extensão "Alfred — agenda" (Experiment API de calendário)
 │   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir)
 │   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N e webhook da Evolution
+│   │   ├── painel.py                  # Painel do Alfred (/painel, só 127.0.0.1): telas e ações de aprovação
+│   │   ├── painel_web/                # Templates Jinja2 + painel.css / painel.js do painel (sem build)
 │   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
-│   │   ├── tests/                     # test_whatsapp.py + payloads da Evolution (texto, áudio .ogg, resposta citada…)
-│   │   ├── alfred-{inbox,semanal,vigia}.{service,timer}, alfred-inbox-api.service  # units de usuário
+│   │   ├── tests/                     # test_whatsapp, test_painel, test_trava… + payloads da Evolution (texto, áudio .ogg, resposta citada…)
+│   │   ├── alfred-{inbox,semanal,vigia}.{service,timer}, alfred-inbox-api.service  # modelos de unit de usuário (preenchidos e instalados pelo instalar.sh)
 │   │   └── about.md
 │   │
 │   ├── scripts/
+│   │   ├── instalar.sh            # Instalação sem sudo em qualquer pasta: .env, pastas, venvs, units de usuário, containers
 │   │   ├── alfred-switch.sh       # Liga/desliga "modo jogo" (atalho na área de trabalho)
 │   │   ├── chromadb-indexer.py    # Indexação de .md no ChromaDB (placeholder)
 │   │   ├── sync-knowledge.py      # Sync incremental vault → Knowledge Base do WebUI
 │   │   └── webui-indexer.py       # Indexação de .md nas memories do WebUI (placeholder)
 │   │
 │   └── shell-executor/
-│       ├── alfred-executor.service    # Unit file do systemd
+│       ├── alfred-executor.service    # Modelo de unit de usuário (@ALFRED_DIR@ — preenchido pelo instalar.sh)
 │       ├── main.py                    # FastAPI — executor de comandos com whitelist
 │       ├── requirements.txt           # fastapi, uvicorn
 │       ├── run.sh                     # Script de inicialização manual
 │       └── venv/                      # Ambiente virtual Python (NÃO versionado)
 │
 ├── tools/                          # Tools do Open WebUI (importar manualmente)
+│   ├── alfred_briefing.py          # Gera o briefing de tecnologia sob demanda (via Shell Executor)
 │   ├── alfred_researcher.py        # Aciona o Research Service
 │   ├── alfred_shell_executor.py    # Executa comandos via Shell Executor
 │   ├── alfred_system_monitor.py    # Relatório de sistema (CPU/RAM/GPU/Docker)
@@ -194,14 +198,157 @@ Alfred-Pennyworth/
 
 ## 4. Setup
 
-### Pré-requisitos
+### Instalação com um comando (qualquer pasta, sem sudo)
 
-- Docker e Docker Compose (v2)
-- [Ollama](https://ollama.com) instalado e rodando no host
-- Python 3.12+
-- GPU NVIDIA com driver instalado (para `nvidia-smi` funcionar nas tools)
+```bash
+git clone <url-do-repositório> ~/Alfred-Pennyworth      # qualquer pasta serve
+cd ~/Alfred-Pennyworth
+services/scripts/instalar.sh              # pode rodar de novo quando quiser: não sobrescreve nada
+services/scripts/instalar.sh --modelos    # também baixa no Ollama os modelos do .env (~8 GB)
+```
 
-### Passo a passo
+O [`instalar.sh`](services/scripts/instalar.sh) não usa sudo e é idempotente:
+
+1. confere os pré-requisitos e lista o que falta, com o comando de instalação no Arch e no Ubuntu; também avisa
+   quando o ufw está inativo, sem entrada DROP ou sem regra para `br-alfred` (ver [Rede](#rede-quem-alcança-o-quê));
+2. cria o `.env` a partir do `.env.example` **só se ele não existir**: segredos com `openssl` (nunca impressos),
+   vaults em `<repositório>/vaults/`, `gemma4:e4b` + `bge-m3`, `WHATSAPP_DRY_RUN=true`, `DOCKER_BIND_IP=127.0.0.1`.
+   Com `.env` existente, só aponta as chaves obrigatórias vazias;
+3. cria as pastas que faltam (`vaults/`, `data/`, `logs/`) sem tocar nas existentes. Se o `.env` aponta um vault
+   para um caminho **fora** do repositório que não existe (repositório movido?), não cria um vault vazio lá: marca
+   como faltando e pede para ajustar o `.env`;
+4. cria `config/searxng/settings.yml` se não existir (JSON ligado, limiter desligado, chave própria);
+5. cria os venvs e instala os `requirements.txt` de cada serviço. Venv quebrado (sem `python`/`pip`) ou criado
+   em outra pasta (repositório movido: o shebang de `venv/bin/pip` aponta o caminho antigo) é recriado do zero;
+6. gera as units de usuário em `~/.config/systemd/user/` a partir dos modelos do repositório (`@ALFRED_DIR@` →
+   caminho real), recarrega o systemd de usuário e habilita API do inbox, shell executor, researcher e todos os
+   timers, reiniciando o serviço cuja unit mudou. Exceções, sempre com aviso:
+   - executor/researcher que já existem como unit de **sistema** (máquina original): a de usuário não é instalada;
+   - unit ou timer que já estava instalado e **desabilitado** (ex.: briefing vespertino na máquina original)
+     continua desabilitado;
+   - unit já instalada que aponta para **outro** repositório que ainda existe não é sobrescrita — `--forcar-units`
+     regrava com este;
+   - em modo jogo (`logs/alfred_desligado`) as units são habilitadas mas não iniciadas;
+7. sobe os containers do Alfred (`open-webui searxng chromadb evolution-postgres evolution-api` — sem N8N; em modo
+   jogo, só `open-webui searxng chromadb`: a Evolution e o banco dela voltam com `alfred-switch.sh on`) e, com
+   `--modelos`, baixa os modelos. Termina com um resumo do que fez e do que ainda falta (inclusive as Valves da
+   tool [Alfred Tech Briefing](#configurar-os-tokens-nas-valves)) e **sai com código 1 se algo ficou faltando**.
+
+Opções: `--verificar` (só pré-requisitos), `--sem-containers`, `--sem-units`, `--forcar-units`. Outros modelos no
+`.env` novo: `ALFRED_MODEL_CHAT=... ALFRED_MODEL_EMBED=... services/scripts/instalar.sh`.
+
+### Pré-requisitos com sudo — Arch Linux
+
+O Arch não suporta atualização parcial: instale sempre com `-Syu` (neste PC, `pacman -S` com o banco de pacotes
+desatualizado falhou com 404).
+
+```bash
+sudo pacman -Syu --needed docker docker-compose ollama ollama-cuda ffmpeg libnotify python-gobject ufw \
+    kdialog thunderbird thunderbird-i18n-pt-br firefox firefox-i18n-pt-br
+```
+
+**Se o `-Syu` atualizou `linux` ou `nvidia-*`, reinicie antes de seguir** — até o reboot o kernel em execução não
+acha os próprios módulos e Docker, ufw e driver da GPU falham ao carregar. Depois:
+
+```bash
+sudo systemctl enable docker.service ollama.service    # sobem sozinhos a partir do próximo boot
+sudo usermod -aG docker "$USER"
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+printf '[Service]\nEnvironment=OLLAMA_HOST=0.0.0.0:11434\n' | sudo tee /etc/systemd/system/ollama.service.d/alfred.conf
+sudo systemctl daemon-reload
+sudo ufw default deny incoming
+sudo systemctl enable --now ufw
+sudo ufw enable
+sudo ufw allow in on br-alfred to any port 7070:7072 proto tcp comment 'Alfred: containers -> APIs do host'
+sudo ufw allow in on br-alfred to any port 11434 proto tcp comment 'Alfred: containers -> Ollama'
+```
+
+Por fim, **reinicie**: Docker e Ollama sobem já com o drop-in e o grupo `docker` passa a valer (sem reiniciar:
+`sudo systemctl start docker.service ollama.service` e saia e entre na sessão). Só então rode o `instalar.sh`.
+
+- O ufw ativo com entrada DROP é o que barra a rede local (ver [Rede](#rede-quem-alcança-o-quê)); as duas regras
+  `br-alfred` são as únicas exceções. Se você entra nesta máquina por SSH, libere antes do `ufw enable`: `sudo ufw allow ssh`.
+- Python 3.12+, `openssl` e `curl` costumam já estar instalados; `zenity` serve no lugar do `kdialog` — o
+  `instalar.sh --verificar` diz se falta algum.
+- `ollama-cuda` traz a aceleração NVIDIA (puxa o pacote `cuda`, ~5 GB). Driver NVIDIA já instalado.
+- O grupo `docker` só vale numa sessão nova. No Arch não existe `sg`: depois do `usermod`, saia e entre na sessão (ou
+  reinicie) — antes disso o `instalar.sh` para em "sem acesso ao Docker nesta sessão". No Ubuntu o `instalar.sh` usa
+  `sg docker` até o próximo login.
+- `firefox` só é necessário para usar o Painel neste navegador.
+
+### Pré-requisitos — Ubuntu (máquina original)
+
+Docker com o plugin compose (`docker.io docker-compose-v2`), [Ollama](https://ollama.com) (`curl -fsSL https://ollama.com/install.sh | sh`),
+Python 3.12+ com `python3-venv`, `ffmpeg`, `libnotify-bin`, `python3-gi`, `kdialog` e GPU NVIDIA com driver
+(para `nvidia-smi` funcionar nas tools).
+
+A proteção de rede vale igual: drop-in `OLLAMA_HOST=0.0.0.0:11434` no `ollama.service` (criado pelo script do Ollama),
+ufw com entrada DROP e as mesmas regras `br-alfred`. **No Ubuntu o ufw vem inativo por padrão** — sem o `ufw enable`,
+as portas que escutam em `0.0.0.0` ficam abertas para a rede local:
+
+```bash
+sudo usermod -aG docker "$USER"
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+printf '[Service]\nEnvironment=OLLAMA_HOST=0.0.0.0:11434\n' | sudo tee /etc/systemd/system/ollama.service.d/alfred.conf
+sudo systemctl daemon-reload && sudo systemctl restart ollama.service
+sudo ufw default deny incoming
+sudo ufw enable                       # acesso por SSH? antes: sudo ufw allow ssh
+sudo ufw allow in on br-alfred to any port 7070:7072 proto tcp comment 'Alfred: containers -> APIs do host'
+sudo ufw allow in on br-alfred to any port 11434 proto tcp comment 'Alfred: containers -> Ollama'
+```
+
+Depois, o mesmo `services/scripts/instalar.sh` (no Ubuntu ele usa `sg docker` até o próximo login).
+
+### Rede: quem alcança o quê
+
+| Serviço | Escuta em | Quem alcança |
+|---|---|---|
+| Ollama (11434), API do inbox (7072), shell executor (7070), researcher (7071) | `0.0.0.0` | o próprio PC e os containers do Alfred; a rede local só é barrada **com o ufw ativo e entrada DROP** — sem isso, essas portas ficam abertas na rede local |
+| Open WebUI (3000), SearXNG (8888), ChromaDB (8000) | `DOCKER_BIND_IP` (`127.0.0.1` nas instalações novas) | só o próprio PC |
+| Evolution API (8080) | `127.0.0.1` | só o próprio PC |
+
+Os containers chegam ao host por `172.17.0.1` (`OLLAMA_BASE_URL`, webhook da Evolution, tools do Open WebUI), mas o
+tráfego entra pela bridge da rede `alfred-net`, que tem nome fixo (`br-alfred`, no `docker-compose.yml`). Com o ufw
+ativo e política de entrada DROP, só 7070–7072 e 11434 são liberadas, e só para quem entra por `br-alfred`. O
+`instalar.sh` avisa quando o ufw está inativo (ou ausente), quando a entrada não é DROP e quando falta a regra de
+`br-alfred`. Bind em `127.0.0.1` cortaria os containers e bind em `172.17.0.1` quebraria o Painel (que só aceita
+cliente `127.0.0.1`). Porta publicada pelo Docker passa por cima do ufw — por isso Open WebUI, SearXNG e ChromaDB são
+publicados em `DOCKER_BIND_IP`. Máquina que já tinha a rede `alfred-net` sem o nome fixo: `docker compose down` e
+`docker compose up -d open-webui searxng chromadb evolution-postgres evolution-api` (N8N opcional) recriam a rede —
+ou `docker compose down` e o `instalar.sh` de novo.
+
+### Depois da instalação (só você pode fazer)
+
+**Configurar o Open WebUI**
+
+1. Acesse `http://localhost:3000`
+2. Crie a conta de administrador no primeiro acesso
+3. Vá em **Workspace → Tools → +** e importe cada arquivo de `tools/` (ver [seção 5](#5-tools-do-open-webui))
+4. Configure as Valves de cada tool com os tokens corretos (ver [seção 5](#5-tools-do-open-webui))
+5. Em **Settings → Connections**, confirme que o Ollama está apontando para `http://172.17.0.1:11434`
+6. Configure o RAG para usar o `MODEL_EMBED` do `.env` como modelo de embedding (`bge-m3` nas instalações novas; `nomic-embed-text-v2-moe:latest` na máquina original)
+7. Crie dois Knowledge Bases: um para o vault do Alfred e um para o vault do Pedro
+8. Crie o modelo **Alfred** (em **Workspace → Models**), selecione o `MODEL_CHAT` do `.env` (`gemma4:e4b` nas instalações novas; `llama3.1:8b` na configuração original), ative todas as tools e cole o system prompt de `docs/alfred-system-prompt.md`
+
+**Gerar o WEBUI_API_TOKEN**
+
+No Open WebUI, vá em **Settings → Account → API Keys** e gere uma nova chave. Adicione ao `.env`:
+
+```ini
+WEBUI_API_TOKEN=sk-...
+RESEARCHER_KB_ALFRED_ID=<ID do Knowledge Base do Alfred>
+RESEARCHER_KB_PEDRO_ID=<ID do Knowledge Base do Pedro>
+```
+
+Reinicie o Researcher para carregar as novas variáveis:
+
+```bash
+systemctl --user restart alfred-researcher        # instalação pelo instalar.sh (unit de usuário)
+sudo systemctl restart alfred-researcher          # máquina original (unit de sistema)
+```
+
+
+### Instalação manual (Ubuntu — como foi feita na máquina original)
 
 **1. Clonar o repositório**
 
@@ -263,11 +410,10 @@ cd services/shell-executor
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 
-# Instalar e ativar o serviço systemd
-sudo cp alfred-executor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable alfred-executor
-sudo systemctl start alfred-executor
+# A máquina original roda o executor como unit de SISTEMA (/etc/systemd/system/alfred-executor.service,
+# User=netto). O arquivo do repositório agora é um MODELO de unit de usuário (@ALFRED_DIR@): numa máquina
+# nova use o instalar.sh; ele detecta a unit de sistema antiga e não instala a de usuário por cima.
+sudo systemctl enable --now alfred-executor
 
 # Confirmar que subiu
 sleep 4
@@ -282,40 +428,11 @@ cd services/researcher
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 
-sudo cp alfred-researcher.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable alfred-researcher
-sudo systemctl start alfred-researcher
+# idem: unit de SISTEMA já instalada na máquina original; numa máquina nova, instalar.sh
+sudo systemctl enable --now alfred-researcher
 
 sleep 4
 curl -s http://localhost:7071/health
-```
-
-**7. Configurar o Open WebUI**
-
-1. Acesse `http://localhost:3000`
-2. Crie a conta de administrador no primeiro acesso
-3. Vá em **Workspace → Tools → +** e importe cada arquivo de `tools/` (ver [seção 5](#5-tools-do-open-webui))
-4. Configure as Valves de cada tool com os tokens corretos (ver [seção 5](#5-tools-do-open-webui))
-5. Em **Settings → Connections**, confirme que o Ollama está apontando para `http://172.17.0.1:11434`
-6. Configure o RAG para usar `nomic-embed-text-v2-moe:latest` como modelo de embedding
-7. Crie dois Knowledge Bases: um para o vault do Alfred e um para o vault do Pedro
-8. Crie o modelo **Alfred** (em **Workspace → Models**), selecione `llama3.1:8b`, ative todas as tools e cole o system prompt de `docs/alfred-system-prompt.md`
-
-**8. Gerar o WEBUI_API_TOKEN**
-
-No Open WebUI, vá em **Settings → Account → API Keys** e gere uma nova chave. Adicione ao `.env`:
-
-```ini
-WEBUI_API_TOKEN=sk-...
-RESEARCHER_KB_ALFRED_ID=<ID do Knowledge Base do Alfred>
-RESEARCHER_KB_PEDRO_ID=<ID do Knowledge Base do Pedro>
-```
-
-Reinicie o Researcher para carregar as novas variáveis:
-
-```bash
-sudo systemctl restart alfred-researcher
 ```
 
 ---
@@ -332,6 +449,7 @@ sudo systemctl restart alfred-researcher
 | Alfred Vault Writer       | `alfred_vault_writer.py`     | Salva notas e pesquisas no vault do Alfred; busca com FTS5   | `vault_path` (padrão: `/vaults/alfred`), `db_path` |
 | Alfred Researcher         | `alfred_researcher.py`       | Aciona o Research Service: busca → síntese → vault → sync  | `researcher_url`, `token`                   |
 | Alfred Pendências e Jornal | `alfred_pendencias.py`      | Lista/responde convites e contatos aguardando "vou / não vou"; devolve a edição do dia do jornal | `vault_path` (padrão: `/vaults/alfred`) |
+| Alfred Tech Briefing      | `alfred_briefing.py` (v1.1.0) | Gera o briefing de tecnologia sob demanda: roda `services/briefing/run.sh` no host pelo Shell Executor e devolve o texto; lista e lê briefings do vault | `executor_url`, `token`, `alfred_dir_host`, `vault_alfred_host` (`vault_path` padrão: `/vaults/alfred`) |
 
 ### Como importar
 
@@ -341,6 +459,10 @@ sudo systemctl restart alfred-researcher
 4. Salve
 5. Repita para cada tool
 
+> **Atualização de 25/10/2026:** `alfred_pendencias.py` (v1.2.0) e `alfred_tasks.py` (v1.1.0) passaram a usar a mesma trava entre processos do Inbox Assistant — reimporte as duas (cole o conteúdo novo por cima). Enquanto a versão antiga estiver instalada, o que o chat grava continua sem trava. Ver [gravação concorrente](services/inbox/about.md#gravação-concorrente-trava-entre-processos).
+
+> **Atualização de 26/10/2026:** `alfred_briefing.py` (v1.1.0) deixou de ter `/home/netto/...` fixo no código e ganhou as Valves `alfred_dir_host` e `vault_alfred_host` — reimporte e preencha as duas (ver abaixo).
+
 ### Configurar os tokens nas Valves
 
 Após importar, clique no ícone de engrenagem de cada tool e preencha:
@@ -348,6 +470,15 @@ Após importar, clique no ícone de engrenagem de cada tool e preencha:
 - **`token`**: valor de `SHELL_EXECUTOR_TOKEN` do `.env`
 - **`executor_url`**: `http://172.17.0.1:7070`
 - **`researcher_url`**: `http://172.17.0.1:7071`
+- **`alfred_dir_host`** (Alfred Tech Briefing): a pasta do repositório **no host** — o `instalar.sh` imprime o valor
+  no resumo, em "Próximos passos". A tool manda ao executor `<alfred_dir_host>/services/briefing/run.sh`; com o padrão
+  `/home/netto/Alfred-Pennyworth` numa instalação em outra pasta, o executor recusa o comando (HTTP 403, "Comando não
+  permitido"). A whitelist do executor calcula o `run.sh` do briefing a partir do próprio `main.py` e aceita também
+  um caminho que chegue a ele por symlink (ex.: `~/Alfred-Pennyworth` → outra pasta).
+- **`vault_alfred_host`** (Alfred Tech Briefing): o `VAULT_ALFRED` do `.env` (também impresso no resumo do
+  `instalar.sh`). Serve para traduzir o caminho do briefing gerado no host para `/vaults/alfred` no container; com o
+  padrão `/home/netto/Documentos/Obsidian - Alfred` a tradução falha e a tool cai no briefing mais recente da pasta
+  `briefings/`.
 
 > **Importante:** Sempre configure o token pela interface do browser (Valves), nunca diretamente no código-fonte da tool. O valor padrão no código é uma string vazia por segurança.
 
@@ -384,31 +515,54 @@ Toda nota salva inclui frontmatter com `title`, `date`, `tags` e `topics` para f
 
 ## 7. Serviços systemd
 
-| Serviço               | Arquivo unit                                    | WorkingDirectory                                      | Porta |
-|-----------------------|-------------------------------------------------|-------------------------------------------------------|-------|
-| alfred-executor       | `services/shell-executor/alfred-executor.service` | `/home/netto/Alfred-Pennyworth/services/shell-executor` | 7070  |
-| alfred-researcher     | `services/researcher/alfred-researcher.service`  | `/home/netto/Alfred-Pennyworth/services/researcher`   | 7071  |
+Units de **usuário** (`~/.config/systemd/user/`), geradas pelo [`instalar.sh`](services/scripts/instalar.sh) a partir
+dos modelos do repositório (`@ALFRED_DIR@` vira o caminho real). Cada `run.sh` carrega o `.env` da raiz — não há
+caminho fixo em nenhuma unit nem script. A leitura é literal, linha a linha: o `run.sh` do executor e o do researcher
+faziam `source` do `.env`, e um valor com `$` ou `(` (uma senha, por exemplo) derrubava o serviço; agora leem como o
+inbox e o briefing já liam.
 
-Ambos os serviços carregam variáveis diretamente de `/home/netto/Alfred-Pennyworth/.env` via `EnvironmentFile`.
+| Unit | Modelo no repositório | O quê | Quando |
+|---|---|---|---|
+| `alfred-inbox-api.service` | `services/inbox/` | API do inbox + Painel (`PORT_INBOX`, 7072) | sempre no ar |
+| `alfred-executor.service` | `services/shell-executor/` | Shell Executor (`PORT_SHELL_EXECUTOR`, 7070) | sempre no ar |
+| `alfred-researcher.service` | `services/researcher/` | Researcher (`PORT_RESEARCHER`, 7071) | sempre no ar |
+| `alfred-briefing-matinal.timer` / `-vespertino.timer` | `services/briefing/` | briefings por RSS | 07:00 / 18:00 |
+| `alfred-inbox.timer` | `services/inbox/` | ciclo do e-mail | 07:30 e 18:30 |
+| `alfred-semanal.timer` | `services/inbox/` | podcast (`--se-devido`) | 19:00 |
+| `alfred-vigia.timer` | `services/inbox/` | vigia | 2 min após o login e a cada 10 min |
+
+Units de usuário sobem no login (com `loginctl enable-linger` sobem já no boot — o `instalar.sh` não liga o linger).
+Os containers voltam sozinhos com o Docker (`restart: unless-stopped`).
+
+- `alfred-inbox.timer` e `alfred-semanal.timer` não têm mais `Requires=` da `.service`: com ele, cada start do timer
+  (login, `instalar.sh`, `alfred-switch.sh on`) rodava o ciclo do e-mail e o podcast na hora, fora do horário. O
+  timer já dispara a `.service` de mesmo nome.
+- `alfred-vigia.timer` não tem mais `OnBootSec=`: ele vencia antes do login e o vigia rodava junto com a API ainda
+  subindo (e a reiniciava). Fica só `OnStartupSec=2min` (conta do login, ou do boot com linger) + a cada 10 min.
+- Timer desabilitado de propósito (ex.: briefing vespertino na máquina original) continua desabilitado: o
+  `instalar.sh` não o religa e o `alfred-switch.sh on` só religa timers habilitados.
+
+> **Máquina original:** o executor e o researcher continuam como units de **sistema** (`/etc/systemd/system/`,
+> `User=netto`, `EnvironmentFile=` do `.env`). O `instalar.sh` detecta isso e não instala as versões de usuário.
+> Lá os comandos continuam com `sudo systemctl ... alfred-executor` / `alfred-researcher`.
 
 ### Comandos de gerenciamento
 
 ```bash
-# Habilitar e iniciar
-sudo systemctl enable alfred-executor alfred-researcher
-sudo systemctl start alfred-executor alfred-researcher
-
-# Verificar status
-sudo systemctl status alfred-executor
-sudo systemctl status alfred-researcher
+# Estado
+systemctl --user status alfred-inbox-api alfred-executor alfred-researcher
+systemctl --user list-timers 'alfred-*'
 
 # Reiniciar (necessário após alterar o .env)
-sudo systemctl restart alfred-executor
-sudo systemctl restart alfred-researcher
+systemctl --user restart alfred-inbox-api alfred-executor alfred-researcher
 
 # Ver logs em tempo real
-sudo journalctl -fu alfred-executor
-sudo journalctl -fu alfred-researcher
+journalctl --user -fu alfred-executor
+journalctl --user -fu alfred-researcher
+journalctl --user -fu alfred-inbox-api
+
+# Rodar um timer agora (ex.: briefing matinal)
+systemctl --user start alfred-briefing-matinal.service
 ```
 
 ---
@@ -429,10 +583,12 @@ cd services/inbox
 ./run.sh pendencias      # fila aguardando resposta
 ./run.sh perguntar       # Alfred pergunta uma a uma no terminal e espera vou/nao
 ./run.sh responder <id> vou
-./run.sh serve           # API HTTP :7072 para o N8N
+./run.sh serve           # API HTTP :7072 para o N8N + Painel do Alfred em /painel
 ```
 
-Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE`, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
+**Painel do Alfred** — com a API no ar, `http://127.0.0.1:7072/painel` (só desta máquina; login com o `SHELL_EXECUTOR_TOKEN`) mostra as pendências, o rascunho que o Alfred propõe para cada resposta (**Autorizar envio** / **Não enviar** / **Agendar**; **Vou** / **Não vou** no e-mail), a agenda (**Desfazer**), os lotes de limpeza (**Aprovar** / **Recusar**) e o estado do sistema, atualizando a cada 15 s. Dependência nova `jinja2`: num venv existente rode `venv/bin/pip install -r requirements.txt` antes de reiniciar a API (sem ele a API sobe sem o painel e o log avisa). Detalhes: [about.md](services/inbox/about.md#painel-do-alfred).
+
+Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE` — vazio = descoberta automática: snap, `~/.config/thunderbird` (Thunderbird 158+), `~/.thunderbird` e flatpak —, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
 
 **Divisão de papéis com o N8N:** o Python é o motor (ler mbox, clustering, TTS, templates) exposto como API; o N8N orquestra (cron, `Wait` aguardando o "vou/não vou" via `resumeUrl`, e o WhatsApp via Evolution API). Os workflows em `services/inbox/n8n/` são o ponto de partida.
 
@@ -447,7 +603,7 @@ Mensagens e **áudios** recebidos no WhatsApp passam pelo mesmo tratamento do e-
 3. **espera ~10 min** (`atraso_minutos` em `perfis.yml → whatsapp:`): se Pedro responder a conversa direto pelo celular nesse tempo, nada é gerado; mensagens seguidas do contato viram uma pendência só;
 4. para contatos relevantes cria uma **pendência `whatsapp`** em `VAULT_ALFRED/pendencias/pendencias.yml` (mesmo esquema, `status: aguardando`, campo `resposta_texto`) com um texto explicativo (`pergunta_whatsapp.md`) e um recado de voz (`audio_pergunta_whatsapp.md` → edge-tts) em que Alfred resume a mensagem e pergunta **"o que você quer responder?"**;
 5. avisa Pedro no WhatsApp (resumo com `ref: <id>` + áudio) — pelo N8N (`services/inbox/n8n/alfred-whatsapp.json`) ou pelo próprio Python (`/whatsapp/webhook-async`) — e **no PC**: notificação com a sugestão de resposta escrita pelo Alfred e os botões **Enviar** (abre o rascunho para editar e confirmar) / **Não enviar** / **Agenda** (tarefa em `tasks.yml` + lembrete no PC + evento no Google Agenda já preenchido) / **Ouvir** — o resumo em áudio começa a tocar junto com a notificação (botão **Parar**) e o `.mp3` local é apagado 2 dias depois (a cópia fica no WhatsApp);
-6. **a resposta de Pedro é enviada ao contato**: ele responde *citando* a mensagem do Alfred (ou pelo botão Enviar no PC, `./run.sh responder-texto <id> "texto"`, o chat: "responde pro Carlos que…", ou `POST /pendencias/{id}/responder-texto`). `ignorar` fecha sem enviar; se Pedro responder o contato direto no celular, a pendência fecha sozinha.
+6. **a resposta de Pedro é enviada ao contato**: ele responde *citando* a mensagem do Alfred (ou pelo botão Enviar no PC, **Autorizar envio** no Painel, `./run.sh responder-texto <id> "texto"`, o chat: "responde pro Carlos que…", ou `POST /pendencias/{id}/responder-texto`). `ignorar` fecha sem enviar; se Pedro responder o contato direto no celular, a pendência fecha sozinha (guardando o rascunho do Alfred e a resposta real).
 
 ```bash
 docker compose up -d evolution-postgres evolution-api       # .env: EVOLUTION_API_KEY, EVOLUTION_POSTGRES_PASSWORD, WHATSAPP_NUMERO_PEDRO
@@ -457,7 +613,7 @@ cd services/inbox
 ./run.sh whatsapp webhook http://172.17.0.1:7072/whatsapp/webhook-async   # ou a URL do Webhook do N8N
 ./run.sh whatsapp status                                   # instância "open", fila
 ./run.sh responder-texto <id> "Carlos, mando até quinta."  # resposta → WhatsApp do contato
-venv/bin/python -m unittest tests.test_whatsapp -v         # 37 testes offline (inclui o formato real da Evolution v2.3.7)
+venv/bin/python -m unittest tests.test_whatsapp -v         # 63 testes offline (inclui o formato real da Evolution v2.3.7)
 ```
 
 **Busca e histórico (SQLite FTS5).** O texto das conversas fica em `VAULT_ALFRED/.alfred/alfred.db` (90 dias, `perfis.yml → whatsapp: historico_dias`) e as 5 últimas mensagens do contato entram no prompt da pendência; o mesmo arquivo indexa os cofres para a busca das tools e guarda um cache que faz contatos de spam/automáticos e remetentes de promoção pularem o LLM. `./run.sh indexar` · `./run.sh buscar <termo> [--whatsapp]` — ver [`services/inbox/about.md`](services/inbox/about.md#busca-e-histórico--sqlite-fts5-_sharedlib_dbpy).
@@ -480,16 +636,17 @@ services/scripts/alfred-switch.sh status
 
 | Desligar faz | Religar faz |
 |---|---|
-| para os timers (briefing 07:00, e-mail 07:30/18:30, podcast 19:00, vigia) e qualquer execução em andamento | `docker start` banco + Evolution |
-| para a API do Alfred (:7072) — WhatsApp deixa de ser processado | sobe a API |
-| `docker stop` da Evolution API (WhatsApp) e do banco dela | religa os timers (o vigia confere tudo em seguida) |
+| para os timers (briefings 07:00 e 18:00, e-mail 07:30/18:30, podcast 19:00, vigia) e qualquer execução em andamento | `docker start` banco + Evolution |
+| para a API do Alfred (:7072) — WhatsApp deixa de ser processado e o Painel não abre | sobe a API |
+| `docker stop` da Evolution API (WhatsApp) e do banco dela | religa só os timers **habilitados** — um timer desabilitado de propósito (ex.: briefing vespertino) continua parado (o vigia confere tudo em seguida) |
 | fecha as notificações que esperam clique (as pendências continuam aguardando) | reabre essas notificações |
 | descarrega os modelos do Ollama da VRAM (GPU livre para jogar) | — |
 
 O estado sobrevive a reinicializações: `logs/alfred_desligado` faz os `run.sh` recusarem qualquer execução vinda
 das units do systemd (elas exportam `ALFRED_AUTOMACAO=1`), e a Evolution parada com `docker stop` não volta sozinha
 (`restart: unless-stopped`). Comandos manuais no terminal continuam funcionando (`ALFRED_FORCAR=1` libera até
-`serve`/`vigia`). Não existe WAHA nesta máquina: a ponte do WhatsApp é a Evolution API.
+`serve`/`vigia`). Rodar o `instalar.sh` em modo jogo também não religa nada: habilita as units sem iniciá-las e não
+sobe a Evolution nem o banco dela. Não existe WAHA nesta máquina: a ponte do WhatsApp é a Evolution API.
 
 ---
 
@@ -499,7 +656,7 @@ Localização: `services/scripts/`
 
 | Script                 | Função                                                                          | Quando usar                                           | Exemplo de uso                                      |
 |------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------|-----------------------------------------------------|
-| `sync-knowledge.py`    | Sync incremental do vault → Knowledge Base do Open WebUI. Só re-indexa arquivos modificados desde o último sync (timestamp em `logs/alfred_last_sync`). | Após editar notas manualmente no Obsidian, ou para forçar re-indexação. Também é disparado automaticamente pelo Researcher após cada pesquisa. | `python3 services/scripts/sync-knowledge.py` |
+| `sync-knowledge.py`    | Sync incremental do vault → Knowledge Base do Open WebUI. Só re-indexa arquivos modificados desde o último sync (timestamp em `logs/alfred_last_sync`). | Após editar notas manualmente no Obsidian, ou para forçar re-indexação. Também é disparado automaticamente pelo Researcher após cada pesquisa. | `services/researcher/venv/bin/python services/scripts/sync-knowledge.py` (usa httpx do venv; log do disparo automático em `logs/sync-knowledge.log`) |
 | `webui-indexer.py`     | Indexa arquivos `.md` dos vaults nas *memories* do Open WebUI (não na Knowledge Base). | Quando quiser popular as memories globais do WebUI com o conteúdo dos vaults. | Implementação pendente — ver placeholder. |
 | `chromadb-indexer.py`  | Indexa arquivos `.md` no ChromaDB com embeddings via `nomic-embed-text`. Permite buscas vetoriais diretas fora do WebUI. | Quando precisar de RAG externo ao Open WebUI (ex.: workflows N8N consultando ChromaDB diretamente). | Implementação pendente — ver placeholder. |
 
@@ -528,23 +685,23 @@ VAULT_PEDRO=/caminho/para/vault/pedro
 
 ```bash
 # ── Docker ────────────────────────────────────────────────────
-docker compose up -d                          # Subir todos os containers
+docker compose up -d open-webui searxng chromadb evolution-postgres evolution-api   # Subir os containers (+ n8n, opcional)
 docker compose down                           # Parar todos os containers
 docker compose ps                             # Ver status
 docker compose logs -f open-webui             # Logs do WebUI
-docker compose logs -f alfred-searxng         # Logs do SearXNG
+docker compose logs -f searxng                # Logs do SearXNG (nome do serviço, não do container)
 
-# ── systemd ───────────────────────────────────────────────────
-sudo systemctl status alfred-executor         # Status do Shell Executor
-sudo systemctl status alfred-researcher       # Status do Researcher
-sudo systemctl restart alfred-executor        # Reiniciar após alterar .env
-sudo journalctl -fu alfred-researcher         # Logs em tempo real
+# ── systemd (units de usuário; na máquina original executor/researcher são de sistema: sudo systemctl …)
+systemctl --user status alfred-executor       # Status do Shell Executor
+systemctl --user status alfred-researcher     # Status do Researcher
+systemctl --user restart alfred-executor      # Reiniciar após alterar .env
+journalctl --user -fu alfred-researcher       # Logs em tempo real
 
 # ── Health checks ─────────────────────────────────────────────
 curl -s http://localhost:7070/health          # Shell Executor
 curl -s http://localhost:7071/health          # Researcher
 curl -s http://localhost:3000/health          # Open WebUI
-curl -s http://localhost:8888/search?q=test&format=json | head -c 200  # SearXNG
+curl -s 'http://localhost:8888/search?q=test&format=json' | head -c 200  # SearXNG
 
 # ── Ollama ────────────────────────────────────────────────────
 ollama list                                   # Modelos instalados
@@ -556,10 +713,11 @@ curl -s http://localhost:11434/api/tags       # API REST do Ollama
 nvidia-smi                                    # Status completo da GPU
 nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader
 
-# ── Sincronizar vault com o WebUI ─────────────────────────────
-cd ~/Alfred-Pennyworth
-source .env
-python3 services/scripts/sync-knowledge.py
+# ── Sincronizar vault com o WebUI (na raiz do repositório) ────
+set -a; source .env; set +a
+# valor com espaço, $ ou ( (ex.: vault em ".../Obsidian - Alfred") quebra o source — use a leitura literal dos run.sh:
+#   while IFS='=' read -r k v; do export "$k=$v"; done < <(grep -E '^[A-Z_][A-Z0-9_]*=' .env)
+services/researcher/venv/bin/python services/scripts/sync-knowledge.py   # usa httpx, já no venv
 ```
 
 ---
@@ -612,7 +770,7 @@ docker compose up -d
 **Solução:**
 
 ```bash
-sudo systemctl restart alfred-researcher
+systemctl --user restart alfred-researcher     # máquina original: sudo systemctl restart alfred-researcher
 curl -s http://localhost:7071/health
 ```
 
@@ -682,7 +840,7 @@ Scraper de portais públicos de licitação (ComprasNet, Portal de Compras SP) q
 
 Integração com WhatsApp via Evolution API: mensagens e áudios recebidos (transcrição local com gemma4) passam pelo mesmo tratamento do e-mail e viram uma pendência em que Alfred resume a mensagem e pergunta "o que você quer responder?" (texto + áudio); a resposta de Pedro é enviada de volta pelo WhatsApp.
 
-**Pipeline:** Evolution API (Docker) → webhook → Inbox Assistant (`whatsapp.py`: transcrever → classificar → pendência + áudio) → N8N ou Python avisa Pedro → resposta citada / CLI / chat / API → Evolution API `sendText`
+**Pipeline:** Evolution API (Docker) → webhook → Inbox Assistant (`whatsapp.py`: transcrever → classificar → pendência + áudio) → N8N ou Python avisa Pedro → resposta citada / CLI / chat / API / Painel → Evolution API `sendText`
 
 **Status:** ✅ Implementado e **validado com WhatsApp real em 2026-10-19** (instância no próprio número de Pedro, Evolution API "v2.3.7", sem N8N): texto e áudio viram pendência, resumo + áudio chegam a Pedro, a resposta citada é entregue ao contato, `ignorar` e resposta direta pelo celular fecham a pendência, e a notificação no PC (Enviar / Não enviar / Agenda / Ouvir) envia o rascunho. Depois da validação: **espera de ~10 min antes de resumir** (`atraso_minutos: 10` em `perfis.yml → whatsapp:`) — resumo, áudio e avisos só saem se Pedro não responder a conversa nesse tempo; se ele responder direto pelo celular antes, nada é gerado (testado offline, ainda não com WhatsApp real — ver [espera](services/inbox/about.md#espera-antes-de-resumir-atraso_minutos)). Falta validar o workflow N8N (stack Docker fora do ar nesta máquina) — ver [validação](services/inbox/about.md#validação-com-whatsapp-real-2026-10-19).
 

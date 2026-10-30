@@ -13,6 +13,14 @@ from pathlib import Path
 from typing import Optional
 
 
+def _no_vault(vault: Path, relativo: Optional[str]) -> Optional[Path]:
+    """Resolve `relativo` dentro do vault. None se sair dele (caminho absoluto, "..", symlink para fora) —
+    o container do Open WebUI roda como root: sem isso a tool lia/gravava qualquer arquivo."""
+    base = vault.resolve()
+    alvo = (base / (relativo or "")).resolve()
+    return alvo if alvo.is_relative_to(base) else None
+
+
 class Tools:
     class Valves(BaseModel):
         vault_path: str = Field(
@@ -73,8 +81,10 @@ class Tools:
         :return: Notas relevantes com trechos
         """
         try:
-            vault = Path(self.valves.vault_path)
-            target = vault / folder if folder else vault
+            vault = Path(self.valves.vault_path).resolve()
+            target = _no_vault(vault, folder)
+            if target is None:
+                return f"Pasta '{folder}' fora do vault — use um caminho relativo ao vault."
 
             if not target.exists():
                 return f"Pasta '{folder}' não encontrada no vault."
@@ -129,9 +139,10 @@ class Tools:
         :return: Conteúdo completo da nota
         """
         try:
-            vault = Path(self.valves.vault_path)
-            filepath = vault / path
-            if not filepath.exists():
+            filepath = _no_vault(Path(self.valves.vault_path), path)
+            if filepath is None:
+                return f"Caminho fora do vault: {path} — use um caminho relativo ao vault."
+            if not filepath.is_file():
                 return f"Nota não encontrada: {path}"
             return filepath.read_text(encoding="utf-8", errors="ignore")
         except Exception as e:

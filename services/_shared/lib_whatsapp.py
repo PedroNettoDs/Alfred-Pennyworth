@@ -133,7 +133,7 @@ def _post(path: str, body: dict, timeout: int = 60) -> dict:
         return {"ok": False, "erro": str(e)}
 
 
-def _get(path: str, timeout: int = 30) -> dict:
+def _get(path: str, timeout: float = 30) -> dict:
     if not configurado():
         return {"ok": False, "erro": "EVOLUTION_URL/EVOLUTION_API_KEY não configurados"}
     try:
@@ -299,8 +299,9 @@ def baixar_midia(key: dict, message: Optional[dict] = None) -> dict:
 
 # ── Instância (pareamento / webhook) ──────────────────────────
 
-def estado_instancia() -> dict:
-    r = _get(f"/instance/connectionState/{instancia()}")
+def estado_instancia(timeout: float = 30) -> dict:
+    """GET connectionState. `timeout` curto (painel, ~2 s) evita travar a tela com a Evolution fora do ar."""
+    r = _get(f"/instance/connectionState/{instancia()}", timeout=timeout)
     if r.get("ok"):
         inst = (r.get("resposta") or {}).get("instance") or {}
         r["estado"] = inst.get("state") or "desconhecido"

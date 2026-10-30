@@ -5,12 +5,21 @@ Só re-indexa arquivos modificados desde a última execução.
 
 Variáveis de ambiente obrigatórias:
   WEBUI_API_TOKEN, RESEARCHER_KB_PEDRO_ID, RESEARCHER_KB_ALFRED_ID
+
+Usa httpx (está nos venvs do researcher e do inbox; nenhum Python do Alfred tem a lib requests):
+  services/researcher/venv/bin/python services/scripts/sync-knowledge.py
 """
 
 import os
 import sys
-import requests
 from pathlib import Path
+
+try:
+    import httpx
+except ImportError:
+    print("ERRO: módulo httpx ausente — rode com o Python de um venv do Alfred, ex.: "
+          "services/researcher/venv/bin/python services/scripts/sync-knowledge.py", file=sys.stderr)
+    sys.exit(1)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 BASE         = os.getenv("WEBUI_URL", "http://localhost:3000")
@@ -38,17 +47,17 @@ def find_modified(vault: Path, since: float):
 
 def upload_file(filepath: Path):
     with open(filepath, "rb") as f:
-        r = requests.post(
+        r = httpx.post(
             f"{BASE}/api/v1/files/",
             headers=HEADERS,
             files={"file": (filepath.name, f, "text/plain")},
             timeout=30,
         )
-    return r.json().get("id") if r.ok else None
+    return r.json().get("id") if r.is_success else None
 
 
 def link_to_kb(file_id: str, kb_id: str):
-    requests.post(
+    httpx.post(
         f"{BASE}/api/v1/knowledge/{kb_id}/file/add",
         headers={**HEADERS, "Content-Type": "application/json"},
         json={"file_id": file_id},
@@ -57,12 +66,12 @@ def link_to_kb(file_id: str, kb_id: str):
 
 
 def delete_file(file_id: str):
-    requests.delete(f"{BASE}/api/v1/files/{file_id}", headers=HEADERS, timeout=15)
+    httpx.delete(f"{BASE}/api/v1/files/{file_id}", headers=HEADERS, timeout=15)
 
 
 def get_all_files():
-    r = requests.get(f"{BASE}/api/v1/files/", headers=HEADERS, timeout=30)
-    return r.json() if r.ok else []
+    r = httpx.get(f"{BASE}/api/v1/files/", headers=HEADERS, timeout=30)
+    return r.json() if r.is_success else []
 
 
 def sync_vault(vault: Path, kb_id: str, label: str, since: float, existing: dict):
@@ -93,7 +102,9 @@ def sync_vault(vault: Path, kb_id: str, label: str, since: float, existing: dict
 
 def main():
     if not TOKEN:
-        print("ERRO: WEBUI_API_TOKEN não definido.")
+        print("ERRO: WEBUI_API_TOKEN não definido — gere a chave no Open WebUI (Settings → Account → API Keys), "
+              "ponha no .env e passe no ambiente (o researcher já passa a do .env). Nada foi sincronizado.",
+              file=sys.stderr)
         sys.exit(1)
 
     since = get_last_sync()

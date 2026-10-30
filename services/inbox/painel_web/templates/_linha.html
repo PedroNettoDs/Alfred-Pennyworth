@@ -1,0 +1,28 @@
+{#
+  Linha da lista de pendências (Pendências e "Mais recentes" do Início).
+  i: dict montado por painel._linha() — id, tipo, status, contato, resumo, urgencia, iso, relativo,
+     absoluto, comparar, rascunho, resposta_texto.
+  Os cinco filhos do link saem sempre (a grade do CSS depende da posição).
+#}
+{% import "_macros.html" as m %}
+
+{% macro linha(i) -%}
+<li class="linha">
+  <a class="linha__link" href="/painel/pendencias/{{ i.id }}">
+    {{ m.tipo(i.tipo) }}
+    <span class="linha__contato">{{ i.contato }}</span>
+    <span class="linha__resumo">{{ i.resumo }}</span>
+    <span class="linha__urgencia">
+      {%- if i.status == "aguardando" %}{{ m.selo_urgencia(i.urgencia) }}{% else %}{{ m.selo_status(i.status) }}{% endif -%}
+    </span>
+    {%- if i.status == "aguardando" %}
+    {{ m.tempo(i.iso, i.relativo, i.absoluto, "linha__tempo") }}
+    {%- else %}
+    {{ m.tempo(i.iso, i.absoluto, i.relativo, "linha__tempo") }}
+    {%- endif %}
+  </a>
+  {%- if i.comparar %}
+  <div class="linha__extra">{{ m.comparacao(i.rascunho, i.resposta_texto) }}</div>
+  {%- endif %}
+</li>
+{%- endmacro %}

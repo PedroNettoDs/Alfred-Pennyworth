@@ -1,0 +1,12 @@
+{# Miolo do contêiner de polling da lista (página e /painel/parcial/pendencias). Vars: itens, vazio. #}
+{% import "_macros.html" as m %}
+{% from "_linha.html" import linha %}
+{%- if itens %}
+<ul class="lista{% if aba == "resolvidas" %} lista--resolvidas{% endif %}">
+  {%- for i in itens %}
+  {{ linha(i) }}
+  {%- endfor %}
+</ul>
+{%- else %}
+{{ m.vazio(vazio, "pendencias") }}
+{%- endif %}

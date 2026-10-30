@@ -1,0 +1,45 @@
+{# Miolo da Limpeza (página e /painel/parcial/limpeza). Vars: lotes (de painel._limpeza), erro_limpeza. #}
+{% import "_macros.html" as m %}
+{%- if erro_limpeza %}
+{{ m.aviso("erro", erro_limpeza) }}
+{%- elif not lotes %}
+{{ m.vazio("Nenhum lote de limpeza, senhor.", "limpeza") }}
+{%- else %}
+{%- for l in lotes %}
+<article class="cartao lote" aria-labelledby="lote-{{ l.id }}-titulo">
+  <div class="lote__cabecalho">
+    <h2 class="lote__titulo" id="lote-{{ l.id }}-titulo">{{ l.total }} e-mail{{ "s" if l.total != 1 else "" }}{% if l.inbox %} · {{ l.inbox }}{% endif %}</h2>
+    {{ m.selo_status(l.status) }}
+  </div>
+  <p class="lote__meta">Proposto em {{ l.criado }}{% if l.status == "aguardando" and l.expira %} · expira em {{ l.expira }}{% endif %}{% if l.motivo %} · Motivo: {{ l.motivo }}{% endif %}</p>
+  {%- if l.nota %}<p class="pequeno">Nota: {{ l.nota }}</p>{% endif %}
+  <details class="recolhivel" id="lote-{{ l.id }}-emails">
+    <summary>{{ "Ver o e-mail" if l.itens|length == 1 else "Ver os " ~ l.itens|length ~ " e-mails" }}</summary>
+    <div class="recolhivel__corpo">
+      <table class="tabela">
+        <thead><tr><th scope="col">Remetente</th><th scope="col">Assunto</th><th scope="col">Data</th></tr></thead>
+        <tbody>
+          {%- for i in l.itens %}
+          <tr><td>{{ i.de }}{% if i.email and i.email != i.de %} <span class="suave pequeno">&lt;{{ i.email }}&gt;</span>{% endif %}</td><td>{{ i.assunto }}</td><td class="tabela__data">{{ i.data }}</td></tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {%- if l.status == "aguardando" %}
+  <form class="lote__form" data-acao="" data-acoes>
+    {{ m.area_texto("nota", "Nota", id="nota-" ~ l.id, opcional=true, linhas=2) }}
+    <div class="acoes">
+      {{ m.botao("Aprovar", "primario", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/aprovar",
+          "data-confirmar": "dialogo-limpeza", "data-apos-sucesso": "encerrar", "data-texto-ocupado": "Aprovando…",
+          "data-dialogo-mensagem": ("O e-mail irá" if l.total == 1 else "Os " ~ l.total ~ " e-mails irão")
+                                   ~ " para a Lixeira da conta. Nada é apagado de forma permanente."}) }}
+      {{ m.botao("Recusar", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/recusar", "data-apos-sucesso": "encerrar",
+          "data-texto-ocupado": "Recusando…"}) }}
+    </div>
+    {{ m.resultado() }}
+  </form>
+  {%- endif %}
+</article>
+{%- endfor %}
+{%- endif %}

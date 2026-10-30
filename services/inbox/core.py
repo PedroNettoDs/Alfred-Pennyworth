@@ -19,12 +19,16 @@ e por main.py (FastAPI, para o N8N). Nenhuma função levanta exceção por falh
 de LLM: degrada com log() e segue.
 """
 
+import fcntl
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -38,7 +42,7 @@ from _shared.lib_alfred import (  # noqa: E402
     log, slugify, ollama_generate, ollama_generate_json, deduplicate_by_url_and_title,
 )
 from _shared.lib_mail import (  # noqa: E402
-    find_thunderbird_profile, list_accounts, fetch_messages, imap_fetch,
+    find_thunderbird_profile, list_accounts, fetch_messages, imap_fetch, limpar_url,
 )
 from _shared import lib_db  # noqa: E402
 from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text  # noqa: E402
@@ -176,6 +180,115 @@ def _now() -> datetime:
 
 
 # ══════════════════════════════════════════════════════════════
+#  Trava entre processos + gravação atômica dos YAML do vault
+# ══════════════════════════════════════════════════════════════
+#
+# pendencias.yml, tasks.yml, agenda.yml e limpeza.yml são gravados por vários PROCESSOS: a API
+# (threads do webhook, thread da fila, painel), os aguardadores destacados das notificações, o CLI
+# (run.sh), o ciclo do e-mail (timer), o vigia e as tools do Open WebUI (no container, pelo bind
+# mount do vault). Cada gravação é "ler → mudar → gravar"; sem trava, quem grava por último apaga o
+# que o outro gravou no meio. Regras:
+#   - só GRAVAÇÕES pegam a trava, e por um trecho curto (nada de LLM/TTS/rede segurando);
+#   - leituras não pegam trava — por isso toda gravação é atômica (tmp + os.replace): quem lê vê o
+#     arquivo antigo inteiro ou o novo inteiro, nunca pela metade;
+#   - ordem (evita deadlock): whatsapp._LOCK → pendências → tasks; agenda → tasks; limpeza sozinha;
+#     fila do WhatsApp sozinha. Nunca pegar pendências segurando agenda/tasks.
+
+_TRAVAS: dict = {}                      # caminho do .lock → {"rlock", "nivel", "fd"}
+_TRAVAS_REGISTRO = threading.Lock()
+
+
+def _arquivo_trava(dados: Path) -> Path:
+    """pendencias/pendencias.yml → pendencias/.pendencias.yml.lock (mesmo nome dentro do container)."""
+    return dados.parent / f".{dados.name}.lock"
+
+
+def _abrir_trava(lock_path: Path) -> int:
+    """fd do .lock (não herdável — padrão do Python). Criado 0666: o host (Pedro) e o container do Open WebUI
+    (root) abrem o mesmo arquivo; sem permissão de escrita, abre só leitura (flock funciona igual)."""
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o666)
+    except PermissionError:
+        return os.open(str(lock_path), os.O_RDONLY)
+    try:
+        if os.fstat(fd).st_uid == os.geteuid():
+            os.fchmod(fd, 0o666)   # umask tirou a escrita do grupo/outros
+    except OSError:
+        pass
+    return fd
+
+
+@contextmanager
+def trava_arquivo(dados: Path, timeout: float = 30.0):
+    """
+    Trava exclusiva de `dados` entre processos (fcntl.flock no arquivo .lock ao lado) e entre threads.
+    Reentrante na mesma thread: só o primeiro nível pega/solta o flock — duas threads do mesmo processo
+    nunca disputam o flock entre si (a segunda espera no RLock). Passou de `timeout` → TimeoutError.
+    """
+    dados = Path(dados)
+    lock_path = _arquivo_trava(dados)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    chave = str(lock_path.resolve())
+    with _TRAVAS_REGISTRO:
+        t = _TRAVAS.setdefault(chave, {"rlock": threading.RLock(), "nivel": 0, "fd": None})
+    limite = time.monotonic() + max(0.0, float(timeout))
+    if not t["rlock"].acquire(timeout=max(0.0, float(timeout))):
+        raise TimeoutError(f"{dados.name} ocupado por outra thread há mais de {timeout:g} s — tente de novo")
+    try:
+        if t["nivel"] == 0:
+            fd = _abrir_trava(lock_path)
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= limite:
+                        os.close(fd)
+                        raise TimeoutError(f"{dados.name} ocupado por outro processo há mais de {timeout:g} s "
+                                           f"(trava {lock_path}) — tente de novo")
+                    time.sleep(0.05)
+            t["fd"] = fd
+        t["nivel"] += 1
+    except BaseException:
+        t["rlock"].release()
+        raise
+    try:
+        yield
+    finally:
+        t["nivel"] -= 1
+        if t["nivel"] == 0:
+            fd, t["fd"] = t["fd"], None
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        t["rlock"].release()
+
+
+def trava_pendencias():
+    """Atalho: trava de VAULT_ALFRED/pendencias/pendencias.yml."""
+    return trava_arquivo(pend_file())
+
+
+def gravar_atomico(f: Path, texto: str) -> None:
+    """Escreve `<f>.tmp` no mesmo diretório e troca com os.replace — leitor nunca vê arquivo pela metade.
+    Chame dentro da trava do arquivo (o .tmp tem nome fixo)."""
+    f = Path(f)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.unlink(missing_ok=True)   # sobra de uma queda (talvez de outro dono, ex.: root do container)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(texto)
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        os.chmod(tmp, f.stat().st_mode & 0o777)   # mantém as permissões do arquivo que vai ser trocado
+    except OSError:
+        pass
+    os.replace(tmp, f)
+
+
+# ══════════════════════════════════════════════════════════════
 #  Memória de message-ids processados
 # ══════════════════════════════════════════════════════════════
 
@@ -271,6 +384,14 @@ def classificar(m: dict, cfg: dict) -> dict:
                 "motivo": "remetentes_ignorar", "origem": "heuristica"}
     if m.get("ics"):
         ev = m["ics"][0]
+        metodo = str(ev.get("method") or "").upper()
+        if str(ev.get("status") or "").upper() == "CANCELLED" or metodo not in ("", "REQUEST", "PUBLISH"):
+            # cancelamento (METHOD:CANCEL / STATUS:CANCELLED) ou resposta a convite (REPLY...): nada a decidir
+            tipo = "cancelamento de convite" if (metodo == "CANCEL" or ev.get("status") == "CANCELLED") \
+                else f"resposta/atualização de convite ({metodo})"
+            return {"categoria": "outro", "confianca": 0.95,
+                    "resumo": f"{tipo}: {ev.get('summary') or m['subject']}",
+                    "motivo": f"anexo .ics não acionável ({metodo or 'STATUS:CANCELLED'})", "origem": "heuristica"}
         return {"categoria": "evento", "confianca": 0.95,
                 "resumo": f"convite de calendário: {ev.get('summary') or m['subject']}",
                 "motivo": "anexo .ics", "origem": "heuristica"}
@@ -304,8 +425,9 @@ def classificar(m: dict, cfg: dict) -> dict:
     data = ollama_generate_json(prompt, model=_modelo_classificacao(), timeout=120,
                                 schema=SCHEMA_CLASSIFICACAO, options={**OPTS_JSON, "num_predict": 400})
     if not isinstance(data, dict):
+        # falhou=True: o ciclo não marca o e-mail como visto — tenta de novo no próximo (Ollama fora/timeout)
         return {"categoria": "outro", "confianca": 0.0, "resumo": "", "motivo": "classificador não respondeu",
-                "origem": "llm"}
+                "origem": "llm", "falhou": True}
 
     cat = str(data.get("categoria", "outro")).lower().strip()
     if cat not in CATEGORIAS:
@@ -388,6 +510,11 @@ def extrair_noticias(m: dict, jcfg: dict) -> list[dict]:
         "links":     links_txt,
     })
     data = ollama_generate_json(prompt, timeout=240, schema=SCHEMA_NOTICIAS, options=OPTS_JSON)
+    if data is None:
+        # LLM não respondeu: o ciclo não marca esta newsletter como vista (entra numa próxima edição)
+        m["_extracao_falhou"] = True
+        log(f"[jornal] Extração falhou para '{m['subject'][:50]}' — fica para o próximo ciclo")
+        return []
     itens = []
     if isinstance(data, list):
         itens = data
@@ -409,7 +536,9 @@ def extrair_noticias(m: dict, jcfg: dict) -> list[dict]:
         if len(titulo) < 5:
             continue
         url = str(it.get("url") or "").strip()
-        url = permitidas.get(url, "")  # anti-alucinação: só URLs que existem no e-mail (apelido → URL real)
+        # anti-alucinação: só URLs que existem no e-mail (apelido → URL real); o LLM pode devolver a URL com
+        # utm_* como está no corpo, e as permitidas guardam a versão limpa
+        url = permitidas.get(url) or permitidas.get(limpar_url(url), "") if url else ""
         out.append({
             "title":     titulo[:160],
             "url":       url,
@@ -422,8 +551,26 @@ def extrair_noticias(m: dict, jcfg: dict) -> list[dict]:
     return out
 
 
-def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox_name: str) -> Optional[dict]:
-    """Monta a edição do dia a partir dos itens extraídos. Retorna metadados ou None."""
+_URL_SOLTA_RE = re.compile(r"(?<!\]\()(?<![\w/])https?://[^\s)>\]]+")
+
+
+def _tirar_urls_soltas(texto: str, urls_ok: set) -> str:
+    """URL "solta" (fora de [título](url)) que não veio de nenhum e-mail → removida (o LLM inventa);
+    linha que fica vazia por causa disso some junto."""
+    linhas = []
+    for linha in texto.split("\n"):
+        nova = _URL_SOLTA_RE.sub(lambda mm: mm.group(0) if mm.group(0).rstrip(".,;:!?") in urls_ok
+                                 else mm.group(0)[len(mm.group(0).rstrip(".,;:!?")):], linha)
+        if nova != linha and not nova.strip(" \t-*•>:.,;"):
+            continue
+        linhas.append(nova)
+    return "\n".join(linhas)
+
+
+def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox_name: str,
+                 notificar: bool = True) -> Optional[dict]:
+    """Monta a edição do dia a partir dos itens extraídos. Retorna metadados ou None.
+    LLM sem resposta marca os e-mails com "_jornal_falhou" (o ciclo não os dá como vistos: tenta de novo)."""
     jcfg   = cfg.get("jornal") or {}
     perfil = cfg.get("_perfil") or {}
     now    = _now()
@@ -455,7 +602,9 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
     log("[jornal] Gerando edição escrita...")
     texto = ollama_generate(prompt, timeout=300)
     if not texto:
-        log("[jornal] Ollama não retornou a edição")
+        log("[jornal] Ollama não retornou a edição — as newsletters ficam para o próximo ciclo")
+        for e in emails_noticia:
+            e["_jornal_falhou"] = True
         return None
     if not radar:
         texto = re.sub(r"\n?#{1,3}\s*Radar\b.*?(?=\n#{1,3}\s|\Z)", "", texto, flags=re.S | re.I).strip()
@@ -463,6 +612,7 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
     urls_ok = {it["url"] for it in unique if it.get("url")}
     texto = re.sub(r"\[([^\]]+)\]\(([^)]*)\)",
                    lambda mm: mm.group(0) if mm.group(2) in urls_ok else mm.group(1), texto)
+    texto = _tirar_urls_soltas(texto, urls_ok)
 
     titulo = generate_title_via_llm(texto, fallback=f"Edição do dia — {date_human}")
     slug   = slugify(titulo)
@@ -471,7 +621,7 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
 
     md = "\n".join([
         "---",
-        f'title: "{titulo}"',
+        f"title: {json.dumps(titulo, ensure_ascii=False)}",   # título com aspas não quebra o YAML
         f"date: {date_str}",
         f'time: "{time_str}"',
         "type: jornal",
@@ -530,8 +680,9 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
         else:
             log(f"[jornal] Áudio salvo: {mp3_path.name}")
 
-    _notify(f"Alfred — Jornal do dia", f"{titulo}\n{len(unique)} notícias de {len(emails_noticia)} newsletters"
-            + (" · áudio pronto" if mp3_path else ""))
+    if notificar:
+        _notify(f"Alfred — Jornal do dia", f"{titulo}\n{len(unique)} notícias de {len(emails_noticia)} newsletters"
+                + (" · áudio pronto" if mp3_path else ""))
     return {"titulo": titulo, "md": str(md_path), "mp3": str(mp3_path) if mp3_path else None,
             "noticias": len(unique), "newsletters": len(emails_noticia), "data": date_str}
 
@@ -540,22 +691,60 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
 #  Pendências — eventos e contatos aguardando "vou / não vou"
 # ══════════════════════════════════════════════════════════════
 
+def preservar_corrompido(f: Path, motivo: str, chave: str) -> Optional[Path]:
+    """
+    YAML ilegível vai ser tratado como vazio — e a próxima gravação o substitui. Antes disso, guarda uma
+    cópia "<nome>.corrompido-<AAAAmmdd-HHMMSS>" ao lado (uma vez por conteúdo: se já existe cópia idêntica,
+    não duplica). Sem conseguir copiar → RuntimeError: melhor falhar do que apagar o original.
+    """
+    f = Path(f)
+    motivo = " ".join(str(motivo).split())[:300]
+    try:
+        bruto = f.read_bytes()
+    except OSError:
+        return None
+    for antiga in sorted(f.parent.glob(f"{f.name}.corrompido-*")):
+        try:
+            if antiga.read_bytes() == bruto:
+                return antiga
+        except OSError:
+            continue
+    copia = f.with_name(f"{f.name}.corrompido-{datetime.now():%Y%m%d-%H%M%S}")
+    n = 2
+    while copia.exists():
+        copia = f.with_name(f"{f.name}.corrompido-{datetime.now():%Y%m%d-%H%M%S}-{n}")
+        n += 1
+    try:
+        shutil.copy2(f, copia)
+    except OSError as e:
+        raise RuntimeError(f"{f} ilegível ({motivo}) e não consegui salvar uma cópia ({e}) — "
+                           f"corrija o arquivo antes de continuar") from e
+    log(f"[{chave}] !!! ATENÇÃO: {f} ilegível ({motivo}) — cópia do original em {copia.name}; "
+        f"seguindo com a lista vazia (a próxima gravação substitui o arquivo)")
+    return copia
+
+
 def _load_pend() -> dict:
     f = pend_file()
     if not f.exists():
         return {"pendencias": []}
     try:
-        data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-        if not isinstance(data, dict) or not isinstance(data.get("pendencias"), list):
-            return {"pendencias": []}
-        return data
+        texto = f.read_text(encoding="utf-8")
+        data = yaml.safe_load(texto) or {}
     except Exception as e:
-        log(f"[pendencias] YAML ilegível ({e}) — começando vazio")
+        preservar_corrompido(f, f"YAML inválido: {e}", "pendencias")
         return {"pendencias": []}
+    if not isinstance(data, dict) or not isinstance(data.get("pendencias"), list):
+        if texto.strip() and not (isinstance(data, dict) and data.get("pendencias") is None):
+            preservar_corrompido(f, "sem a lista 'pendencias:'", "pendencias")
+        return {"pendencias": []}
+    return data
 
 
 def _save_pend(data: dict):
-    pend_file().write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    """Grava pendencias.yml de forma atômica. Quem lê-muda-grava deve estar dentro de trava_pendencias()."""
+    with trava_pendencias():   # reentrante: garante o .tmp exclusivo mesmo se o chamador esqueceu a trava
+        gravar_atomico(pend_file(), yaml.dump(data, allow_unicode=True, sort_keys=False))
 
 
 def listar_pendencias(status: Optional[str] = "aguardando") -> list[dict]:
@@ -583,6 +772,83 @@ def _novo_id(titulo: str, existentes: set[str]) -> str:
         pid = f"{base}-{n}"
         n += 1
     return pid
+
+
+def _ids_ocupados(data: dict) -> set[str]:
+    """Ids do yml + nomes dos .md em pendencias/ (um id reservado por outro processo já tem o .md)."""
+    ids = {p.get("id") for p in data["pendencias"]}
+    ids.update(f.stem for f in pend_dir().glob("*.md"))
+    return ids
+
+
+def _reservar_id(titulo: str) -> str:
+    """
+    Id novo sem corrida: calcula dentro da trava e cria o .md vazio como reserva. Quem cria a pendência
+    gasta LLM/TTS fora da trava e só no fim anexa a entrada ao yml — outro processo criando ao mesmo
+    tempo vê o .md e escolhe outro id.
+    """
+    with trava_pendencias():
+        pid = _novo_id(titulo, _ids_ocupados(_load_pend()))
+        (pend_dir() / f"{pid}.md").touch()
+    return pid
+
+
+def _soltar_reserva(pid: str) -> None:
+    """Criação falhou no meio: apaga o .md de reserva se ainda estiver vazio."""
+    try:
+        md = pend_dir() / f"{pid}.md"
+        if md.is_file() and md.stat().st_size == 0:
+            md.unlink()
+    except OSError:
+        pass
+
+
+def _via(origem: str) -> Optional[str]:
+    """'via painel' → 'painel' (campo respondido_via); vazio → None."""
+    o = (origem or "").strip()
+    if o.lower() == "via" or o.lower().startswith("via "):
+        o = o[3:].strip()
+    return o or None
+
+
+_CAMINHOS = {
+    "celular":           "resposta direta pelo celular",
+    "whatsapp":          "resposta citada no WhatsApp",
+    "api":               "API (N8N, chat ou extensão)",
+    "terminal":          "terminal",
+    "notificação no pc": "notificação no PC",
+    "notificação":       "notificação no PC",
+    "painel":            "Painel do Alfred",
+    "chat":              "chat do Open WebUI",
+}
+
+
+def caminho_resolucao(entry: dict) -> str:
+    """Por onde a pendência foi resolvida, em texto legível ("Esta pendência já foi resolvida por <caminho>")."""
+    via = str(entry.get("respondido_via") or "").strip()
+    if via:
+        return _CAMINHOS.get(via.lower(), via)
+    status = entry.get("status")
+    if status == "respondida_manual":
+        return _CAMINHOS["celular"]
+    if status == "expirada":
+        return "expiração automática (o evento já passou)"
+    nota = str(entry.get("nota") or "").strip()
+    if nota.lower().startswith("via ") and nota[4:].strip():
+        return _CAMINHOS.get(nota[4:].strip().lower(), nota[4:].strip())
+    return "outro caminho (terminal, notificação ou chat)"
+
+
+class PendenciaJaResolvida(ValueError):
+    """Ação numa pendência que já saiu de 'aguardando' (outro caminho chegou antes).
+    `caminho` = caminho_resolucao(entry); str(e) mantém a mensagem antiga do ValueError."""
+
+    def __init__(self, entry: dict, mensagem: str = ""):
+        self.entry = entry
+        self.pid = entry.get("id")
+        self.status = entry.get("status")
+        self.caminho = caminho_resolucao(entry)
+        super().__init__(mensagem or f"Pendência {self.pid} já está com status '{self.status}'")
 
 
 def _parse_dt(s) -> Optional[datetime]:
@@ -682,11 +948,12 @@ def _link_de_acao(m: dict, permitidas: dict[str, str]) -> str:
 def _ja_na_fila(pend: list[dict], m: dict, ev: dict) -> Optional[dict]:
     t_norm = re.sub(r"\W+", " ", ev["titulo"].lower()).strip()
     for p in pend:
-        if p.get("email", {}).get("message_id") == m["message_id"]:
+        # pendências de WhatsApp gravam "email": None (e podem não ter "evento") — .get(k, {}) não basta
+        if (p.get("email") or {}).get("message_id") == m["message_id"]:
             return p
         if p.get("status") != "aguardando":
             continue
-        if ev.get("link") and p.get("evento", {}).get("link") == ev["link"]:
+        if ev.get("link") and (p.get("evento") or {}).get("link") == ev["link"]:
             return p
         if t_norm and re.sub(r"\W+", " ", str(p.get("titulo", "")).lower()).strip() == t_norm:
             return p
@@ -728,11 +995,27 @@ def _texto_fallback(ev: dict, m: dict) -> str:
 
 
 def criar_pendencia(m: dict, ev: dict, cfg: dict, inbox_name: str) -> dict:
+    # id reservado na trava; LLM + TTS (~1 min) fora dela; o yml só é relido e gravado no fim —
+    # antes, a lista carregada aqui era gravada de volta e apagava o que outro processo criou no meio
+    pid = _reservar_id(ev["titulo"])
+    try:
+        entry = _montar_pendencia(pid, m, ev, cfg, inbox_name)
+    except BaseException:
+        _soltar_reserva(pid)
+        raise
+    with trava_pendencias():
+        data = _load_pend()
+        data["pendencias"].append(entry)
+        _save_pend(data)
+    log(f"[pendencias] Criada {pid} ({ev['tipo']}) — md{' + mp3' if entry['arquivos']['mp3'] else ''}")
+    return entry
+
+
+def _montar_pendencia(pid: str, m: dict, ev: dict, cfg: dict, inbox_name: str) -> dict:
+    """Texto explicativo (.md) + áudio da pergunta → entrada de pendencias.yml (ainda não gravada)."""
     pcfg   = cfg.get("pendencias") or {}
     perfil = cfg.get("_perfil") or {}
     now    = _now()
-    data   = _load_pend()
-    pid    = _novo_id(ev["titulo"], {p.get("id") for p in data["pendencias"]})
 
     prompt = render_template(pcfg.get("template_pergunta", "pergunta_evento"), {
         "data_hoje":          now.strftime("%d/%m/%Y (%A)"),
@@ -815,9 +1098,6 @@ def criar_pendencia(m: dict, ev: dict, cfg: dict, inbox_name: str) -> dict:
         "resposta":      None,
         "nota":          None,
     }
-    data["pendencias"].append(entry)
-    _save_pend(data)
-    log(f"[pendencias] Criada {pid} ({ev['tipo']}) — md{' + mp3' if tem_audio else ''}")
     return entry
 
 
@@ -868,26 +1148,80 @@ def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
         _iniciar_aguardador("_aguardar-resposta", entry["id"])
 
 
-def _add_task(title: str, due_date: Optional[str], tags: list[str]) -> Optional[int]:
-    """Cria tarefa em VAULT_ALFRED/tasks.yml no mesmo formato da tool alfred_tasks."""
-    f = vault() / "tasks.yml"
+def _load_tasks(f: Path) -> dict:
+    """tasks.yml → {"tasks": [...]}. Ilegível: guarda cópia (preservar_corrompido) e segue vazio."""
     try:
         data = yaml.safe_load(f.read_text(encoding="utf-8")) if f.exists() else None
-    except Exception:
+    except Exception as e:
+        preservar_corrompido(f, f"YAML inválido: {e}", "tasks")
+        # os ids continuam depois do maior que havia no arquivo ilegível: pendências antigas guardam task_id
+        # e não podem passar a apontar (ou cancelar) uma tarefa nova
+        ids = [int(x) for x in re.findall(r"^\s*-?\s*id:\s*(\d+)\s*$", f.read_text(encoding="utf-8", errors="replace"), re.M)]
+        _IDS_CORROMPIDO[str(f)] = max(ids, default=0)
         data = None
     if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        if (data is not None and f.exists() and f.read_text(encoding="utf-8").strip()
+                and not (isinstance(data, dict) and data.get("tasks") is None)):
+            preservar_corrompido(f, "sem a lista 'tasks:'", "tasks")
         data = {"tasks": []}
-    tid = max((t.get("id", 0) for t in data["tasks"]), default=0) + 1
-    data["tasks"].append({
-        "id": tid, "title": title, "status": "open", "priority": "normal", "tags": tags,
-        "due_date": due_date, "created_at": datetime.now().isoformat(timespec="minutes"), "completed_at": None,
-    })
-    f.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return data
+
+
+def _cancelar_task(tid) -> bool:
+    """Tarefa aberta → status "cancelled" + completed_at (Pedro desistiu do evento). True se mudou."""
+    f = vault() / "tasks.yml"
+    with trava_arquivo(f):
+        if not f.exists():
+            return False
+        data = _load_tasks(f)
+        t = next((t for t in data["tasks"] if t.get("id") == tid), None)
+        if not t or t.get("status") != "open":
+            return False
+        t["status"] = "cancelled"
+        t["completed_at"] = datetime.now().isoformat(timespec="minutes")
+        gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))
+    return True
+
+
+def _desfazer_agenda_da_pendencia(pid: str) -> list[str]:
+    """Tira da agenda (e do calendário, via extensão) o que o 'vou' desta pendência agendou."""
+    try:
+        import agenda
+        ids = [i["id"] for i in agenda.listar()
+               if (i.get("origem") or {}).get("pendencia_id") == pid
+               and i.get("status") not in ("desfeito", "cancelado", "desfazer")]
+        for aid in ids:
+            agenda.desfazer(aid)
+        return ids
+    except Exception as e:
+        log(f"[agenda] não consegui desfazer o agendamento de {pid}: {e}")
+        return []
+
+
+_IDS_CORROMPIDO: dict[str, int] = {}   # tasks.yml ilegível → maior id que ele tinha (ver _load_tasks)
+
+
+def _add_task(title: str, due_date: Optional[str], tags: list[str]) -> Optional[int]:
+    """Cria tarefa em VAULT_ALFRED/tasks.yml no mesmo formato da tool alfred_tasks.
+    Trava + gravação atômica: a tool do Open WebUI e o agendamento gravam o mesmo arquivo (ids únicos)."""
+    f = vault() / "tasks.yml"
+    with trava_arquivo(f):
+        data = _load_tasks(f)
+        tid = max(max((t.get("id", 0) for t in data["tasks"]), default=0), _IDS_CORROMPIDO.get(str(f), 0)) + 1
+        data["tasks"].append({
+            "id": tid, "title": title, "status": "open", "priority": "normal", "tags": tags,
+            "due_date": due_date, "created_at": datetime.now().isoformat(timespec="minutes"), "completed_at": None,
+        })
+        gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))
     return tid
 
 
-def responder(pid: str, resposta: str, nota: str = "") -> dict:
-    """Registra a decisão. 'vou' também cria tarefa em tasks.yml."""
+def responder(pid: str, resposta: str, nota: str = "", origem: str = "", so_se_aguardando: bool = False) -> dict:
+    """
+    Registra a decisão. 'vou' também cria tarefa em tasks.yml.
+    `origem` ("via terminal", "via painel"...) vira respondido_via. so_se_aguardando=True: pendência que
+    já saiu de 'aguardando' levanta PendenciaJaResolvida e nada muda (painel, aguardador da notificação).
+    """
     r = resposta.strip().lower().replace("-", "_").replace(" ", "_")
     if r in ("vou", "sim", "yes", "aceito"):
         r = "vou"
@@ -898,46 +1232,70 @@ def responder(pid: str, resposta: str, nota: str = "") -> dict:
     else:
         raise ValueError(f"Resposta inválida: {resposta!r} (use vou | nao-vou | ignorar)")
 
-    data = _load_pend()
-    entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
-    if not entry:
-        raise KeyError(f"Pendência não encontrada: {pid}")
-    if entry.get("tipo") == "whatsapp" and r != "ignorada":
-        raise ValueError(f"{pid} é uma pendência de WhatsApp: responda com texto livre "
-                         f"(responder-texto {pid} \"...\") ou 'ignorar'")
+    # ler → checar → mudar → gravar numa transação só (tarefa em tasks.yml aninhada: ordem pendências → tasks)
+    with trava_pendencias():
+        data = _load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+        if not entry:
+            raise KeyError(f"Pendência não encontrada: {pid}")
+        if entry.get("tipo") == "whatsapp" and r != "ignorada":
+            raise ValueError(f"{pid} é uma pendência de WhatsApp: responda com texto livre "
+                             f"(responder-texto {pid} \"...\") ou 'ignorar'")
+        if so_se_aguardando and entry.get("status") != "aguardando":
+            raise PendenciaJaResolvida(entry)
+        anterior = entry.get("status")
+        if anterior == r:
+            # mesma resposta de novo (N8N reenviando o resumeUrl, duplo clique): nada muda, nada duplica
+            log(f"[pendencias] {pid} já está '{r}' — nada a fazer")
+            return {**entry, "_task_criada": False}
 
-    now = _now()
-    entry["status"] = r
-    entry["resposta"] = r
-    entry["respondido_em"] = now.isoformat(timespec="minutes")
-    entry["nota"] = nota.strip() or None
+        now = _now()
+        entry["status"] = r
+        entry["resposta"] = r
+        entry["respondido_em"] = now.isoformat(timespec="minutes")
+        entry["nota"] = nota.strip() or None
+        if origem:
+            entry["respondido_via"] = _via(origem)
 
-    task_id = None
-    if r == "vou":
-        due = (entry.get("evento", {}).get("data_inicio") or "")[:10] or None
-        prefixo = "Ir: " if entry["tipo"] == "evento" else "Responder: "
-        task_id = _add_task(prefixo + entry["titulo"], due, ["pendencia", entry["tipo"]])
-        entry["task_id"] = task_id
-    _save_pend(data)
+        task_id = None
+        task_cancelada = None
+        if r == "vou":
+            due = ((entry.get("evento") or {}).get("data_inicio") or "")[:10] or None
+            prefixo = "Ir: " if entry["tipo"] == "evento" else "Responder: "
+            task_id = _add_task(prefixo + entry["titulo"], due, ["pendencia", entry["tipo"]])
+            entry["task_id"] = task_id
+        elif anterior == "vou" and entry.get("task_id"):
+            # trocou de ideia (vou → não vou / ignorar): a tarefa criada pelo "vou" é cancelada
+            task_cancelada = entry["task_id"]
+            _cancelar_task(task_cancelada)
+            entry["task_id"] = None
+            entry["task_id_cancelada"] = task_cancelada
+        _save_pend(data)
 
-    md_rel = entry.get("arquivos", {}).get("md")
+    md_rel = (entry.get("arquivos") or {}).get("md")
     if md_rel:
         md_path = vault() / md_rel
         if md_path.exists():
             txt = md_path.read_text(encoding="utf-8")
-            txt = re.sub(r"^status: aguardando$", f"status: {r}", txt, count=1, flags=re.M)
+            txt = re.sub(r"^status: \w+$", f"status: {r}", txt, count=1, flags=re.M)
             rotulo = {"vou": "VOU", "nao_vou": "NÃO VOU", "ignorada": "IGNORADA"}[r]
             txt = txt.rstrip() + f"\n\n## Resposta\n\n**{rotulo}** — {now.strftime('%d/%m/%Y %H:%M')}"
             if nota.strip():
                 txt += f"\n\nNota: {nota.strip()}"
             if task_id:
                 txt += f"\n\nTarefa criada em `tasks.yml` (id {task_id})."
+            if task_cancelada:
+                txt += f"\n\nTarefa {task_cancelada} cancelada em `tasks.yml`."
             md_path.write_text(txt + "\n", encoding="utf-8")
 
-    log(f"[pendencias] {pid} → {r}" + (f" (tarefa #{task_id})" if task_id else ""))
+    log(f"[pendencias] {pid} → {r}" + (f" (tarefa #{task_id})" if task_id else "")
+        + (f" (tarefa #{task_cancelada} cancelada)" if task_cancelada else ""))
     if r == "vou":
         _agendar_evento_email(entry)
-    return entry
+    elif anterior == "vou":
+        _desfazer_agenda_da_pendencia(pid)
+    # _task_criada: o CLI/API só dizem "tarefa #N criada" quando ela nasceu NESTA chamada
+    return {**entry, "_task_criada": bool(task_id)}
 
 
 def _agendar_evento_email(entry: dict) -> None:
@@ -976,37 +1334,59 @@ def _agendar_evento_email(entry: dict) -> None:
 
 def registrar_links_resposta(pid: str, links: dict) -> dict:
     """Guarda URLs de resposta externas (ex.: resumeUrl do Wait do N8N) na pendência."""
-    data = _load_pend()
-    entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
-    if not entry:
-        raise KeyError(f"Pendência não encontrada: {pid}")
-    entry["resposta_links"] = {k: str(v) for k, v in (links or {}).items() if v}
-    _save_pend(data)
+    with trava_pendencias():
+        data = _load_pend()
+        entry = next((p for p in data["pendencias"] if p.get("id") == pid), None)
+        if not entry:
+            raise KeyError(f"Pendência não encontrada: {pid}")
+        entry["resposta_links"] = {k: str(v) for k, v in (links or {}).items() if v}
+        _save_pend(data)
     return entry
+
+
+def _expira_em(ev: dict) -> Optional[datetime]:
+    """
+    A partir de quando a pendência do evento expira. Só data ("2026-10-26", .ics de dia inteiro) → depois
+    do fim do dia (do data_fim, se houver); com hora → data_fim, ou 2 h depois do início sem data_fim.
+    """
+    ini_s, fim_s = ev.get("data_inicio"), ev.get("data_fim")
+    inicio = _parse_dt(ini_s)
+    if not inicio:
+        return None
+    fim = _parse_dt(fim_s)
+    if fim and fim < inicio:
+        fim = None
+    meia_noite = lambda d: d.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)  # noqa: E731
+    if len(str(ini_s).strip()) <= 10:
+        return meia_noite(fim or inicio)
+    if fim:
+        return fim if len(str(fim_s).strip()) > 10 else meia_noite(fim)
+    return inicio + timedelta(hours=2)
 
 
 def expirar_e_lembrar(cfg: dict) -> dict:
     """Expira pendências cujo evento já passou e re-notifica as que estão aguardando há tempo."""
     pcfg  = cfg.get("pendencias") or {}
-    data  = _load_pend()
     now   = _now()
     cada  = float(pcfg.get("lembrar_a_cada_horas", 12) or 0)
     expiradas, lembradas = [], []
-    for p in data["pendencias"]:
-        if p.get("status") != "aguardando":
-            continue
-        inicio = _parse_dt(p.get("evento", {}).get("data_inicio"))
-        if pcfg.get("expirar_apos_evento", True) and inicio and inicio < now - timedelta(hours=2):
-            p["status"] = "expirada"
-            p["respondido_em"] = now.isoformat(timespec="minutes")
-            expiradas.append(p["id"])
-            continue
-        ultimo = _parse_dt(p.get("lembrado_em") or p.get("criado_em"))
-        if cada > 0 and ultimo and now - ultimo >= timedelta(hours=cada):
-            p["lembrado_em"] = now.isoformat(timespec="minutes")
-            lembradas.append(p["id"])
-    if expiradas or lembradas:
-        _save_pend(data)
+    with trava_pendencias():
+        data = _load_pend()
+        for p in data["pendencias"]:
+            if p.get("status") != "aguardando":
+                continue
+            limite = _expira_em(p.get("evento") or {})
+            if pcfg.get("expirar_apos_evento", True) and limite and now >= limite:
+                p["status"] = "expirada"
+                p["respondido_em"] = now.isoformat(timespec="minutes")
+                expiradas.append(p["id"])
+                continue
+            ultimo = _parse_dt(p.get("lembrado_em") or p.get("criado_em"))
+            if cada > 0 and ultimo and now - ultimo >= timedelta(hours=cada):
+                p["lembrado_em"] = now.isoformat(timespec="minutes")
+                lembradas.append(p["id"])
+        if expiradas or lembradas:
+            _save_pend(data)
     if expiradas:
         log(f"[pendencias] Expiradas: {', '.join(expiradas)}")
     if lembradas:
@@ -1055,6 +1435,7 @@ def _resumo_msg(m: dict, c: dict) -> dict:
         "message_id": m["message_id"], "from": m["from_addr"], "from_name": m["from_name"],
         "subject": m["subject"], "date": m["date_iso"], "categoria": c["categoria"],
         "confianca": c["confianca"], "resumo": c.get("resumo", ""), "origem": c.get("origem", ""),
+        **({"falhou": True} if c.get("falhou") else {}),
     }
 
 
@@ -1086,8 +1467,11 @@ def ciclo(
 
     emails_noticia: list[dict] = []
     eventos: list[tuple[dict, dict]] = []
+    nao_marcar: set[str] = set()   # message_ids que NÃO vão para o seen: tratados num próximo ciclo
     for i, m in enumerate(novos, 1):
         c = classificar(m, cfg)
+        if c.get("falhou"):
+            nao_marcar.add(m["message_id"])
         resumo["classificacao"].append(_resumo_msg(m, c))
         resumo["contagem"][c["categoria"]] = resumo["contagem"].get(c["categoria"], 0) + 1
         log(f"[classif {i:>3}/{len(novos)}] {c['categoria']:<12} {c['confianca']:.2f} {m['from_domain']:<26} {m['subject'][:55]}")
@@ -1105,7 +1489,8 @@ def ciclo(
         itens: list[dict] = []
         for m in emails_noticia:
             itens.extend(extrair_noticias(m, cfg.get("jornal") or {}))
-        resumo["jornal"] = gerar_jornal(itens, emails_noticia, cfg, nome)
+        resumo["jornal"] = gerar_jornal(itens, emails_noticia, cfg, nome, notificar=notificar)
+        nao_marcar.update(m["message_id"] for m in emails_noticia if m.get("_extracao_falhou") or m.get("_jornal_falhou"))
     elif not so_pendencias:
         log("[jornal] Nenhuma newsletter nova — edição não gerada")
 
@@ -1130,11 +1515,20 @@ def ciclo(
             if notificar:
                 notificar_pendencia(entry)
 
+    # só marca como visto o que foi tratado: com --so-jornal os convites/contatos, e com --so-pendencias
+    # as newsletters, ficam para o próximo ciclo completo (senão sumiam para sempre)
+    if so_jornal:
+        nao_marcar.update(m["message_id"] for m, _c in eventos)
+    if so_pendencias:
+        nao_marcar.update(m["message_id"] for m in emails_noticia)
+    if nao_marcar:
+        log(f"[ciclo] {len(nao_marcar)} e-mail(s) não marcado(s) como visto(s) — ficam para o próximo ciclo")
     for m in novos:
-        seen[m["message_id"]] = datetime.now().isoformat(timespec="minutes")
+        if m["message_id"] not in nao_marcar:
+            seen[m["message_id"]] = datetime.now().isoformat(timespec="minutes")
     save_seen(seen)
     import limpeza  # categorias → logs/inbox_categorias.json (base da limpeza pós-podcast)
-    limpeza.registrar_classificacoes(resumo["classificacao"])
+    limpeza.registrar_classificacoes([c for c in resumo["classificacao"] if not c.get("falhou")])
 
     resumo["manutencao"] = expirar_e_lembrar(cfg)
     resumo["manutencao"]["indice"] = indexar_cofres()

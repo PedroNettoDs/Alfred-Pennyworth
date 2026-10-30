@@ -2,19 +2,38 @@
 title: Alfred Pendências e Jornal
 description: Fila de convites/contatos que aguardam "vou / não vou" (Inbox Assistant, Thunderbird), mensagens de WhatsApp que aguardam "o que você quer responder?" (Evolution API) e a última edição do jornal diário. Lê e escreve em VAULT_ALFRED/pendencias/ e VAULT_ALFRED/jornal/; respostas de WhatsApp são enviadas pela API do inbox (:7072).
 author: Alfred Pennyworth
-version: 1.1.0
+version: 1.2.0
 """
 
+import fcntl
 import json
+import os
 import re
+import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field
+
+
+def _herdar_dono(caminho, referencia) -> None:
+    """Rodando como root (container do Open WebUI), o arquivo novo herda dono e grupo de `referencia`
+    (a pasta do arquivo, do usuário do host): sem isso, cada gravação deixava pendencias.yml / tasks.yml de root no vault."""
+    if os.geteuid() != 0:
+        return
+    try:
+        st = os.stat(referencia)
+        if isinstance(caminho, int):
+            os.fchown(caminho, st.st_uid, st.st_gid)
+        else:
+            os.chown(caminho, st.st_uid, st.st_gid)
+    except OSError:
+        pass
 
 
 class Tools:
@@ -56,25 +75,77 @@ class Tools:
         except Exception:
             return {"pendencias": []}
 
-    def _save(self, data: dict):
-        f = self._pend_file()
+    @staticmethod
+    @contextmanager
+    def _trava(dados: Path, timeout: float = 30.0):
+        """
+        Mesma trava do services/inbox/core.py (trava_arquivo): flock em `.<arquivo>.lock` ao lado do arquivo.
+        O vault é bind mount — o container e os processos do host (API, CLI, notificações) disputam o mesmo
+        .lock; sem ela, uma gravação daqui apagava o que o host gravou no meio (e vice-versa).
+        """
+        lock = dados.parent / f".{dados.name}.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o666)
+            _herdar_dono(fd, lock.parent)
+        except PermissionError:
+            fd = os.open(str(lock), os.O_RDONLY)
+        try:
+            limite = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= limite:
+                        raise TimeoutError(f"{dados.name} ocupado há mais de {timeout:g} s — tente de novo")
+                    time.sleep(0.05)
+            yield
+        finally:
+            os.close(fd)   # fechar solta o flock
+
+    @staticmethod
+    def _gravar_atomico(f: Path, texto: str):
+        """tmp + os.replace: quem lê no host nunca vê o arquivo pela metade. Chamar dentro da trava."""
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        tmp = f.with_name(f.name + ".tmp")
+        tmp.unlink(missing_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(texto)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, f.stat().st_mode & 0o777)
+        except OSError:
+            pass
+        _herdar_dono(tmp, f.parent)
+        os.replace(tmp, f)
+
+    def _save(self, data: dict):
+        """Chamar DENTRO de `with self._trava(self._pend_file())` (o flock não é reentrante)."""
+        self._gravar_atomico(self._pend_file(), yaml.dump(data, allow_unicode=True, sort_keys=False))
 
     def _add_task(self, title: str, due_date: Optional[str], tags: list) -> Optional[int]:
         f = self._vault() / "tasks.yml"
-        try:
-            data = yaml.safe_load(f.read_text(encoding="utf-8")) if f.exists() else None
-        except Exception:
-            data = None
-        if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
-            data = {"tasks": []}
-        tid = max((t.get("id", 0) for t in data["tasks"]), default=0) + 1
-        data["tasks"].append({
-            "id": tid, "title": title, "status": "open", "priority": "normal", "tags": tags,
-            "due_date": due_date, "created_at": datetime.now().isoformat(timespec="minutes"), "completed_at": None,
-        })
-        f.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self._erro_tasks = None
+        with self._trava(f):
+            try:
+                data = yaml.safe_load(f.read_text(encoding="utf-8")) if f.exists() else None
+            except Exception as e:
+                # ilegível: NÃO grava por cima (apagaria todas as tarefas e reaproveitaria os ids)
+                self._erro_tasks = f"tasks.yml ilegível ({type(e).__name__}) — tarefa não criada; corrija o arquivo"
+                return None
+            if data is None or (isinstance(data, dict) and data.get("tasks") is None):
+                data = {**(data or {}), "tasks": []}
+            if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+                self._erro_tasks = "tasks.yml fora do formato (tasks: lista) — tarefa não criada; corrija o arquivo"
+                return None
+            tid = max((t.get("id", 0) for t in data["tasks"]), default=0) + 1
+            data["tasks"].append({
+                "id": tid, "title": title, "status": "open", "priority": "normal", "tags": tags,
+                "due_date": due_date, "created_at": datetime.now().isoformat(timespec="minutes"), "completed_at": None,
+            })
+            self._gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))
         return tid
 
     def _api(self, metodo: str, rota: str, body: Optional[dict] = None) -> dict:
@@ -174,14 +245,13 @@ class Tools:
         :param nota: Observação opcional de Pedro (ex.: "só a palestra da tarde")
         :return: Confirmação
         """
-        data = self._load()
-        p = next((x for x in data["pendencias"] if x.get("id") == pendencia_id), None)
+        p = next((x for x in self._load()["pendencias"] if x.get("id") == pendencia_id), None)
         if not p:
             return f"Pendência não encontrada: {pendencia_id}"
         if p.get("status") != "aguardando":
             return f"Pendência {pendencia_id} já está com status '{p.get('status')}'."
         if p.get("tipo") == "whatsapp":
-            return self._responder_whatsapp(data, p, resposta or "", nota or "")
+            return self._responder_whatsapp(p, resposta or "", nota or "")
 
         r = (resposta or "").strip().lower().replace("-", "_").replace(" ", "_")
         if r in ("vou", "sim", "aceito", "yes"):
@@ -194,17 +264,26 @@ class Tools:
             return f"Resposta inválida: {resposta!r}. Use 'vou', 'nao_vou' ou 'ignorar'."
 
         now = datetime.now().astimezone()
-        p["status"] = r
-        p["resposta"] = r
-        p["respondido_em"] = now.isoformat(timespec="minutes")
-        p["nota"] = (nota or "").strip() or None
         task_id = None
-        if r == "vou":
-            due = ((p.get("evento") or {}).get("data_inicio") or "")[:10] or None
-            prefixo = "Ir: " if p.get("tipo") == "evento" else "Responder: "
-            task_id = self._add_task(prefixo + p.get("titulo", ""), due, ["pendencia", p.get("tipo", "evento")])
-            p["task_id"] = task_id
-        self._save(data)
+        # ler → checar → mudar → gravar dentro da trava (a API, o CLI ou a notificação podem ter respondido)
+        with self._trava(self._pend_file()):
+            data = self._load()
+            p = next((x for x in data["pendencias"] if x.get("id") == pendencia_id), None)
+            if not p:
+                return f"Pendência não encontrada: {pendencia_id}"
+            if p.get("status") != "aguardando":
+                return f"Pendência {pendencia_id} já está com status '{p.get('status')}'."
+            p["status"] = r
+            p["resposta"] = r
+            p["respondido_em"] = now.isoformat(timespec="minutes")
+            p["nota"] = (nota or "").strip() or None
+            p["respondido_via"] = "chat"
+            if r == "vou":
+                due = ((p.get("evento") or {}).get("data_inicio") or "")[:10] or None
+                prefixo = "Ir: " if p.get("tipo") == "evento" else "Responder: "
+                task_id = self._add_task(prefixo + p.get("titulo", ""), due, ["pendencia", p.get("tipo", "evento")])
+                p["task_id"] = task_id
+            self._save(data)
 
         md = self._vault() / ((p.get("arquivos") or {}).get("md") or "")
         if md.is_file():
@@ -220,9 +299,10 @@ class Tools:
 
         rotulo = {"vou": "VOU", "nao_vou": "NÃO VOU", "ignorada": "IGNORADA"}[r]
         return f"Anotado: {rotulo} para \"{p.get('titulo')}\"." + \
-               (f" Tarefa #{task_id} criada em tasks.yml." if task_id else "")
+               (f" Tarefa #{task_id} criada em tasks.yml." if task_id else "") + \
+               (f" Atenção: {self._erro_tasks}." if r == "vou" and getattr(self, "_erro_tasks", None) else "")
 
-    def _responder_whatsapp(self, data: dict, p: dict, texto: str, nota: str) -> str:
+    def _responder_whatsapp(self, p: dict, texto: str, nota: str) -> str:
         """Texto livre → API do inbox (que grava e envia pela Evolution API). Sem API: só registra no YAML."""
         texto = texto.strip()
         if not texto:
@@ -241,16 +321,23 @@ class Tools:
             # fallback: registra no YAML; o envio fica pendente (run.sh responder-texto reenviará)
             now = datetime.now().astimezone()
             ignorar = texto.lower().rstrip(".!") in ("ignorar", "ignora", "não responder", "nao responder")
-            p["status"] = "ignorada" if ignorar else "aguardando"
-            p["resposta_texto"] = None if ignorar else texto
-            p["nota"] = nota.strip() or None
-            if ignorar:
-                p["resposta"] = "ignorada"
-                p["respondido_em"] = now.isoformat(timespec="minutes")
-            else:
-                p.setdefault("whatsapp", {})["envio"] = {"ok": False, "erro": f"API indisponível ({err})",
-                                                         "solicitado_em": now.isoformat(timespec="minutes")}
-            self._save(data)
+            with self._trava(self._pend_file()):
+                data = self._load()
+                p = next((x for x in data["pendencias"] if x.get("id") == p["id"]), None)
+                if not p or p.get("status") != "aguardando":
+                    return (f"Não registrei: a pendência já foi resolvida por outro caminho "
+                            f"(status '{(p or {}).get('status')}').")
+                p["status"] = "ignorada" if ignorar else "aguardando"
+                p["resposta_texto"] = None if ignorar else texto
+                p["nota"] = nota.strip() or None
+                if ignorar:
+                    p["resposta"] = "ignorada"
+                    p["respondido_em"] = now.isoformat(timespec="minutes")
+                    p["respondido_via"] = "chat"
+                else:
+                    p.setdefault("whatsapp", {})["envio"] = {"ok": False, "erro": f"API indisponível ({err})",
+                                                             "solicitado_em": now.isoformat(timespec="minutes")}
+                self._save(data)
             if ignorar:
                 return f"Anotado: não respondo a {contato} (API do inbox indisponível, registrado só no vault)."
             return (f"Guardei a resposta para {contato}, mas NÃO consegui enviar: {err}. "

@@ -1,6 +1,7 @@
 [Unit]
 Description=Timer — Alfred Inbox Assistant (07:30 e 18:30)
-Requires=alfred-inbox.service
+# Sem Requires=alfred-inbox.service: o timer já ativa a .service de mesmo nome; com Requires= cada start do
+# timer (login, instalar.sh, alfred-switch.sh on) rodava a .service na hora, fora do horário.
 
 [Timer]
 OnCalendar=*-*-* 07:30:00

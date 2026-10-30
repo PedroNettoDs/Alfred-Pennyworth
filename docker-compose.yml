@@ -1,5 +1,8 @@
 name: alfred
 
+# Portas publicadas: DOCKER_BIND_IP no .env (127.0.0.1 = só este PC; vazio = 0.0.0.0, como antes).
+# Atenção: porta publicada pelo Docker passa por cima do ufw — o bind é o que de fato a esconde da rede local.
+
 services:
 
   # ── Open WebUI ──────────────────────────────────────────────
@@ -8,7 +11,7 @@ services:
     container_name: alfred-webui
     restart: unless-stopped
     ports:
-      - "${PORT_WEBUI}:8080"
+      - "${DOCKER_BIND_IP:-0.0.0.0}:${PORT_WEBUI}:8080"
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
@@ -34,7 +37,7 @@ services:
     container_name: alfred-searxng
     restart: unless-stopped
     ports:
-      - "${PORT_SEARXNG}:8080"
+      - "${DOCKER_BIND_IP:-0.0.0.0}:${PORT_SEARXNG}:8080"
     volumes:
       - ./config/searxng:/etc/searxng:rw
     environment:
@@ -48,7 +51,7 @@ services:
     container_name: alfred-chromadb
     restart: unless-stopped
     ports:
-      - "${PORT_CHROMADB}:8000"
+      - "${DOCKER_BIND_IP:-0.0.0.0}:${PORT_CHROMADB}:8000"
     volumes:
       - ./data/chromadb:/chroma/chroma
     networks:
@@ -60,7 +63,7 @@ services:
     container_name: alfred-n8n
     restart: unless-stopped
     ports:
-      - "${PORT_N8N}:5678"
+      - "${DOCKER_BIND_IP:-0.0.0.0}:${PORT_N8N}:5678"
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
@@ -133,3 +136,8 @@ services:
 networks:
   alfred-net:
     driver: bridge
+    # Nome fixo da interface no host: o firewall libera as APIs do host (7070-7072) e o Ollama (11434)
+    # só para quem entra por br-alfred (os containers), nunca para a rede local. Máquina com a rede
+    # antiga (sem este nome): `docker compose down` e `up -d` recriam a rede.
+    driver_opts:
+      com.docker.network.bridge.name: br-alfred

@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Não encontrada{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Pendência não encontrada", none, voltar=("/painel/pendencias", "Pendências")) }}
+{{ m.vazio("Não encontrei essa pendência, senhor. Ela pode ter sido removida.", "pendencias") }}
+{% endblock %}

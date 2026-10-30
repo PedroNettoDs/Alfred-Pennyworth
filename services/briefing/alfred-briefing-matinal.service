@@ -1,17 +1,16 @@
 [Unit]
 Description=Alfred Briefing Matinal (matinal_tech — RSS de tecnologia)
 After=network-online.target
-# Disparado por alfred-briefing-matinal.timer. Unit de USUÁRIO (como as do inbox): ~/.config/systemd/user/
+# Disparado por alfred-briefing-matinal.timer. Unit de USUÁRIO (como as do inbox), gerada por services/scripts/instalar.sh
 
 [Service]
 Environment=ALFRED_AUTOMACAO=1
 Type=oneshot
-WorkingDirectory=%h/dev/Alfred-Pennyworth/services/briefing
-ExecStart=%h/dev/Alfred-Pennyworth/services/briefing/run.sh matinal_tech
+WorkingDirectory=@ALFRED_DIR@/services/briefing
+ExecStart="@ALFRED_DIR@/services/briefing/run.sh" matinal_tech
 StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=1800
 
-# INSTALAÇÃO (sem sudo):
-#   cp alfred-briefing-matinal.service alfred-briefing-matinal.timer ~/.config/systemd/user/
-#   systemctl --user daemon-reload && systemctl --user enable --now alfred-briefing-matinal.timer
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).

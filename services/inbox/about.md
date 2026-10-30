@@ -4,6 +4,8 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 
 **Poder 3 — WhatsApp:** mensagens e áudios recebidos pela Evolution API passam pelo mesmo tratamento (transcrição local com gemma4 → classificação → pendência com texto + áudio em que Alfred pergunta **"o que você quer responder?"**); a resposta de Pedro — por WhatsApp, terminal, chat ou API — é enviada de volta ao contato. Ver [WhatsApp (Poder 3)](#whatsapp-poder-3--evolution-api).
 
+**Painel do Alfred:** interface web local servida pela própria API (`http://127.0.0.1:7072/painel`, só desta máquina, login com o `SHELL_EXECUTOR_TOKEN`) para ver as pendências, revisar a resposta que o Alfred propõe e autorizar, editar ou recusar — além de agenda, lotes de limpeza e estado do sistema. Ver [Painel do Alfred](#painel-do-alfred).
+
 ## Como rodar
 
 ```bash
@@ -20,7 +22,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh responder-texto <id> "Carlos, mando até quinta."   # pendência de WhatsApp → envia ao contato
 ./run.sh whatsapp status | qrcode | webhook URL | simular payload.json | notificar <id>
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
-./run.sh serve           # API HTTP (FastAPI :7072) para o N8N e para o webhook da Evolution
+./run.sh serve           # API HTTP (FastAPI :7072) para o N8N e para o webhook da Evolution + Painel em /painel
 ```
 
 Flags do ciclo: `--inbox NOME`, `--desde HORAS`, `--reprocessar` (ignora o `inbox_seen.json`), `--max N`, `--sem-notificar`, `--json`.
@@ -63,21 +65,80 @@ VAULT_NOTICIAS/  (= VAULT_ALFRED/Noticias, cofre Obsidian próprio; vazio no .en
 VAULT_ALFRED/
   jornal/      (antigo — lido só como fallback)
   pendencias/  pendencias.yml                        ← fila (status: aguardando | vou | nao_vou | ignorada | expirada
-               20261019-<slug>.md + .mp3                       | respondida | respondida_manual — estes dois são do WhatsApp)
-                                                    ← texto explicativo + áudio da pergunta (e-mail e WhatsApp)
-  tasks.yml                                          ← "vou" cria tarefa (mesmo formato da tool alfred_tasks)
+                                                               | respondida | respondida_manual — estes dois são do WhatsApp;
+                                                       respondido_via = por onde foi resolvida — tabela abaixo)
+               20261019-<slug>.md + .mp3             ← texto explicativo + áudio da pergunta (e-mail e WhatsApp; o item
+                                                       registrado na espera do WhatsApp não tem: arquivos.md/mp3 = null)
+               limpeza.yml                           ← lotes de limpeza (LIMPEZA.md)
+               .pendencias.yml.lock · .limpeza.yml.lock   ← travas entre processos (vazias — ver abaixo)
+  tasks.yml · .tasks.yml.lock                        ← "vou" cria tarefa (mesmo formato da tool alfred_tasks)
+  agenda/      agenda.yml · .agenda.yml.lock         ← compromissos a caminho do calendário (ver Agenda)
 logs/inbox_seen.json                                 ← message-ids de e-mail processados (janela 14 dias)
 logs/whatsapp_seen.json · whatsapp_enviados.jsonl    ← ids de WhatsApp processados · envios simulados (dry-run)
 logs/whatsapp_fila.json                              ← mensagens esperando atraso_minutos (texto/transcrição, sem o áudio)
 VAULT_ALFRED/.alfred/alfred.db                       ← SQLite FTS5 (ver "Busca e histórico"): índice dos cofres, histórico do WhatsApp, cache
+logs/whatsapp_fila.json · .whatsapp_fila.json.lock   ← mensagens esperando atraso_minutos (texto/transcrição, sem o áudio)
 ```
+
+`respondido_via` (campo novo; pendências antigas não têm) diz **por onde** a pendência saiu de `aguardando`. O painel e
+o 409 "Esta pendência já foi resolvida por <caminho>." usam `core.caminho_resolucao()` para o texto:
+
+| `respondido_via` | Quem grava | Texto no painel |
+|---|---|---|
+| `API` | `POST /pendencias/{id}/responder` e `/responder-texto` (N8N, tool do chat respondendo WhatsApp com a API no ar) | API (N8N, chat ou extensão) |
+| `terminal` | `run.sh responder`, `responder-texto`, `perguntar` | terminal |
+| `notificação no PC` | botões da notificação (Vou / Não vou / Enviar / Não enviar); a `nota` "via notificação" continua sendo gravada | notificação no PC |
+| `WhatsApp` | resposta citando a mensagem do Alfred | resposta citada no WhatsApp |
+| `painel` | Painel do Alfred | Painel do Alfred |
+| `celular` | Pedro respondeu o contato direto no celular (`fromMe`) | resposta direta pelo celular |
+| `chat` | tool `alfred_pendencias` gravando direto no vault (e-mail; WhatsApp com a API fora do ar) | chat do Open WebUI |
+
+Sem o campo (pendências antigas ou gravadas sem origem): `respondida_manual` → resposta direta pelo celular; `expirada` → expiração automática
+(o evento já passou); `nota` "via X" → X; senão "outro caminho (terminal, notificação ou chat)".
+
+### Gravação concorrente (trava entre processos)
+
+`pendencias.yml`, `tasks.yml`, `agenda.yml`, `limpeza.yml` e a fila `logs/whatsapp_fila.json` são gravados por vários
+**processos**: a API (threads do webhook, thread da fila, painel, `/ciclo`), os aguardadores destacados das notificações,
+o CLI, o ciclo do e-mail e o vigia (pelos timers) e, no container, as tools do Open WebUI (pelo bind mount do vault). A trava
+antiga (`_LOCK` em `whatsapp.py`, `_lock` em `agenda.py`) só valia entre threads de um processo. O risco era real: numa
+reprodução com o código antigo (4 processos criando 5 pendências cada, LLM simulado), ficaram 5 de 20 pendências no yml
+e 6 de 20 tarefas, com `task_id` repetido — quem gravava por último apagava o que o outro gravou no meio (a criação de
+pendência lia o yml, gastava LLM + TTS e gravava a lista velha + 1).
+
+- `core.trava_arquivo(caminho, timeout=30)`: `fcntl.flock` exclusivo em `.<arquivo>.lock` ao lado do arquivo, reentrante
+  na mesma thread e exclusivo também entre threads. Passou do timeout → `TimeoutError` com mensagem legível. O `.lock`
+  é criado com modo 0666 para o host e o root do container do Open WebUI abrirem o mesmo arquivo (mesmo inode pelo bind
+  mount → o flock vale dos dois lados). São arquivos vazios e ocultos: não apague com processos rodando.
+- Só **gravações** pegam a trava ("ler → mudar → gravar", trecho curto: nada de LLM, TTS ou rede dentro). Leituras não
+  pegam — por isso toda gravação é **atômica** (`core.gravar_atomico`: `.tmp` + fsync + `os.replace`): quem lê vê o
+  arquivo velho inteiro ou o novo inteiro, nunca pela metade.
+- Ordem das travas (evita deadlock): `whatsapp._LOCK` → pendências → tasks; agenda → tasks; limpeza sozinha; fila
+  sozinha. Nunca pegar pendências segurando agenda ou tasks.
+- Criar pendência: o id é reservado dentro da trava, criando o `.md` vazio (`core._reservar_id`); LLM/TTS rodam fora e no
+  fim a entrada é relida, anexada e gravada dentro da trava.
+- `whatsapp.responder_texto` é "reservar → enviar → concluir": a 1ª transação tira a pendência de `aguardando`, o envio
+  pela Evolution acontece fora da trava e a 2ª grava o resultado (falhou → volta a `aguardando` com o texto guardado).
+  Dois cliques ou dois caminhos ao mesmo tempo, mesmo em processos diferentes, enviam **uma** vez; o segundo recebe
+  `core.PendenciaJaResolvida` (subclasse de `ValueError`, mesma mensagem de antes: "Pendência X já está com status 'Y'").
+  `core.responder(..., so_se_aguardando=True)` faz o mesmo para vou / não vou (usado pela notificação e pelo painel).
+- **Tools do Open WebUI:** `tools/alfred_pendencias.py` (v1.2.0) e `tools/alfred_tasks.py` (v1.1.0) usam a mesma trava
+  (flock nos mesmos `.lock`) e gravação atômica; `alfred_pendencias` grava `respondido_via: chat` e não sobrescreve uma
+  pendência resolvida por outro caminho. **Reimporte as duas** (Workspace → Tools → abrir a tool → colar o conteúdo novo
+  → salvar): enquanto a versão antiga estiver instalada, o que o chat grava continua sem trava.
+- Fora da trava: `whatsapp_seen.json` e `inbox_seen.json` (no pior caso, reprocessamento ou duplicata rara). Rodar
+  `whatsapp processar-fila` com a API no ar ainda pode criar a mesma pendência duas vezes se os dois pegarem o mesmo item
+  vencido ao mesmo tempo — a fila em si não perde mais nada. Um `pendencias.yml` realmente corrompido continua sendo lido
+  como lista vazia (comportamento antigo).
+- Testes com processos reais: `venv/bin/python -m unittest tests.test_trava -v` (~10 s, offline).
 
 ## Como responder "vou / não vou"
 
-Qualquer caminho atualiza o mesmo `pendencias.yml`:
+Qualquer caminho atualiza o mesmo `pendencias.yml` (e grava por onde veio em `respondido_via`):
 
 | Caminho | Como |
 |---------|------|
+| Painel do Alfred | `http://127.0.0.1:7072/painel` → detalhe da pendência → **Vou** / **Não vou** (nota opcional) — ver [Painel](#painel-do-alfred) |
 | Pergunta gráfica (fica ociosa até o clique) | processo destacado por pendência: notificação com botões **Vou / Não vou / Ouvir** (`notificar_dbus.py`, D-Bus direto) → se não houver suporte a ações, `kdialog --yesnocancel` → `zenity`. "Ouvir" toca o áudio e pergunta de novo |
 | Terminal interativo | `./run.sh perguntar [--ouvir]` — Alfred apresenta uma a uma e espera `vou` / `nao` / `ouvir` / `ver` / `pular` |
 | Terminal | `./run.sh responder <id> vou` |
@@ -86,7 +147,7 @@ Qualquer caminho atualiza o mesmo `pendencias.yml`:
 
 ## API HTTP (para o N8N)
 
-`./run.sh serve` sobe o FastAPI em `PORT_INBOX` (7072), autenticado com `Authorization: Bearer <SHELL_EXECUTOR_TOKEN>`:
+`./run.sh serve` sobe o FastAPI em `PORT_INBOX` (7072), autenticado com `Authorization: Bearer <SHELL_EXECUTOR_TOKEN>` (o [Painel](#painel-do-alfred), em `/painel/*`, usa sessão por cookie e só aceita 127.0.0.1):
 
 | Método | Rota | Função |
 |--------|------|--------|
@@ -96,7 +157,7 @@ Qualquer caminho atualiza o mesmo `pendencias.yml`:
 | POST | `/jornal` | só a edição |
 | GET | `/jornal/ultimo` · `/jornal/ultimo/audio` | última edição (texto / mp3) |
 | GET | `/pendencias?status=aguardando` | fila |
-| GET | `/pendencias/{id}` · `/pendencias/{id}/audio` | detalhe (texto) / mp3 da pergunta |
+| GET | `/pendencias/{id}` · `/pendencias/{id}/audio` | detalhe (texto) / mp3 da pergunta. O `/audio` aceita Bearer **ou** a sessão do painel vinda de 127.0.0.1 (o `<audio>` do navegador não manda Bearer) |
 | POST | `/pendencias/{id}/responder` | `{"resposta": "vou" \| "nao_vou" \| "ignorar", "nota": ""}` |
 | POST | `/pendencias/{id}/links` | guarda URLs externas de resposta (resumeUrl do N8N) |
 | POST | `/whatsapp/webhook` | webhook da Evolution (`messages.upsert`): texto/áudio → pendência `whatsapp`; resposta citada de Pedro → envia ao contato. Query `enviar=0` (nunca chama a Evolution), `notificar=1` (o Python avisa Pedro). Auth: header `apikey`, Bearer (`EVOLUTION_API_KEY` ou `SHELL_EXECUTOR_TOKEN`) ou campo `apikey` do payload |
@@ -104,8 +165,157 @@ Qualquer caminho atualiza o mesmo `pendencias.yml`:
 | POST | `/pendencias/{id}/responder-texto` | `{"texto": "...", "enviar": true, "nota": ""}` → grava `resposta_texto` e envia pela Evolution (`"ignorar"` fecha sem enviar). `502` se o envio falhar (a resposta fica guardada; repita) |
 | POST | `/pendencias/{id}/notificar-whatsapp` | manda a Pedro o resumo (com `ref: <id>`) + áudio da pergunta |
 | GET | `/whatsapp/status` | configuração, estado da instância, pendências de WhatsApp aguardando, `fila_espera` (mensagens esperando `atraso_minutos`) |
+| GET/POST | `/painel` · `/painel/*` | [Painel do Alfred](#painel-do-alfred): telas HTML e ações do painel — sem Bearer, com sessão por cookie + CSRF, só cliente e Host 127.0.0.1 / localhost / ::1 (não aparece no `/docs`) |
 
 Do container do N8N o host é `http://172.17.0.1:7072`.
+
+## Painel do Alfred
+
+Interface web local para acompanhar e decidir: o que chegou, o que o Alfred pretende fazer (ex.: a resposta que vai
+enviar a um contato) e o botão para autorizar, editar ou recusar. É servida pela própria API (`painel.py`, incluído
+por `main.py`). Usa templates Jinja2 em `painel_web/templates/` e um CSS e um JS em `painel_web/static/` (contrato
+dos componentes em `painel_web/COMPONENTES.md`). Não tem build, CDN nem fonte externa: funciona offline. Toda ação
+chama as **mesmas funções** do CLI, da notificação e da API — o painel não grava YAML nem tem lógica própria de envio,
+resposta, agenda ou limpeza.
+
+### Como abrir
+
+1. Dependência nova: `jinja2` (em `requirements.txt`). O `run.sh` só instala o `requirements.txt` ao **criar** o venv;
+   num venv que já existia, rode o passo de atualização antes de reiniciar a API:
+   ```bash
+   cd services/inbox && venv/bin/pip install -r requirements.txt
+   systemctl --user restart alfred-inbox-api      # ou ./run.sh serve
+   ```
+   Se esquecer, a API sobe assim mesmo (webhook do WhatsApp, N8N, extensões e tools continuam), só **sem** as rotas
+   `/painel` (404), e o log avisa: `[painel] Painel desativado: No module named 'jinja2'. Rode venv/bin/pip install -r
+   requirements.txt e reinicie a API.` O `GET /pendencias/{id}/audio` continua funcionando com Bearer.
+2. Abra `http://127.0.0.1:7072/painel` e informe o `SHELL_EXECUTOR_TOKEN` do `.env`. Sem token no `.env`, o login
+   avisa "SHELL_EXECUTOR_TOKEN não definido no .env"; token errado → "Token inválido" (depois de 0,5 s; o que foi
+   digitado nunca é ecoado).
+3. Modo desligado (modo jogo): a API não está no ar, então o painel simplesmente não abre (o painel não alterou o `alfred-switch.sh`).
+
+### Sessão e segurança
+
+- **Sessão:** cookie `alfred_painel` HttpOnly, SameSite=Strict, `Path=/`, sem `Secure` (é http local). Validade em
+  `PAINEL_SESSAO_DIAS` no `.env` (padrão 7; aceita fração, de 1 hora (`0.0417`) a 3650 dias; valor ilegível, `inf`/`nan`
+  ou fora dessa faixa volta a 7). O servidor não guarda sessão: o cookie é assinado com
+  HMAC-SHA256 usando o próprio token. Por isso a sessão sobrevive a reinícios da API, e trocar o `SHELL_EXECUTOR_TOKEN`
+  invalida todas. **Sair** apaga o cookie e revoga a sessão; a lista de revogadas fica em memória até a API reiniciar.
+- **Só esta máquina:** toda rota `/painel/*` (login e estáticos inclusive) exige cliente 127.0.0.1 ou ::1 **e** header
+  Host 127.0.0.1, localhost ou [::1] (anti DNS-rebinding). O resto recebe 403 "Painel disponível apenas em 127.0.0.1." —
+  inclusive containers Docker (172.17.x.x) e a rede local, embora a API escute em 0.0.0.0.
+- **CSRF:** todo POST exige a sessão, o header `X-CSRF-Token` (derivado da sessão e posto num `<meta>` da página) e
+  Origin (ou, sem ele, Referer) da própria origem. O login checa só a origem.
+- O token nunca vai para URL, HTML, JS ou log. As respostas saem com CSP `default-src 'self'` (nenhum JS ou estilo
+  inline), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` e
+  `Cache-Control: no-store`.
+- Os endpoints com Bearer continuam iguais para N8N, extensões e tools. No `GET /pendencias/{id}/audio` (que também
+  aceita a sessão do painel, porque o `<audio>` do navegador não manda Bearer) o Bearer é conferido primeiro: um cookie
+  `alfred_painel` estragado ou com caractere não ASCII (gravado, por exemplo, por outra página de 127.0.0.1) nunca o
+  derruba. Cookie ou `X-CSRF-Token` assim valem como sessão inválida (login) ou CSRF recusado (403), nunca 500.
+
+### Telas
+
+| Tela | O que mostra |
+|---|---|
+| **Início** (`/painel`) | pendências aguardando (total, WhatsApp, e-mail) e as 5 mais recentes; Alfred ligado/desligado (pelo arquivo `logs/alfred_desligado`, com o "desde" da 1ª linha); WhatsApp Conectado / Desconectado / Conectando / Modo simulado / Indisponível (estado da instância com timeout de 2 s e cache de 15 s); lotes de limpeza aguardando; até 4 próximos itens da agenda. Cada bloco leva à tela correspondente |
+| **Pendências** (`/painel/pendencias`) | abas **Aguardando** (padrão; urgência alta primeiro, depois as mais recentes) e **Resolvidas** (as 50 resolvidas mais recentes, com o status final e a data); filtro por tipo; busca por contato ou texto, sem diferenciar acento nem caixa. Cada linha: tipo, contato/remetente, resumo em uma linha, urgência (ou status) e "há X". Itens `respondida_manual` mostram **lado a lado** "O Alfred proporia" × "Você respondeu" |
+| **Detalhe WhatsApp** (`/painel/pendencias/{id}`) | contato e número, mensagem original (ou "Transcrição do áudio"), resumo do Alfred, categoria, confiança, urgência e motivo; player do áudio de resumo; histórico; caixa de texto já preenchida com `whatsapp.rascunho` (ou com o texto de um envio que falhou) e os botões **Autorizar envio**, **Não enviar** e **Agendar** |
+| **Detalhe e-mail** | texto explicativo do `.md` (sem frontmatter, linha de status, "Dados extraídos" e "Como responder"; markdown mínimo e seguro, links só http/https), link do evento, cartão de dados (tipo, quando, local, organizador, custo, remetente, assunto), áudio, histórico e **Vou** / **Não vou** com nota opcional |
+| **Detalhe já resolvido** | "Esta pendência já foi resolvida por <caminho>.", o resultado (status, data, resposta, envio, nota, tarefa) e nenhuma ação |
+| **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
+| **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data) recolhível; **Aprovar** e **Recusar** (nota opcional) só nos lotes aguardando |
+| **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7070}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7071}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
+
+O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
+enviado pelo WhatsApp, agenda, resolvida e por qual caminho (`respondido_via`), envio ok/simulado/falhou, áudio apagado.
+
+**Áudio:** o player usa a rota existente `GET /pendencias/{id}/audio`. Se a pendência tinha `.mp3` e o arquivo sumiu,
+ou tem `audio_removido_em` (a regra de 2 dias do vigia), aparece "Áudio expirado"; sem áudio nenhum, "Sem áudio".
+
+Datas sempre em America/Sao_Paulo, `DD/MM/AAAA HH:MM`, e relativas nas listas ("há 12 min").
+
+### Ações — o que cada botão chama
+
+| Botão | Função chamada | Resultado |
+|---|---|---|
+| **Autorizar envio** (WhatsApp) | confirmação em `<dialog>` com destinatário, texto final e selo "Modo simulado" quando for o caso → `whatsapp.responder_texto(id, texto, origem="via painel")` | sucesso só depois do retorno real: "Enviado para <contato>." ou, sem `EVOLUTION_URL` / com `WHATSAPP_DRY_RUN=true`, "Simulado: nada saiu da máquina." Falha de envio → HTTP 502, o texto fica no campo e guardado na pendência (`resposta_texto`), que continua aguardando; aparece **Tentar de novo** |
+| **Não enviar** | `whatsapp.responder_texto(id, "ignorar", origem="via painel")` | `ignorada`, nada é enviado |
+| **Agendar** | `whatsapp.interpretar_quando` + `whatsapp.agendar_pendencia` (mesmo formato do botão Agenda da notificação; o campo vem com `sugestao_quando`) | tarefa em `tasks.yml` + lembrete + link do Google Agenda já preenchido; a pendência continua aguardando |
+| **Vou** / **Não vou** (e-mail) | `core.responder(id, vou\|nao_vou, nota, origem="via painel", so_se_aguardando=True)` | o mesmo efeito de `./run.sh responder <id> vou`: tarefa em `tasks.yml`, `.md` atualizado, agenda do evento |
+| **Desfazer** (agenda) | `agenda.desfazer(id)` — só para `pendente`, `no_calendario`, `em_execucao` ou `erro` | `pendente` → `cancelado`; no calendário → `desfazer` (a extensão remove na próxima passada) |
+| **Aprovar** (limpeza) | confirmação "Os N e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente." → `limpeza.aprovar(id, nota)` (com a revalidação de sempre) | `aprovado`; a extensão do Thunderbird move na próxima passada |
+| **Recusar** (limpeza) | `limpeza.recusar(id, nota)` | `recusado`, nenhum e-mail é movido |
+
+- **Já resolvida por outro caminho** (celular, notificação, CLI, chat): o servidor confere "ainda aguardando" antes de
+  agir e de novo dentro da trava entre processos; não executa e responde 409 "Esta pendência já foi resolvida por
+  <caminho>." (lotes e itens de agenda: "Este lote já foi resolvido (<status>)." / "Este item já foi resolvido (<status>).").
+- **Duplo clique:** o JS desabilita os botões durante a ação e o servidor serializa (`responder_texto` reserva a
+  pendência antes de enviar) — o segundo pedido recebe 409 e só um envio acontece, também entre processos.
+- Respondida pelo painel → `respondido_via: painel`. A notificação no PC daquela pendência se comporta como quando a
+  resposta vem por outro caminho: fecha no próximo clique sem enviar nada.
+- Enquanto a API processa uma mensagem de WhatsApp (classificação, transcrição, rascunho), as ações de WhatsApp do
+  painel esperam a vez: o `_LOCK` da API serializa o fluxo do WhatsApp, como já acontecia com a notificação.
+
+### Atualização automática
+
+A cada 15 s (pausado com a aba oculta; atualiza ao voltar) o painel refaz por fragmentos HTML as listas, os blocos do
+Início, a tela Sistema e os contadores da barra lateral (`/painel/parcial/*`, `/painel/api/contadores`). Não redesenha
+nada enquanto Pedro digita, envia, tem um erro na tela ou está com um diálogo aberto. No detalhe aberto consulta
+`/painel/api/pendencias/{id}/estado`: se a pendência foi resolvida por outro caminho, mostra o aviso âmbar e desabilita
+as ações sem apagar o texto. Uma pendência que **já abre** resolvida mostra só um aviso neutro ("Esta pendência já foi
+resolvida por …") e o cartão Resultado. Cancelar uma confirmação (ex.: **Aprovar** da Limpeza) não pausa a lista: só a
+digitação de verdade pausa. O "N aguardando" do cabeçalho de Pendências acompanha os contadores.
+
+**Sessão expirada no meio do uso** (7 dias, **Sair** em outra aba ou troca do token): sem nada sendo editado, a página
+vai para o login e volta para onde estava. Com texto sendo editado (ou foco num campo de ação), a página **fica** e
+mostra "Sua sessão expirou. Copie o texto e entre de novo." com o link **Entrar de novo** (nova aba); uma ação feita
+nessa hora falha sem apagar o texto. Depois de entrar na outra aba, o aviso some na rodada seguinte e **Tentar de
+novo** funciona sem recarregar (o polling de contadores traz o `X-CSRF-Token` da sessão nova).
+
+**Filtro Tipo** (Pendências): escolher com o mouse aplica na hora; pelo teclado as setas só mudam o valor (a página não
+recarrega a cada seta) e Enter ou **Buscar** aplicam.
+
+### Rotas do painel
+
+| Rota | O quê |
+|---|---|
+| GET/POST `/painel/login`, POST `/painel/sair` | login / logout |
+| GET `/painel`, `/painel/pendencias?aba=aguardando\|resolvidas&tipo=whatsapp\|email&q=`, `/painel/pendencias/{id}`, `/painel/agenda`, `/painel/limpeza`, `/painel/sistema` | telas (sem sessão → 303 para o login) |
+| GET `/painel/parcial/{inicio\|pendencias\|agenda\|limpeza\|sistema}`, `/painel/api/contadores`, `/painel/api/pendencias/{id}/estado` | polling (sem sessão → 401 JSON) |
+| POST `/painel/api/pendencias/{id}/responder-texto` `{texto}` · `/ignorar` · `/agendar` `{quando}` · `/responder` `{resposta, nota}` | ações das pendências |
+| POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` `{nota}` | agenda e limpeza |
+| GET `/painel/static/painel.css`, `/painel/static/painel.js` | estáticos (lista fechada) |
+
+Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 403 CSRF/origem/rede; 404; 409 já resolvida;
+502 falha de envio (`pode_tentar_de_novo: true`).
+
+### Fora do escopo e limitações
+
+- Não edita configuração (`perfis.yml`, `.env`), não tem botão de modo jogo, chat com o Alfred, novos tipos de ação nem
+  workflows N8N. Sem acesso externo ou pelo celular, por decisão.
+- Desenhado para tela de PC (≥ 1280 px); abaixo de 900 px a barra lateral vira menu superior.
+- Não há limite de tentativas de login (só o atraso de 0,5 s); o acesso restrito a 127.0.0.1 reduz o risco.
+- Tela Sistema: pode levar 2–4 s quando algo não responde; sem `docker` no PATH ou sem permissão no socket, "Containers"
+  aparece indisponível; timers só aparecem se instalados como units de usuário.
+- O cookie é SameSite=Strict: um link para o painel aberto a partir de outro site chega sem a sessão (navegue de novo).
+- Verificado no Chromium; Firefox não foi testado. Sem Ollama, Docker e Evolution na máquina de desenvolvimento, o envio
+  real foi testado só com a Evolution mockada.
+
+### Testes do painel
+
+```bash
+cd services/inbox
+venv/bin/python -m unittest tests.test_painel -v     # 39 testes offline, ~3 s
+```
+
+Vault temporário, LLM/TTS mockados e envios simulados. Cobrem login (token errado/certo, cookie adulterado, expirado,
+assinado com outro token ou revogado, `PAINEL_SESSAO_DIAS`), cookie e `X-CSRF-Token` não ASCII,
+`PAINEL_SESSAO_DIAS` inválido ou fora da faixa, recusa de outros IPs (10.x, 172.17.x, 192.168.x) e de Host
+estranho, CSRF e origem, CSRF renovado depois de entrar de novo, API subindo sem o jinja2 (sem `/painel`), envio com texto editado (simulado e real mockado), pendência resolvida pelo celular com o
+detalhe aberto (409), duplo clique com envio lento (um envio só), falha de envio com nova tentativa, vou / não vou igual
+ao CLI, limpeza, desfazer da agenda, polling, Evolution fora do ar, a aba Resolvidas lado a lado, áudio e cabeçalhos — e
+conferem que o token não aparece em nenhuma resposta.
 
 ## N8N — workflows em `n8n/`
 
@@ -118,20 +328,53 @@ Importe primeiro o sub-workflow, copie o ID dele para o nó "Aguardar resposta" 
 ## Agendamento (systemd de usuário — sem sudo, com acesso à sessão gráfica)
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp alfred-inbox.service alfred-inbox.timer alfred-inbox-api.service \
-   alfred-semanal.service alfred-semanal.timer alfred-vigia.service alfred-vigia.timer ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now alfred-inbox.timer      # ciclo de e-mail 07:30 e 18:30
-systemctl --user enable --now alfred-semanal.timer    # podcast semanal, domingo 19:00
-systemctl --user enable --now alfred-vigia.timer      # vigia: 2 min após o login e a cada 10 min
-systemctl --user enable --now alfred-inbox-api        # API (WhatsApp, extensões do Thunderbird, N8N)
+services/scripts/instalar.sh                          # gera as units (modelos com @ALFRED_DIR@) e habilita API + timers
+systemctl --user list-timers 'alfred-*'               # ciclo 07:30/18:30 · podcast 19:00 · vigia a cada 10 min · briefings
+systemctl --user status alfred-inbox-api              # API (WhatsApp, extensões do Thunderbird, N8N, Painel)
 journalctl --user -fu alfred-vigia
 ```
 
-Tudo sobe sozinho com o computador: Docker (`enabled`) traz a Evolution API (`restart: unless-stopped`), o
-linger do usuário mantém as units de usuário, e `~/.config/autostart/alfred-thunderbird.desktop` abre o
-Thunderbird no login (sem ele aberto não há e-mail novo nem gravação na agenda).
+Os arquivos `.service` deste diretório são **modelos**: o caminho do repositório (`@ALFRED_DIR@`) é preenchido pelo
+`instalar.sh`, que grava as units em `~/.config/systemd/user/` — não copie os arquivos direto (ver
+[README → Setup](../../README.md#4-setup)). O que o `instalar.sh` faz com elas (e com o resto) desde 26/10/2026:
+
+- unit ou timer que já estava instalado e **desabilitado** (ex.: briefing vespertino na máquina original) continua
+  desabilitado, com aviso;
+- unit já instalada que aponta para **outro** repositório que ainda existe não é sobrescrita (aviso);
+  `instalar.sh --forcar-units` regrava com o repositório atual;
+- em modo jogo (`logs/alfred_desligado`) habilita as units sem iniciá-las e **não sobe a Evolution** nem o banco dela;
+- venv quebrado ou criado em outra pasta (repositório movido) é recriado;
+- não cria vault vazio quando o `.env` aponta para um caminho fora do repositório que não existe (repositório
+  movido?) — marca como faltando para você ajustar o `.env`;
+- sai com código 1 se algo ficou faltando (lista em "Ainda falta" no resumo).
+
+Mudanças nas próprias units e no liga/desliga:
+
+- `alfred-inbox.timer` e `alfred-semanal.timer` não têm mais `Requires=` da `.service` — com ele, cada start do timer
+  (login, `instalar.sh`, `alfred-switch.sh on`) rodava o ciclo do e-mail e o podcast na hora, fora do horário;
+- `alfred-vigia.timer` não tem mais `OnBootSec=2min`, que vencia antes do login e fazia o vigia rodar junto com a API
+  ainda subindo (e reiniciá-la); fica `OnStartupSec=2min` + `OnUnitActiveSec=10min`;
+- o `alfred-switch.sh` também para o briefing vespertino e, no `on`, só religa os timers habilitados;
+- o `run.sh` do shell executor e o do researcher leem o `.env` literalmente, como o deste diretório (antes faziam
+  `source`, e um valor com `$` ou `(` derrubava o serviço).
+
+Docker (`enabled`) traz a Evolution API de volta com o computador (`restart: unless-stopped`) e as units de usuário
+sobem no login. O Thunderbird precisa estar aberto — sem ele não há e-mail novo nem gravação na agenda. Na máquina
+original, duas coisas foram configuradas **à mão** (o `instalar.sh` não cria nenhuma delas):
+
+```bash
+loginctl enable-linger "$USER"     # opcional: units de usuário sobem já no boot, sem esperar o login (pode pedir senha)
+
+mkdir -p ~/.config/autostart       # abre o Thunderbird no login
+cat > ~/.config/autostart/alfred-thunderbird.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Thunderbird (Alfred)
+Exec=thunderbird
+EOF
+```
+
+Thunderbird por flatpak: `Exec=flatpak run org.mozilla.Thunderbird`.
 
 As notificações que esperam clique nascem como **units transitórias** (`systemd-run --user`, nomes
 `alfred-aguardar-*` / `alfred-vigia-qr-*`): um filho comum de uma unit oneshot morria quando o ciclo
@@ -167,7 +410,7 @@ de `VAULT_ALFRED/pendencias/` são tocados — áudios de e-mail, jornal e podca
 ./run.sh whatsapp limpar-audios --dias 2      # apaga (o vigia faz isso a cada 10 min)
 ```
 
-Se preferir o padrão dos outros serviços (unit de sistema com `User=netto`), lembre que `notify-send` e áudio precisam de `DBUS_SESSION_BUS_ADDRESS` — a unit de usuário já tem isso.
+Se preferir unit de sistema (como o executor e o researcher na máquina original, com `User=netto`), lembre que `notify-send` e áudio precisam de `DBUS_SESSION_BUS_ADDRESS` — a unit de usuário já tem isso.
 
 ## Configuração (`services/_shared/perfis.yml` → `inbox:`)
 
@@ -181,7 +424,7 @@ Se preferir o padrão dos outros serviços (unit de sistema com `User=netto`), l
 | `jornal.*` | formato, voz, templates, `max_noticias`, `max_por_email`, `min_noticias`, `pesos_fontes` |
 | `pendencias.*` | voz, templates, `lembrar_a_cada_horas`, `expirar_apos_evento` |
 
-Variáveis do `.env`: `THUNDERBIRD_PROFILE` (vazio = auto), `INBOX_DEFAULT`, `INBOX_AUTOPLAY`, `INBOX_AUDIO_PLAYER`, `PORT_INBOX`, `MODEL_CLASSIFY` (modelo leve só para classificar), `OLLAMA_THINK=false` (obrigatório para gemma4/qwen3 — senão o modelo gasta os tokens "pensando" e devolve vazio), `OLLAMA_NUM_CTX`.
+Variáveis do `.env`: `THUNDERBIRD_PROFILE` (vazio = auto), `INBOX_DEFAULT`, `INBOX_AUTOPLAY`, `INBOX_AUDIO_PLAYER`, `PORT_INBOX`, `PAINEL_SESSAO_DIAS` (validade da sessão do [Painel](#painel-do-alfred), padrão 7), `MODEL_CLASSIFY` (modelo leve só para classificar), `OLLAMA_THINK=false` (obrigatório para gemma4/qwen3 — senão o modelo gasta os tokens "pensando" e devolve vazio), `OLLAMA_NUM_CTX`.
 
 ## WhatsApp (Poder 3) — Evolution API
 
@@ -203,32 +446,43 @@ POST /whatsapp/webhook  (direto, ou via Webhook do N8N)          services/inbox/
     ├─ relevante? (profissional; pessoal se pessoal_vira_pendencia; só se requer_resposta)
     │     não → acao: ignorada (motivo)         mesma pessoa com pendência aberta → acao: agrupada
     ├─ atraso_minutos > 0 → enfileirar_mensagem() → logs/whatsapp_fila.json → acao: agendada + prazo
-    │     Pedro escreve na conversa (fromMe) antes do prazo → sai da fila, nada é gerado (acao: fila_cancelada)
+    │     Pedro escreve na conversa (fromMe) antes do prazo → sai da fila; nada é notificado nem enviado, só fica
+    │       registrado um item respondida_manual (mensagem do contato + rascunho que o Alfred proporia + resposta
+    │       de Pedro) — registrar_resposta_direta(), acao: fila_cancelada
     │     prazo vencido → processar_fila() (thread da API, a cada 60 s) → segue abaixo
     └─ criar_pendencia_whatsapp()  → pergunta_whatsapp.md → <id>.md
                                      audio_pergunta_whatsapp.md → edge-tts → <id>.mp3
                                      pendencias.yml: tipo=whatsapp, status=aguardando, resposta_texto=null
                                    → devolve notificacao {numero: Pedro, texto (termina com "ref: <id>"), audio_url}
 
-Pedro responde CITANDO a mensagem do Alfred (ou por terminal / chat / API)
+Pedro responde CITANDO a mensagem do Alfred (ou por terminal / chat / API / Painel)
     ▼
-responder_texto(id, texto)         → pendencias.yml: status=respondida, resposta_texto
+responder_texto(id, texto)         → pendencias.yml: status=respondida, resposta_texto, respondido_via
                                    → Evolution: POST /message/sendText/{instancia} (quoted = mensagem original)
                                    "ignorar" → status=ignorada, nada é enviado
                                    Pedro respondeu o contato direto no celular (fromMe) → status=respondida_manual
+                                     (o whatsapp.rascunho fica; a resposta real vai para resposta_texto)
 ```
 
-O webhook devolve `{"acao": pendencia_criada | agendada | agrupada | resposta_registrada | pendencia_ignorada | respondida_manual | fila_cancelada | duplicada | ignorada, "motivo", "classificacao", "transcricao", "pendencia", "notificacao"}` (+ `prazo` e `fila` quando `agendada`; `fila_cancelada` = ids que saíram da fila). Quem avisa Pedro é o orquestrador: o N8N (`n8n/alfred-whatsapp.json`) lê `notificacao` e manda texto + áudio pela Evolution; sem N8N, chame o webhook com `?notificar=1` (ou use `/whatsapp/webhook-async`, que já notifica) e o próprio Python envia.
+O webhook devolve `{"acao": pendencia_criada | agendada | agrupada | resposta_registrada | pendencia_ignorada | respondida_manual | fila_cancelada | duplicada | ignorada, "motivo", "classificacao", "transcricao", "pendencia", "notificacao"}` (+ `prazo` e `fila` quando `agendada`; `fila_cancelada` = ids que saíram da fila e `respondidas_na_espera` = ids dos itens `respondida_manual` registrados no lugar delas). Quem avisa Pedro é o orquestrador: o N8N (`n8n/alfred-whatsapp.json`) lê `notificacao` e manda texto + áudio pela Evolution; sem N8N, chame o webhook com `?notificar=1` (ou use `/whatsapp/webhook-async`, que já notifica) e o próprio Python envia.
 
 ### Espera antes de resumir (`atraso_minutos`)
 
 Com a instância no próprio número, toda conversa passa pelo Alfred — inclusive as que Pedro está respondendo em tempo real. Por isso a parte cara e barulhenta espera `atraso_minutos` (10 no `perfis.yml`) **sem resposta de Pedro naquela conversa**:
 
 - **Na hora** (o webhook continua rápido): normalizar → transcrever o áudio (só se puder virar pendência — grupo ignorado e `contatos_ignorar` não são transcritos) → classificar → decidir a relevância → dedup em `whatsapp_seen.json`. Mensagem relevante entra em `logs/whatsapp_fila.json` (mensagem normalizada sem o base64, transcrição, classificação, prazo e as opções `enviar`/`notificar` do webhook) e o webhook responde `acao: agendada` com o `prazo`.
-- **Pedro escreve na mesma conversa antes do prazo** (mensagem `fromMe` no mesmo `remote_jid` — direto pelo celular): o item sai da fila e nada é gerado (`acao: fila_cancelada`). Ecos das respostas que o próprio Alfred envia **não** cancelam: Pedro respondeu a pendência anterior e pode não ter visto a mensagem nova.
+- **Pedro escreve na mesma conversa antes do prazo** (mensagem `fromMe` no mesmo `remote_jid` — direto pelo celular): o item sai da fila e o Alfred **não** cria pendência aguardando, `.md`, `.mp3`, notificação no PC nem aviso pelo WhatsApp, e não envia nada. Em vez disso, `registrar_resposta_direta()` grava em `pendencias.yml` um item `status: respondida_manual` com:
+  - a mensagem do contato (`whatsapp.texto` e `whatsapp.mensagens`, combinadas se foram várias);
+  - o rascunho que o Alfred teria proposto (`whatsapp.rascunho` + `whatsapp.compromisso`), gerado na hora por `gerar_rascunho()` — a mesma lógica de `whatsapp_rascunho.md` usada na criação de pendência. LLM fora do ar ou com erro → o item é registrado assim mesmo, com `rascunho: null`;
+  - a resposta de Pedro em `resposta_texto` (áudio/mídia: "(<tipo> enviado direto pelo celular)");
+  - `respondido_via: celular`, `whatsapp.respondida_na_espera: true`, `arquivos: {md: null, mp3: null}`, `whatsapp.envio: {manual: true, message_id: <id do fromMe>}` e `criado_em` = quando a primeira mensagem entrou na fila.
+
+  O webhook continua respondendo `acao: fila_cancelada` (ou `respondida_manual`, se uma pendência aguardando do mesmo contato também foi fechada), agora com `respondidas_na_espera` e, no caso só-fila, `pendencia` = o item novo. Na aba **Resolvidas** do [Painel](#painel-do-alfred) esses itens aparecem com "O Alfred proporia" × "Você respondeu" lado a lado. Só gera registro o que estava na fila — grupos, `contatos_ignorar`, confiança e relevância já filtraram antes. Uma falha ao registrar nunca derruba o webhook (só log; a fila fica cancelada como antes), e o webhook da mensagem do contato repetido depois do registro vira `duplicada`. Ecos das respostas que o próprio Alfred envia **não** cancelam: Pedro respondeu a pendência anterior e pode não ter visto a mensagem nova. Isso vale também quando o envio sai de **outro processo** (botão Enviar da notificação no PC, `run.sh responder-texto`) e o eco chega à API antes de o `message_id` ir para `pendencias.yml`: o `fromMe` é reconhecido como eco pelo registro de ids enviados (`lib_whatsapp.enviado_pelo_alfred`) ou, se chegar antes até desse registro, por haver uma pendência do mesmo contato com envio em curso e o mesmo texto. A conversa "você" segue tratada pela nota para si.
+- **Custo do rascunho na hora:** uma chamada `ollama_generate_json` (`num_predict` 300, `timeout` 120 s) por item retirado da fila — mais barata que o caminho normal ao vencer o prazo (pergunta + rascunho + roteiro de áudio + TTS) e só quando Pedro responde antes do prazo. Roda dentro do processamento do webhook (sob o `_LOCK` da API, fora da trava do yml): no `/whatsapp/webhook` síncrono a resposta HTTP espera esse tempo; no `/whatsapp/webhook-async`, em segundo plano. Ainda não foi medido na máquina do Pedro; se pesar, dá para registrar sem rascunho.
+- **Pendência já criada** (o prazo venceu antes de Pedro responder, ou `atraso_minutos: 0`): o `fromMe` continua fechando a pendência como `respondida_manual` (`respondido_via: celular`); o `whatsapp.rascunho` que existia fica e a resposta real vai para `resposta_texto` — o painel mostra os dois lado a lado. Nada é enviado.
 - **Mensagens seguidas do contato** entram no mesmo item; o prazo continua contado da primeira. Ao vencer viram **uma** pendência: textos/transcrições juntos (o resumo e o rascunho cobrem tudo), maior urgência, `whatsapp.mensagens` com todos os ids e a resposta citando a última.
 - **Prazo vencido:** uma thread iniciada com a API (`main.py`, a cada 60 s; os vencidos enquanto a API estava fora saem na primeira volta) cria a pendência, o `.md`, o áudio, a notificação no PC e — se o webhook veio com `notificar=1`, como o `/whatsapp/webhook-async` — o aviso pelo WhatsApp. O item só sai da fila depois da pendência gravada (erro → tenta de novo, até 3 vezes).
-- Contato que **já tem pendência aguardando** dentro de `agrupar_minutos` não espera: a mensagem é agrupada na hora, como antes — a pendência aberta já prova que Pedro não respondeu.
+- Contato que **já tem pendência aguardando** dentro de `agrupar_minutos` não espera: a mensagem é agrupada na hora, como antes — a pendência aberta já prova que Pedro não respondeu. A decisão vem de uma leitura feita antes da transcrição e da classificação; `agrupar_mensagem` confere de novo dentro da trava (ainda aguardando e do mesmo contato). Se outro processo resolveu a pendência no meio (ex.: Pedro clicou Enviar na notificação do PC), a mensagem não é agrupada e segue o fluxo normal (fila ou pendência nova) — não se perde.
 - O `/whatsapp/webhook` síncrono não devolve `notificacao` para mensagens agendadas (quando o prazo vence ninguém está esperando a resposta HTTP): com o N8N no meio, chame-o com `?notificar=1` para o Python avisar Pedro, ou use `atraso_minutos: 0`.
 - Depurar: `./run.sh whatsapp fila` lista contato, prazo e textos; `./run.sh whatsapp processar-fila --todos --sem-enviar` cria tudo na hora sem chamar a Evolution (com a API no ar a thread dela faz o mesmo — rodar os dois juntos pode duplicar); `whatsapp simular payload.json --imediato` ignora a espera.
 - `atraso_minutos: 0` volta ao comportamento anterior (pendência e avisos na hora). Qualquer mudança (código ou `perfis.yml`) só vale depois de reiniciar a API: `systemctl --user restart alfred-inbox-api` (logs: `journalctl --user -fu alfred-inbox-api`); não suba `./run.sh serve` em paralelo — a porta 7072 é a mesma.
@@ -255,6 +509,7 @@ Com a instância no próprio número, toda conversa passa pelo Alfred — inclus
 | Caminho | Como |
 |---------|------|
 | WhatsApp | responda **citando** (deslize para responder) a mensagem do Alfred — o texto vira a resposta ao contato; `ignorar` fecha sem enviar; áudio citado também vale (é transcrito) |
+| Painel do Alfred | detalhe da pendência: caixa já preenchida com o rascunho → **Autorizar envio** (confirmação com destinatário e texto final) · **Não enviar** · **Agendar** — ver [Painel](#painel-do-alfred) |
 | Notificação no PC | **Enviar** abre o rascunho do Alfred numa caixa para editar e confirmar · **Não enviar** = `ignorar` · **Agenda** · **Ouvir** — ver [abaixo](#notificação-no-pc-enviar--não-enviar--agenda--ouvir) |
 | Terminal | `./run.sh responder-texto <id> "texto"` · `./run.sh perguntar` (modo interativo aceita texto livre nas pendências de WhatsApp) |
 | Chat (Open WebUI) | tool `alfred_pendencias.py` → "responde pro Carlos que mando até quinta" → `responder_pendencia(id, "texto")` chama `POST /responder-texto` (Valves `inbox_api_url` / `inbox_api_token`); sem API no ar, guarda no vault e avisa |
@@ -276,7 +531,7 @@ Cada pendência de WhatsApp abre um processo destacado (`inbox-assistant.py _agu
 O Plasma não toca áudio *dentro* da notificação: a dica `sound-file` foi testada e o `plasmashell` não abriu
 nenhum stream no PipeWire. Por isso o aguardador toca o mp3 (ffplay) em paralelo e controla pelos botões.
 
-Se a pendência for respondida por outro caminho (WhatsApp, terminal, chat), a notificação fecha sozinha no próximo clique e não envia nada. Sem servidor de notificações com ações, cai para `kdialog --menu` → `zenity --list`.
+Se a pendência for respondida por outro caminho (WhatsApp, terminal, chat, painel), a notificação fecha sozinha no próximo clique e não envia nada. Sem servidor de notificações com ações, cai para `kdialog --menu` → `zenity --list`.
 
 ### Validação com WhatsApp real (2026-10-19)
 
@@ -290,7 +545,7 @@ Divergências do formato real e correções (cobertas por `tests/payloads/evolut
 | áudio chega **sem `base64`** (só `audioMessage` com `mediaKey` em bytes JSON `{"0": 12, …}`) | fallback mandava um `audioMessage` só com `url`/`mimetype` → HTTP 400 "Cannot derive from empty media key" → "áudio não transcrito" | `normalizar_payload` guarda o `audioMessage` original e `baixar_midia` o repassa; sem ele, omite `message` (a Evolution busca no próprio banco — `message: {}` quebra) |
 | em grupo, `key.participant` é `<id>@lid` e o número vem em `key.participantAlt` | participante = id lid | `_sem_lid()` prefere o `participantAlt` |
 | key traz `remoteJidAlt` e `addressingMode: "lid"` (remoteJid ainda era o número) | — | já tratado |
-| duas mensagens simultâneas (webhook-async = uma thread por mensagem) | `criar_pendencia_whatsapp` lê o yml, gasta ~15 s em LLM/TTS e grava → **uma pendência sumia** (ficavam só o .md/.mp3) | `_LOCK` (RLock) serializa `processar_mensagem_whatsapp`, `responder_texto`, `notificar_pedro`, `agendar_pendencia` |
+| duas mensagens simultâneas (webhook-async = uma thread por mensagem) | `criar_pendencia_whatsapp` lê o yml, gasta ~15 s em LLM/TTS e grava → **uma pendência sumia** (ficavam só o .md/.mp3) | `_LOCK` (RLock) serializa `processar_mensagem_whatsapp`, `responder_texto`, `notificar_pedro`, `agendar_pendencia`; entre processos, ver [gravação concorrente](#gravação-concorrente-trava-entre-processos) |
 
 Observações da validação:
 - Com a instância no próprio número, **toda** conversa passa pelo gemma4 (local): uma conversa real em andamento virou pendência "profissional". Grupos são ignorados (`grupos: ignorar`). Resolvido depois com a [espera antes de resumir](#espera-antes-de-resumir-atraso_minutos) (`atraso_minutos: 10`).
@@ -306,7 +561,7 @@ Observações da validação:
 | `pessoal_vira_pendencia` | `false` = só mensagens `profissional` viram pendência |
 | `so_se_requer_resposta` | `false` = cria pendência mesmo para "ok, obrigado" |
 | `confianca_minima` | abaixo disso profissional/pessoal viram `outro` (sem pendência) |
-| `atraso_minutos` | espera isso (20) sem resposta de Pedro na conversa antes de gerar resumo, áudio e avisos; `fromMe` na conversa antes do prazo cancela. `0` = na hora. Ver [espera](#espera-antes-de-resumir-atraso_minutos) |
+| `atraso_minutos` | espera isso (20) sem resposta de Pedro na conversa antes de gerar resumo, áudio e avisos; `fromMe` na conversa antes do prazo cancela a espera e só registra um item `respondida_manual` (mensagem, rascunho que o Alfred proporia, resposta de Pedro) — nada é notificado nem enviado. `0` = na hora. Ver [espera](#espera-antes-de-resumir-atraso_minutos) |
 | `agrupar_minutos` | mensagens seguidas do mesmo contato entram na pendência aberta (sem novo LLM/áudio) |
 | `audio_max_segundos` | corta a transcrição depois disso |
 | `contatos_ignorar` / `contatos_sempre` | substrings de número ou nome: nunca / sempre viram pendência (sem LLM) |
@@ -318,7 +573,10 @@ Observações da validação:
 
 ```bash
 cd services/inbox
-venv/bin/python -m unittest tests.test_whatsapp -v             # offline: LLM, TTS e transcrição mockados
+venv/bin/python -m unittest tests.test_whatsapp -v             # offline: LLM, TTS e transcrição mockados (63 testes)
+venv/bin/python -m unittest tests.test_trava -v                # trava entre processos com processos reais (10 testes, ~10 s)
+venv/bin/python -m unittest tests.test_painel -v               # Painel do Alfred (39 testes, ~3 s)
+venv/bin/python -m unittest discover -s tests -t .             # todos os módulos Python (146 testes, ~15 s)
 ALFRED_TESTE_LIVE=1 venv/bin/python -m unittest tests.test_whatsapp -v   # Ollama + edge-tts reais (lento)
 venv/bin/python tests/gerar_payloads.py [--audio]              # regrava tests/payloads/*.json (e o .ogg com edge-tts)
 ./run.sh whatsapp simular tests/payloads/evolution_audio.json --sem-enviar --imediato   # um payload contra o seu .env
@@ -349,6 +607,7 @@ cd services/inbox
 ./run.sh buscar orçamento --whatsapp              # histórico das conversas
 venv/bin/python -m unittest tests.test_db -v      # índice, histórico, cache e as tools do Open WebUI
 ```
+Os payloads em `tests/payloads/` seguem o formato do evento `messages.upsert` da Evolution API v2 (texto, áudio OGG/Opus em base64 gerado com edge-tts, grupo, resposta de Pedro citando a pergunta, "ignorar", `fromMe`, spam, pessoal sem pedido). Os `evolution_v237_*.json` reproduzem o **formato real capturado na validação** (conteúdo sintético): `data.contextInfo`, áudio sem base64 com `mediaKey` em bytes JSON, resposta citada na conversa "Você", resposta direta citando o contato, grupo com `@lid`. 63 testes em `test_whatsapp`, incluindo a regressão de concorrência, a notificação no PC com a GUI simulada, `respondido_via` / `PendenciaJaResolvida` em `responder_texto` e a fila de espera (`TestFilaAtraso`, relógio mockado em `core._now`: agendada, `fromMe` antes do prazo registrando o item `respondida_manual` com rascunho e resposta, rascunho indisponível (LLM mudo ou com exceção) registrando sem rascunho, falha ao registrar sem derrubar o webhook, eco de envio feito por outro processo (e envio interrompido há mais de 5 min, que não vira eco), ignorados sem registro, webhook repetido = `duplicada`, pendência já criada guardando rascunho + resposta, mensagens seguidas, criação ao vencer, thread da API, CLI). As outras classes rodam com `atraso_minutos: 0` (fluxo imediato). Os testes nunca chamam a Evolution: `EVOLUTION_URL` fica vazio. `test_trava` cobre vários processos gravando pendências, tarefas e agenda sem perder nada, dois processos respondendo a mesma pendência (um envio só), leitor que nunca vê arquivo pela metade, reentrância, timeout e tools disputando o mesmo `.lock`. Os testes do painel estão [na seção dele](#testes-do-painel).
 
 ## Podcast — "Resumo do Alfred", a cada 3 dias (`semanal.py`)
 
@@ -384,7 +643,7 @@ curl -X POST :7072/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '
 
 **Configuração** (`perfis.yml → inbox.<nome>.podcast`): `vozes`, `max_temas`, `min_noticias`, `palavras_por_tema`, `pausa_ms`, `vinheta`, `formato`, `template_segmento`, `template_moldura`. Os pesos das fontes vêm de `jornal.pesos_fontes`.
 
-**Agendamento (proposto, não ativado):** `alfred-semanal.service` + `alfred-semanal.timer` (domingo 19:00, `Persistent=true`). Se o PC estava desligado e o timer só roda na segunda, o default já cai na semana anterior. Para instalar, siga o cabeçalho do `.service`.
+**Agendamento:** `alfred-semanal.service` + `alfred-semanal.timer` (todo dia às 19:00 com `--se-devido`, `Persistent=true` — ver o início desta seção), instalados e habilitados pelo `services/scripts/instalar.sh` (ver [Agendamento](#agendamento-systemd-de-usuário--sem-sudo-com-acesso-à-sessão-gráfica)).
 
 **Testes:** `venv/bin/python -m unittest tests.test_semanal -v` (offline: semana ISO, parser de diálogo, leitura de edição antiga, resolução de e-mails).
 
