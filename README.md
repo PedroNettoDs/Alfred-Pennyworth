@@ -169,8 +169,9 @@ Alfred-Pennyworth/
 │   ├── scripts/
 │   │   ├── instalar.sh            # Instalação sem sudo em qualquer pasta: .env, pastas, venvs, units de usuário, containers
 │   │   ├── alfred-switch.sh       # Liga/desliga "modo jogo" (atalho na área de trabalho)
-│   │   ├── chromadb-indexer.py    # Indexação de .md no ChromaDB (placeholder)
-│   │   ├── sync-knowledge.py      # Sync incremental vault → Knowledge Base do WebUI
+│   │   ├── chromadb-indexer.py    # RAG local: indexa os cofres (FTS5 + ChromaDB) e busca — CLI do _shared/lib_rag.py
+│   │   ├── alfred-rag.{service,timer}  # indexação incremental a cada 30 min
+│   │   ├── sync-knowledge.py      # Sync incremental vault → Knowledge Base do WebUI (não é mais chamado)
 │   │   └── webui-indexer.py       # Indexação de .md nas memories do WebUI (placeholder)
 │   │
 │   └── shell-executor/
@@ -531,6 +532,7 @@ inbox e o briefing já liam.
 | `alfred-semanal.timer` | `services/inbox/` | podcast (`--se-devido`) | 19:00 |
 | `alfred-vigia.timer` | `services/inbox/` | vigia | 2 min após o login e a cada 10 min |
 | `alfred-backup.timer` | `services/scripts/` | backup (`backup.py criar`, ver [Backup e restore](#backup-e-restore)) | domingo 13:00 (`Persistent=true`) |
+| `alfred-rag.timer` | `services/scripts/` | índice do RAG local (`chromadb-indexer.py indexar`, ver [`lib_rag.py`](services/_shared/about.md#lib_ragpy)) | 5 min após o login e a cada 30 min |
 
 Units de usuário sobem no login (com `loginctl enable-linger` sobem já no boot — o `instalar.sh` não liga o linger).
 Os containers voltam sozinhos com o Docker (`restart: unless-stopped`).
@@ -657,9 +659,9 @@ Localização: `services/scripts/`
 
 | Script                 | Função                                                                          | Quando usar                                           | Exemplo de uso                                      |
 |------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------|-----------------------------------------------------|
-| `sync-knowledge.py`    | Sync incremental do vault → Knowledge Base do Open WebUI. Só re-indexa arquivos modificados desde o último sync (timestamp em `logs/alfred_last_sync`). | Após editar notas manualmente no Obsidian, ou para forçar re-indexação. Também é disparado automaticamente pelo Researcher após cada pesquisa. | `services/researcher/venv/bin/python services/scripts/sync-knowledge.py` (usa httpx do venv; log do disparo automático em `logs/sync-knowledge.log`) |
+| `sync-knowledge.py`    | Sync incremental do vault → Knowledge Base do Open WebUI. Só re-indexa arquivos modificados desde o último sync (timestamp em `logs/alfred_last_sync`). | Após editar notas manualmente no Obsidian, ou para forçar re-indexação. O Researcher não o dispara mais (indexa no RAG local); sai junto com o Open WebUI. | `services/researcher/venv/bin/python services/scripts/sync-knowledge.py` (usa httpx do venv) |
 | `webui-indexer.py`     | Indexa arquivos `.md` dos vaults nas *memories* do Open WebUI (não na Knowledge Base). | Quando quiser popular as memories globais do WebUI com o conteúdo dos vaults. | Implementação pendente — ver placeholder. |
-| `chromadb-indexer.py`  | Indexa arquivos `.md` no ChromaDB com embeddings via `nomic-embed-text`. Permite buscas vetoriais diretas fora do WebUI. | Quando precisar de RAG externo ao Open WebUI (ex.: workflows N8N consultando ChromaDB diretamente). | Implementação pendente — ver placeholder. |
+| `chromadb-indexer.py`  | RAG local (`_shared/lib_rag.py`): indexa os dois cofres no FTS5 e no ChromaDB (embeddings `MODEL_EMBED`), só o que mudou, e faz a busca híbrida. | A cada 30 min pelo `alfred-rag.timer`; à mão depois de editar muito no Obsidian (`--tudo` reembeda tudo). | `services/inbox/venv/bin/python services/scripts/chromadb-indexer.py buscar "proxy reverso"` |
 | `backup.py`            | Backup datado (`.tar.gz`) de `logs/`, do `VAULT_ALFRED`, dos bancos SQLite e do `perfis.yml`; restore com confirmação e `--dry-run`. Ver [Backup e restore](#backup-e-restore). | Toda semana pelo `alfred-backup.timer`; à mão antes de mexer em algo grande; restore depois de perda de dados ou ao trocar de máquina. | `services/inbox/venv/bin/python services/scripts/backup.py criar` |
 
 ### Diferença entre os três scripts
@@ -668,7 +670,7 @@ Localização: `services/scripts/`
 |----------------------|-----------------------|---------------------|---------------------------------|
 | `sync-knowledge.py`  | Knowledge Base WebUI  | Full-text + RAG     | Open WebUI (modelo Alfred)      |
 | `webui-indexer.py`   | Memories WebUI        | Contexto de sessão  | Open WebUI (contexto automático)|
-| `chromadb-indexer.py`| ChromaDB              | Busca vetorial      | N8N, scripts externos           |
+| `chromadb-indexer.py`| ChromaDB + FTS5 (`alfred.db`) | Híbrida (RRF)  | `lib_rag` — Painel e ferramenta `buscar_cofre` |
 
 ### Variáveis de ambiente necessárias para `sync-knowledge.py`
 

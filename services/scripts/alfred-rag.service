@@ -1,0 +1,21 @@
+[Unit]
+Description=Alfred — RAG local: indexa os cofres (FTS5 + vetores no ChromaDB), só as notas novas/alteradas
+# Disparado por alfred-rag.timer. Unit de USUÁRIO: instale em ~/.config/systemd/user/
+# Em modo jogo (logs/alfred_desligado) não faz nada — os embeddings usam a GPU.
+
+[Service]
+Environment=ALFRED_AUTOMACAO=1
+Type=oneshot
+WorkingDirectory=@ALFRED_DIR@/services/scripts
+ExecStart="@ALFRED_DIR@/services/inbox/venv/bin/python" "@ALFRED_DIR@/services/scripts/chromadb-indexer.py" indexar
+StandardOutput=journal
+StandardError=journal
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=default.target
+
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).
