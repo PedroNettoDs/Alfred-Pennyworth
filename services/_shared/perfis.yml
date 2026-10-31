@@ -220,6 +220,14 @@ agenda:
   criar_tarefa: true            # tarefa/lembrete também vira item em tasks.yml
   notificar: true               # notificação no PC com [Ok] [Desfazer]
 
+# ── Pesquisa profunda — researcher com "profundo": true ───────
+# Modelo leve no plano e nas notas de cada página; o maior só no relatório final.
+# RESEARCH_MODEL_NOTAS / RESEARCH_MODEL_SINTESE no .env passam por cima (máquina sem o qwen, por ex.).
+pesquisa:
+  modelo_notas: "gemma4:e4b"
+  modelo_sintese: "qwen3.6:35b-a3b"   # vazio = MODEL_CHAT
+  relevancia_minima: 0.5              # cosseno subpergunta × (título + trecho) para baixar a página (0 = baixa tudo)
+
 # ── Defaults globais ──────────────────────────────────────────
 defaults:
   vault_alfred_subfolders:
