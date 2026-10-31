@@ -58,7 +58,7 @@ app = FastAPI(title="Alfred Researcher", version="3.2.0")
 TOKEN        = os.getenv("SHELL_EXECUTOR_TOKEN", "")
 VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
 WEBUI_TOKEN  = os.getenv("WEBUI_API_TOKEN", "")
-WEBUI_URL    = os.getenv("WEBUI_URL", "http://localhost:3000")
+WEBUI_URL    = os.getenv("WEBUI_URL", "http://localhost:3001")
 SCRIPTS_DIR  = Path(__file__).parent.parent / "scripts"
 SYNC_LOG     = Path(__file__).resolve().parent.parent.parent / "logs" / "sync-knowledge.log"
 CACHE_DAYS   = 7
@@ -477,7 +477,7 @@ def _relevante(subpergunta: str, resultado: dict) -> bool:
     """Filtro barato ANTES de baixar a página: título + trecho do resultado têm a ver com a subpergunta?
 
     Hoje: similaridade de cosseno entre embeddings (ollama_embed) ≥ pesquisa.relevancia_minima do perfis.yml.
-    Será trocada por uma decisão do Laya (classificador local, 127.0.0.1:7073) quando o modelo treinado for
+    Será trocada por uma decisão do Laya (classificador local, 127.0.0.1:7074) quando o modelo treinado for
     aprovado — a assinatura fica a mesma, só o corpo muda. Sem embedding (Ollama fora) deixa passar: o filtro
     só economiza downloads, não pode derrubar a pesquisa."""
     texto = f"{resultado.get('title', '')}\n{resultado.get('snippet', '')}".strip()
@@ -507,7 +507,7 @@ def _resolver(host: str) -> list[str]:
 def _url_publica(url: str) -> bool:
     """Só http/https para host que resolve APENAS para IPs públicos — nada de localhost, rede local,
     link-local (169.254.169.254), CGNAT. O researcher roda no host, ao lado de Ollama, painel e APIs sem senha:
-    uma página (ou um redirect dela) não pode fazê-lo buscar http://127.0.0.1:7072/...
+    uma página (ou um redirect dela) não pode fazê-lo buscar http://127.0.0.1:7073/...
     Resta a janela entre esta resolução e a conexão do httpx (DNS rebinding); para um assistente de um usuário
     só, que lê o que o SearXNG devolveu, o risco foi aceito."""
     partes = urlsplit(url)

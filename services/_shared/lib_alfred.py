@@ -27,7 +27,7 @@ import httpx
 # ── Configuração via ambiente ─────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DEFAULT_OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-DEFAULT_SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
+DEFAULT_SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8889")
 DEFAULT_MODEL_CHAT = os.getenv("MODEL_CHAT", "llama3.1:8b")
 DEFAULT_MODEL_EMBED = os.getenv("MODEL_EMBED", "nomic-embed-text-v2-moe:latest")
 

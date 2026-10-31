@@ -1,7 +1,7 @@
 """
-Painel do Alfred — interface web local de aprovações, servida pela própria API do inbox (porta 7072).
+Painel do Alfred — interface web local de aprovações, servida pela própria API do inbox (porta 7073).
 
-    http://127.0.0.1:7072/painel      (login com o mesmo SHELL_EXECUTOR_TOKEN da API)
+    http://127.0.0.1:7073/painel      (login com o mesmo SHELL_EXECUTOR_TOKEN da API)
 
 Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza e Sistema (só leitura). As ações chamam as
 MESMAS funções do CLI/notificação/API — whatsapp.responder_texto, whatsapp.agendar_pendencia,
@@ -78,7 +78,7 @@ MSG_CSRF = "O servidor recusou a ação por segurança. Recarregue a página e t
 # ══════════════════════════════════════════════════════════════
 
 def _hostname(host: str) -> str:
-    """'127.0.0.1:7072' → '127.0.0.1'; '[::1]:7072' → '[::1]'."""
+    """'127.0.0.1:7073' → '127.0.0.1'; '[::1]:7073' → '[::1]'."""
     host = (host or "").strip().lower()
     if host.startswith("["):
         return host[: host.find("]") + 1] if "]" in host else host
@@ -711,8 +711,8 @@ def _timers() -> dict:
 
 
 def _dados_sistema() -> dict:
-    porta_exec = os.getenv("PORT_SHELL_EXECUTOR", "") or "7070"
-    porta_res = os.getenv("PORT_RESEARCHER", "") or "7071"
+    porta_exec = os.getenv("PORT_SHELL_EXECUTOR", "") or "7071"
+    porta_res = os.getenv("PORT_RESEARCHER", "") or "7072"
     tarefas = {
         "whatsapp": _status_whatsapp,
         "executor": lambda: _http_saude(f"http://127.0.0.1:{porta_exec}/health"),
@@ -742,7 +742,7 @@ def _dados_sistema() -> dict:
     return {
         "alfred": _estado_alfred(), "wa": _conexao_whatsapp(st), "wa_status": st,
         "fila": len(st.get("fila_espera") or []) if not st.get("erro") else None,
-        "porta_inbox": os.getenv("PORT_INBOX", "") or "7072", "porta_exec": porta_exec, "porta_res": porta_res,
+        "porta_inbox": os.getenv("PORT_INBOX", "") or "7073", "porta_exec": porta_exec, "porta_res": porta_res,
         "executor": res["executor"], "researcher": res["researcher"], "ollama": res["ollama"],
         "containers": res["containers"], "timers": res["timers"], "pendencias": len(pend),
         "agora": fmt_data(_agora()),

@@ -1,6 +1,6 @@
 """
 title: Alfred Pendências e Jornal
-description: Fila de convites/contatos que aguardam "vou / não vou" (Inbox Assistant, Thunderbird), mensagens de WhatsApp que aguardam "o que você quer responder?" (Evolution API) e a última edição do jornal diário. Lê e escreve em VAULT_ALFRED/pendencias/ e VAULT_ALFRED/jornal/; respostas de WhatsApp são enviadas pela API do inbox (:7072).
+description: Fila de convites/contatos que aguardam "vou / não vou" (Inbox Assistant, Thunderbird), mensagens de WhatsApp que aguardam "o que você quer responder?" (Evolution API) e a última edição do jornal diário. Lê e escreve em VAULT_ALFRED/pendencias/ e VAULT_ALFRED/jornal/; respostas de WhatsApp são enviadas pela API do inbox (:7073).
 author: Alfred Pennyworth
 version: 1.2.0
 """
@@ -47,7 +47,7 @@ class Tools:
             description="Cofre de notícias (VAULT_NOTICIAS). O jornal é procurado em <noticias_path>/jornal e, se vazio, em <vault_path>/jornal",
         )
         inbox_api_url: str = Field(
-            default="http://172.17.0.1:7072",
+            default="http://172.17.0.1:7073",
             description="API do Inbox Assistant (services/inbox/run.sh serve). Usada para enviar respostas de WhatsApp pela Evolution API",
         )
         inbox_api_token: str = Field(

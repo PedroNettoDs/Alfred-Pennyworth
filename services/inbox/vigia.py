@@ -2,7 +2,7 @@
 Alfred — vigia (alfred-vigia.timer: 2 min após o boot e a cada 10 min).
 
 Confere se tudo que faz o Alfred "ver" as mensagens está de pé e conserta o que dá sozinho:
-  1. API do inbox (:7072)            → fora do ar: `systemctl --user restart alfred-inbox-api`
+  1. API do inbox (:7073)            → fora do ar: `systemctl --user restart alfred-inbox-api`
   2. containers da Evolution API     → parados: `docker start`
   3. conexão do WhatsApp (instância) → caiu (ex.: aparelho desvinculado): notificação no PC com
                                         [Mostrar QR code] — o pareamento precisa do celular de Pedro
@@ -60,7 +60,7 @@ def _marcar_aviso(est: dict, chave: str) -> None:
 # ── checagens ─────────────────────────────────────────────────
 
 def checar_api(consertar: bool = True) -> dict:
-    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7072')}/health"
+    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7073')}/health"
     try:
         r = httpx.get(url, timeout=8)
         if r.status_code == 200:
@@ -169,7 +169,7 @@ def aguardar_qr(estado: str) -> int:
 def abrir_qr_no_painel() -> None:
     """Abre /painel/whatsapp no navegador: a página gera o QR na hora e mostra o erro se a Evolution falhar.
     Sob o systemd, o navegador vai num scope próprio — filho comum morreria com a unit do aguardador."""
-    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7072')}/painel/whatsapp"
+    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7073')}/painel/whatsapp"
     if not shutil.which("xdg-open"):
         core._notify("Alfred — WhatsApp desconectado", f"Abra {url} no navegador para ver o QR code.")
         return

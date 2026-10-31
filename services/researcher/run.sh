@@ -19,6 +19,6 @@ if [[ ! -d "venv" ]]; then
     venv/bin/pip install --quiet -r requirements.txt
 fi
 
-PORT="${PORT_RESEARCHER:-7071}"
+PORT="${PORT_RESEARCHER:-7072}"
 echo "[researcher] Iniciando na porta $PORT..."
 exec venv/bin/uvicorn main:app --host 0.0.0.0 --port "$PORT"

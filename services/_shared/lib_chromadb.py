@@ -26,7 +26,7 @@ except ImportError:
 
 
 # ── Config ────────────────────────────────────────────────────
-_DEFAULT_CHROMADB_URL = "http://localhost:8000"
+_DEFAULT_CHROMADB_URL = "http://localhost:8001"
 
 # Cache de collection_id por nome (evita round-trip em cada request)
 _collection_cache: dict[str, str] = {}

@@ -44,7 +44,7 @@ if [[ ! -d "venv" ]]; then
 fi
 
 if [[ "${1:-}" == "serve" ]]; then
-    exec venv/bin/uvicorn main:app --host 0.0.0.0 --port "${PORT_INBOX:-7072}"
+    exec venv/bin/uvicorn main:app --host 0.0.0.0 --port "${PORT_INBOX:-7073}"
 fi
 
 exec venv/bin/python inbox-assistant.py "$@"

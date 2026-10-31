@@ -15,7 +15,7 @@
       "parameters": {
         "assignments": {
           "assignments": [
-            { "id": "c1", "name": "base_url", "value": "http://172.17.0.1:7072", "type": "string" },
+            { "id": "c1", "name": "base_url", "value": "http://172.17.0.1:7073", "type": "string" },
             { "id": "c2", "name": "token", "value": "COLE_AQUI_O_SHELL_EXECUTOR_TOKEN", "type": "string" }
           ]
         },

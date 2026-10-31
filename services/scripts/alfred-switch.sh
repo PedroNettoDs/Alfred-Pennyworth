@@ -11,7 +11,7 @@
 #    1. grava logs/alfred_desligado  → os run.sh recusam rodar sob o systemd (timers, API) mesmo
 #       depois de reiniciar o PC: o modo jogo só termina quando você liga de novo
 #    2. para os timers (briefing, e-mail, podcast, vigia) e qualquer execução em andamento
-#    3. para a API do Alfred (:7072) — o WhatsApp deixa de ser processado
+#    3. para a API do Alfred (:7073) — o WhatsApp deixa de ser processado
 #    4. para a Evolution API (WhatsApp) — `docker stop`; com restart unless-stopped, continua parada após reboot
 #    5. fecha as notificações que esperam clique (as pendências continuam aguardando; voltam ao religar)
 #    6. descarrega os modelos do Ollama da VRAM (o serviço do Ollama continua instalado, ocioso)
@@ -150,7 +150,7 @@ ligar() {
 
 status() {
     if esta_desligado; then echo "Alfred: DESLIGADO (modo jogo) desde $(head -1 "$FLAG")"; else echo "Alfred: LIGADO"; fi
-    echo "API (:7072):     $(systemctl --user is-active alfred-inbox-api.service 2>/dev/null)"
+    echo "API (:7073):     $(systemctl --user is-active alfred-inbox-api.service 2>/dev/null)"
     for t in "${TIMERS[@]}"; do printf '%-31s %s\n' "$t:" "$(systemctl --user is-active "$t" 2>/dev/null)"; done
     if command -v docker >/dev/null; then
         for c in "${CONTAINERS_ORDEM_LIGAR[@]}"; do

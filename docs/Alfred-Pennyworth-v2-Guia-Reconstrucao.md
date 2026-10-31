@@ -129,12 +129,12 @@ HOST_IP=172.17.0.1
 OLLAMA_BASE_URL=http://172.17.0.1:11434
 
 # Portas
-PORT_WEBUI=3000
-PORT_SEARXNG=8888
-PORT_N8N=5678
-PORT_CHROMADB=8000
-PORT_SHELL_EXECUTOR=7070
-PORT_RESEARCHER=7071
+PORT_WEBUI=3001
+PORT_SEARXNG=8889
+PORT_N8N=5679
+PORT_CHROMADB=8001
+PORT_SHELL_EXECUTOR=7071
+PORT_RESEARCHER=7072
 
 # Modelos
 MODEL_CHAT=llama3.1:8b
@@ -147,12 +147,12 @@ VAULT_ALFRED=/home/netto/Documentos/Obsidian - Alfred
 # Open WebUI
 WEBUI_SECRET_KEY=(gerado)
 WEBUI_AUTH=true
-WEBUI_URL=http://localhost:3000
+WEBUI_URL=http://localhost:3001
 WEBUI_API_TOKEN=(preenchido depois)
 
 # SearXNG / ChromaDB
-SEARXNG_URL=http://localhost:8888
-CHROMADB_URL=http://localhost:8000
+SEARXNG_URL=http://localhost:8889
+CHROMADB_URL=http://localhost:8001
 CHROMADB_COLLECTION=alfred-brain
 
 # N8N
@@ -196,10 +196,10 @@ Criação do `docker-compose.yml` com 4 serviços na rede `alfred-net` e do `con
 
 | Container | Imagem | Porta | Função |
 |-----------|--------|-------|--------|
-| alfred-webui | ghcr.io/open-webui/open-webui:main | 3000 | Interface de chat |
-| alfred-searxng | searxng/searxng:latest | 8888 | Busca web privada |
-| alfred-chromadb | chromadb/chroma:latest | 8000 | Banco de vetores (RAG) |
-| alfred-n8n | n8nio/n8n:latest | 5678 | Automação de workflows |
+| alfred-webui | ghcr.io/open-webui/open-webui:main | 3001 | Interface de chat |
+| alfred-searxng | searxng/searxng:latest | 8889 | Busca web privada |
+| alfred-chromadb | chromadb/chroma:latest | 8001 | Banco de vetores (RAG) |
+| alfred-n8n | n8nio/n8n:latest | 5679 | Automação de workflows |
 
 ### SearXNG — fix do 403
 
@@ -227,7 +227,7 @@ sleep 5
 docker compose ps
 
 # Teste do host
-curl -s "http://localhost:8888/search?q=test&format=json" | head -c 100
+curl -s "http://localhost:8889/search?q=test&format=json" | head -c 100
 
 # Teste de dentro do container (como o Alfred usa)
 docker exec alfred-webui curl -s "http://searxng:8080/search?q=test&format=json" | head -c 100
@@ -278,7 +278,7 @@ sudo systemctl start alfred-executor
 
 ```bash
 systemctl status alfred-executor --no-pager
-curl http://localhost:7070/health
+curl http://localhost:7071/health
 # Esperado: {"status":"ok","version":"2.0.0"}
 ```
 
@@ -328,7 +328,7 @@ O curl do health check foi executado imediatamente após o `systemctl start` (47
 
 ```bash
 sleep 3
-curl http://localhost:7071/health
+curl http://localhost:7072/health
 ```
 
 ### Erro encontrado: modelo antigo no Researcher
@@ -398,7 +398,7 @@ sudo systemctl restart alfred-executor
 
 ```bash
 TOKEN=$(grep SHELL_EXECUTOR_TOKEN ~/Alfred-Pennyworth/.env | cut -d= -f2)
-curl -s -X POST http://localhost:7070/execute \
+curl -s -X POST http://localhost:7071/execute \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"command":"uptime"}'
@@ -466,9 +466,9 @@ sudo systemctl restart alfred-researcher
 
 ```bash
 echo "=== Docker ===" && docker compose ps
-echo -e "\n=== Executor ===" && curl -s http://localhost:7070/health
-echo -e "\n=== Researcher ===" && curl -s http://localhost:7071/health
-echo -e "\n=== SearXNG ===" && curl -s "http://localhost:8888/search?q=test&format=json" | head -c 80
+echo -e "\n=== Executor ===" && curl -s http://localhost:7071/health
+echo -e "\n=== Researcher ===" && curl -s http://localhost:7072/health
+echo -e "\n=== SearXNG ===" && curl -s "http://localhost:8889/search?q=test&format=json" | head -c 80
 echo -e "\n\n=== Ollama ===" && ollama list
 ```
 
@@ -518,12 +518,12 @@ sudo systemctl {status|restart|stop} alfred-executor
 sudo systemctl {status|restart|stop} alfred-researcher
 
 # Health checks
-curl http://localhost:7070/health
 curl http://localhost:7071/health
+curl http://localhost:7072/health
 
 # Testar executor manualmente
 TOKEN=$(grep SHELL_EXECUTOR_TOKEN ~/Alfred-Pennyworth/.env | cut -d= -f2)
-curl -s -X POST http://localhost:7070/execute \
+curl -s -X POST http://localhost:7071/execute \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"command":"docker ps"}'

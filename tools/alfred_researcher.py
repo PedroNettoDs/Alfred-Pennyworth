@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 class Tools:
     class Valves(BaseModel):
         researcher_url: str = Field(
-            default="http://172.17.0.1:7071",
+            default="http://172.17.0.1:7072",
             description="URL do Research Service no host",
         )
         token: str = Field(

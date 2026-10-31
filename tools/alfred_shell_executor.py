@@ -13,7 +13,7 @@ from typing import Optional
 class Tools:
     class Valves(BaseModel):
         executor_url: str = Field(
-            default="http://172.17.0.1:7070",
+            default="http://172.17.0.1:7071",
             description="URL do Shell Executor no host",
         )
         token: str = Field(

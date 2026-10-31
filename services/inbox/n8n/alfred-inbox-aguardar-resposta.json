@@ -13,7 +13,7 @@
       "parameters": {
         "assignments": {
           "assignments": [
-            { "id": "d1", "name": "base_url", "value": "http://172.17.0.1:7072", "type": "string" },
+            { "id": "d1", "name": "base_url", "value": "http://172.17.0.1:7073", "type": "string" },
             { "id": "d2", "name": "token", "value": "COLE_AQUI_O_SHELL_EXECUTOR_TOKEN", "type": "string" },
             { "id": "d3", "name": "id", "value": "={{ $('Recebe pendência').item.json.id }}", "type": "string" },
             { "id": "d4", "name": "titulo", "value": "={{ $('Recebe pendência').item.json.titulo }}", "type": "string" },

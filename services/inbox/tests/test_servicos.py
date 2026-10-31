@@ -84,7 +84,7 @@ class TestExecutorWhitelist(unittest.TestCase):
         "systemctl --user status alfred-executor --no-pager", "systemctl --user is-active alfred-inbox",
         "systemctl status docker", "journalctl --user -u alfred-inbox -n 50 --no-pager",
         "docker stats --no-stream", "docker logs alfred-ollama --tail 20", "docker compose ps", "docker system df",
-        "curl http://localhost:7070/health", "curl -s http://127.0.0.1:7071/health", "cat /proc/cpuinfo",
+        "curl http://localhost:7071/health", "curl -s http://127.0.0.1:7072/health", "cat /proc/cpuinfo",
         "date", "ls", "ls -la ~", "ps aux | grep ollama | head -3",
         executor.BRIEFING_RUN_SH, executor.BRIEFING_RUN_SH + " 'protocolo QUIC'",
     ]

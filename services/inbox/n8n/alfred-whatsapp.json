@@ -20,7 +20,7 @@
       "parameters": {
         "assignments": {
           "assignments": [
-            { "id": "e1", "name": "base_url", "value": "http://172.17.0.1:7072", "type": "string" },
+            { "id": "e1", "name": "base_url", "value": "http://172.17.0.1:7073", "type": "string" },
             { "id": "e2", "name": "token", "value": "COLE_AQUI_O_SHELL_EXECUTOR_TOKEN", "type": "string" },
             { "id": "e3", "name": "evolution_url", "value": "http://evolution-api:8080", "type": "string" },
             { "id": "e4", "name": "evolution_apikey", "value": "COLE_AQUI_A_EVOLUTION_API_KEY", "type": "string" },

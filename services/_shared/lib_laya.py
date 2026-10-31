@@ -32,7 +32,7 @@ CONFIANCA_MINIMA = 0.7
 
 
 def _url() -> str:
-    return os.getenv("LAYA_URL", f"http://127.0.0.1:{os.getenv('PORT_LAYA', '7073')}")
+    return os.getenv("LAYA_URL", f"http://127.0.0.1:{os.getenv('PORT_LAYA', '7074')}")
 
 
 def _confianca_minima() -> float:

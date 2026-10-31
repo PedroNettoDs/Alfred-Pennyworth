@@ -256,7 +256,7 @@ class TestLeitura(_Base):
 
     def test_url_privada_ou_esquema_invalido_nunca_e_pedida(self):
         t = self.usar_transporte({})
-        for url in ("http://127.0.0.1:7072/painel", "http://localhost/", "http://192.168.0.10/",
+        for url in ("http://127.0.0.1:7073/painel", "http://localhost/", "http://192.168.0.10/",
                     "http://[::1]:11434/api/tags", "http://169.254.169.254/latest/meta-data",
                     "http://100.64.0.1/", "http://[::ffff:127.0.0.1]/", "http://interno.example/",
                     "http://misto.example/", "http://naoexiste.example/", "file:///etc/passwd",
@@ -266,8 +266,8 @@ class TestLeitura(_Base):
 
     def test_redirect_para_ip_privado_e_barrado(self):
         t = self.usar_transporte({
-            "https://redir.example/": httpx.Response(302, headers={"location": "http://127.0.0.1:7072/painel"}),
-            "http://127.0.0.1:7072/painel": httpx.Response(200, headers={"content-type": "text/html"},
+            "https://redir.example/": httpx.Response(302, headers={"location": "http://127.0.0.1:7073/painel"}),
+            "http://127.0.0.1:7073/painel": httpx.Response(200, headers={"content-type": "text/html"},
                                                            content=html("Painel", "segredo do painel")),
         })
         self.assertIsNone(researcher._baixar_pagina("https://redir.example/"))
@@ -329,7 +329,7 @@ RESULTADOS = [
     {"url": "https://tokio.example/guia", "title": "Guia do Tokio runtime Rust", "snippet": "Tokio é um runtime async para Rust"},
     {"url": "https://tokio.example/guia", "title": "Guia do Tokio runtime Rust (cópia)", "snippet": "duplicado"},
     {"url": "https://bolo.example/receita", "title": "Receita de bolo de cenoura", "snippet": "bolo fofinho"},
-    {"url": "http://127.0.0.1:7072/painel", "title": "Rust async runtime tokio painel", "snippet": "rust async"},
+    {"url": "http://127.0.0.1:7073/painel", "title": "Rust async runtime tokio painel", "snippet": "rust async"},
     {"url": "https://async.example/livro", "title": "Async Rust livro runtime", "snippet": "async em Rust com runtime"},
     {"url": "https://smol.example/", "title": "smol: runtime alternativo ao tokio", "snippet": "pequeno e simples"},
 ]

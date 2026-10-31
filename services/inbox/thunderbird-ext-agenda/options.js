@@ -1,6 +1,6 @@
 "use strict";
 const CAMPOS = ["urlAlfred", "token", "calendario", "intervaloMin"];
-const PADRAO = { urlAlfred: "http://127.0.0.1:7072", token: "", calendario: "Agenda", intervaloMin: 2 };
+const PADRAO = { urlAlfred: "http://127.0.0.1:7073", token: "", calendario: "Agenda", intervaloMin: 2 };
 const $ = (id) => document.getElementById(id);
 
 async function carregar() {

@@ -97,7 +97,7 @@ Memória automática: fatos duráveis sobre Pedro e seus contatos ("é vegetaria
 
 - **Banco:** `MEMORIA_DB`, `db` da seção `memoria:`, ou `VAULT_ALFRED/memoria/memoria.db`. Tabela `fatos` + FTS5 + vetor `bge-m3` normalizado (float32) como blob na mesma linha; cosseno em Python puro.
 - **Espelho:** `<pasta do banco>/<sujeito>.md` (ex.: `VAULT_ALFRED/memoria/carlos-silva.md`), regravado de forma atômica (temporário + `os.replace`) a cada mudança. Editar o `.md` não muda a memória.
-- **Portão:** `_vale_extrair(texto) -> bool` é heurística (3+ palavras, 15+ letras, não é só saudação/risada). Vai virar uma decisão sim/não do Laya (127.0.0.1:7073) quando o classificador treinado for aprovado — a troca fica só nessa função.
+- **Portão:** `_vale_extrair(texto) -> bool` é heurística (3+ palavras, 15+ letras, não é só saudação/risada). Vai virar uma decisão sim/não do Laya (127.0.0.1:7074) quando o classificador treinado for aprovado — a troca fica só nessa função.
 - **Configuração:** seção `memoria:` do `perfis.yml` (`ativo`, `db`, `modelo`, `modelo_embed`, limiares, `auditar_lote`).
 - Nenhuma função levanta: sem banco ou sem Ollama, devolve vazio.
 - **CLI** (de `services/`): `python -m _shared.lib_memoria {extrair,listar,auditar,buscar}`. Testes: `inbox/tests/test_memoria.py` (offline).
@@ -184,8 +184,8 @@ from _shared.lib_memoria import extrair, contexto, auditar
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Endpoint do Ollama |
 | `MODEL_CHAT` | `llama3.1:8b` | Modelo de geração de texto |
 | `MODEL_EMBED` | `nomic-embed-text-v2-moe:latest` | Modelo de embeddings |
-| `SEARXNG_URL` | `http://localhost:8888` | Endpoint do SearXNG |
-| `CHROMADB_URL` | `http://localhost:8000` | Endpoint do ChromaDB |
+| `SEARXNG_URL` | `http://localhost:8889` | Endpoint do SearXNG |
+| `CHROMADB_URL` | `http://localhost:8001` | Endpoint do ChromaDB |
 | `VAULT_ALFRED` | `""` | Caminho do vault Obsidian |
 | `OLLAMA_THINK` | `""` | `false` desliga o thinking (gemma4/qwen3); vazio não envia o campo |
 | `OLLAMA_NUM_CTX` | `""` | `options.num_ctx` enviado ao Ollama (ex.: 8192) |

@@ -4,7 +4,7 @@ Alfred — cliente da Evolution API (WhatsApp).
     from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia, estado_instancia
 
 Configuração (.env):
-  EVOLUTION_URL          http://localhost:8080 — vazio = modo simulado (nada sai da máquina)
+  EVOLUTION_URL          http://localhost:8081 — vazio = modo simulado (nada sai da máquina)
   EVOLUTION_API_KEY      AUTHENTICATION_API_KEY do container (header `apikey`)
   EVOLUTION_INSTANCE     nome da instância pareada por QR code (default: alfred)
   WHATSAPP_NUMERO_PEDRO  número de Pedro com DDI, só dígitos — recebe os resumos/áudios

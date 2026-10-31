@@ -34,7 +34,7 @@ sys.path.insert(0, str(INBOX.parent))
 
 TMP = Path(tempfile.mkdtemp(prefix="alfred-painel-test-"))
 TOKEN = "token-de-teste"          # o mesmo dos outros módulos (main.TOKEN é lido na 1ª importação)
-BASE = "http://127.0.0.1:7072"
+BASE = "http://127.0.0.1:7073"
 
 # Ambiente ANTES de importar os módulos; reaplicado em cada teste (outros módulos de teste mexem nele)
 ENV = {
@@ -396,15 +396,15 @@ class TestRede(Base):
 
     def test_host_estranho_recusado(self):
         cli = self.entrar()
-        for host in ("evil.example", "evil.example:7072", "127.0.0.1.evil.example", "192.168.0.10:7072"):
+        for host in ("evil.example", "evil.example:7073", "127.0.0.1.evil.example", "192.168.0.10:7073"):
             r = self.guardar(cli.get("/painel", headers={"Host": host}, follow_redirects=False))
             self.assertEqual(r.status_code, 403, host)
-        for host in ("localhost:7072", "127.0.0.1"):
+        for host in ("localhost:7073", "127.0.0.1"):
             r = self.guardar(cli.get("/painel/login", headers={"Host": host}, follow_redirects=False))
             self.assertIn(r.status_code, (200, 303), host)
 
     def test_ipv6_loopback_aceito(self):
-        r = self.guardar(self.cliente("::1").get("/painel/login", headers={"Host": "[::1]:7072"}))
+        r = self.guardar(self.cliente("::1").get("/painel/login", headers={"Host": "[::1]:7073"}))
         self.assertEqual(r.status_code, 200)
 
     def test_endpoints_bearer_continuam_iguais(self):
@@ -424,7 +424,7 @@ class TestCSRF(Base):
             dict(csrf=False),                                     # sem X-CSRF-Token
             dict(csrf="0" * 64),                                  # token errado
             dict(origem="http://evil.example"),                   # Origin de outro site
-            dict(origem="http://localhost:7072"),                 # outra origem local (≠ Host)
+            dict(origem="http://localhost:7073"),                 # outra origem local (≠ Host)
             dict(origem=None),                                    # sem Origin nem Referer
         ]
         for c in casos:

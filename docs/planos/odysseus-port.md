@@ -27,7 +27,7 @@ decisão. Entrada: estado (texto/e-mail/JSON) + perguntas tipadas `choice`,
 só passada, sem gerar texto. Multilíngue: 322M parâmetros, contexto 1024 (até 8192).
 Custo: cerca de 33 ms numa GPU T4 e de 200 a 460 ms em CPU.
 
-- Serviço `alfred-laya.service` (FastAPI em `:7073`, `laya` com extra de
+- Serviço `alfred-laya.service` (FastAPI em `:7074`, `laya` com extra de
   servidor), modelo pré-carregado na RTX 3060; fallback CPU.
 - `lib_laya.py`: `decidir(estado, perguntas) -> dict`, `escolher(texto, opcoes)`,
   `pontuar(texto, escala)`, `sim_nao(texto, pergunta) -> float`.

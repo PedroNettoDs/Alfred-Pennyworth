@@ -22,7 +22,7 @@ except ImportError:
     sys.exit(1)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-BASE         = os.getenv("WEBUI_URL", "http://localhost:3000")
+BASE         = os.getenv("WEBUI_URL", "http://localhost:3001")
 TOKEN        = os.getenv("WEBUI_API_TOKEN", "")
 TIMESTAMP    = PROJECT_ROOT / "logs" / "alfred_last_sync"
 KB_PEDRO     = os.getenv("RESEARCHER_KB_PEDRO_ID", "")

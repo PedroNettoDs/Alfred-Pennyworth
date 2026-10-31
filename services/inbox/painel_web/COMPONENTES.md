@@ -342,8 +342,8 @@ Vazia: `m.vazio("Nenhum lote de limpeza, senhor.", "limpeza")`.
   <section class="cartao sistema-grupo" aria-labelledby="s-apis">
     <h2 class="cartao__titulo" id="s-apis">APIs locais</h2>
     <ul class="sistema-lista">
-      {{ m.item_sistema("Inbox (7072)", "ok", "No ar") }}
-      {{ m.item_sistema("Executor (7070)", "indisponivel", "Sem resposta em 2 s") }}
+      {{ m.item_sistema("Inbox (7073)", "ok", "No ar") }}
+      {{ m.item_sistema("Executor (7071)", "indisponivel", "Sem resposta em 2 s") }}
     </ul>
   </section>
   … grupos "Alfred", "WhatsApp" (rotulo="Conectado"/"Desconectado"/"Conectando"), "Ollama", "Containers", "Timers"

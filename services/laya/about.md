@@ -1,7 +1,7 @@
 # laya — decisões tipadas locais (System 1)
 
 Serve o modelo [Laya](https://huggingface.co/convaiinnovations/laya) (Apache-2.0, encoder ModernBERT
-com cabeça de decisão) em `127.0.0.1:PORT_LAYA` (padrão 7073) via `laya-serve`. Não gera texto:
+com cabeça de decisão) em `127.0.0.1:PORT_LAYA` (padrão 7074) via `laya-serve`. Não gera texto:
 responde perguntas tipadas `choice` / `score` / `noul` sobre um estado (texto, e-mail, dict) numa
 só passada. Regra do projeto: **o Laya decide, o LLM escreve**
 (plano em [docs/planos/odysseus-port.md](../../docs/planos/odysseus-port.md)).
@@ -11,7 +11,7 @@ só passada. Regra do projeto: **o Laya decide, o LLM escreve**
 ```bash
 ./run.sh                                   # cria o venv na 1ª vez e baixa os pesos (~650 MB)
 systemctl --user status alfred-laya        # unit instalada pelo services/scripts/instalar.sh
-curl -s localhost:7073/health
+curl -s localhost:7074/health
 ```
 
 Só escuta em 127.0.0.1. Variáveis (todas opcionais, no `.env` da raiz): `PORT_LAYA`, `LAYA_MODELS`
@@ -54,3 +54,22 @@ o Laya (`laya-train`) com rótulos do próprio LLM.
 
 Latência medida com o gemma4:12b dividindo a GPU: ~7 s por e-mail no LLM contra ~0,05 s no Laya
 (primeiras chamadas até 1,7 s).
+
+## Treino 1 — e-mail (31/10/2026)
+
+`treino/rotular_emails.py` rotulou 615 e-mails com `classificar()` (`gemma4:12b`); 533 com confiança
+≥ 0.8 viraram 476 de treino e 57 de teste (divisão fixa por hash). `laya-train` sobre
+`laya-multilingual`, 4 épocas, `--shuffle-options`, RTX 3060: ~20 min. Checkpoint em
+`treino/dados/modelo-email` (fora do git). Avaliação: `venv/bin/python treino/avaliar.py treino/dados/modelo-email`.
+
+| | Antes | Depois |
+|---|---|---|
+| Acerto no teste (57) | 26% | 81% |
+| Teste sem itens repetidos no treino (53), limiar 0.6 | — | decide 85%, acerto 87% |
+
+Passa no critério de 85% no modo cascata, **mas todos os erros vão na direção cara**: notícia →
+promoção/transacional (5) e evento → transacional (1). Com o Laya pulando o LLM, 5–6 de ~29 e-mails
+importantes sairiam do jornal. Contato nunca foi perdido. Ainda não ligado ao `classificar()`.
+Próximos passos: mais exemplos de notícia (só há 615 e-mails na caixa) e peso maior para as classes
+acionáveis, ou usar o Laya só para pular o LLM quando ele disser `promocao`/`transacional` e o
+remetente for envio em massa já visto.

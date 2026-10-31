@@ -1,6 +1,6 @@
 "use strict";
 const CAMPOS = ["urlAlfred", "token", "modoTeste", "pastaTeste", "executarDeVerdade", "intervaloMin"];
-const PADRAO = { urlAlfred: "http://127.0.0.1:7072", token: "", contasPermitidas: [], modoTeste: true,
+const PADRAO = { urlAlfred: "http://127.0.0.1:7073", token: "", contasPermitidas: [], modoTeste: true,
   pastaTeste: "Alfred-Teste", executarDeVerdade: false, intervaloMin: 10 };
 
 async function carregar() {

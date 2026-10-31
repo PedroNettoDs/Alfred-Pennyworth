@@ -8,7 +8,7 @@ e "apagar" sempre quer dizer **mover para a Lixeira da conta**.
 
 | Opção | Veredito |
 |---|---|
-| **Extensão MailExtension** (`messages.query` + `messages.move` para a pasta `specialUse: trash`), buscando lotes aprovados em `http://127.0.0.1:7072/limpeza/fila` | **Escolhida.** O Thunderbird já está autenticado (OAuth2) e sincroniza a mudança com o servidor IMAP como se o usuário tivesse arrastado a mensagem. Não manipula token nem senha. A API de extensões permite restringir tudo a `move`: o manifesto pede `messagesMove`, mas não `messagesDelete`. O próprio usuário escolhe em quais contas ela pode mexer. |
+| **Extensão MailExtension** (`messages.query` + `messages.move` para a pasta `specialUse: trash`), buscando lotes aprovados em `http://127.0.0.1:7073/limpeza/fila` | **Escolhida.** O Thunderbird já está autenticado (OAuth2) e sincroniza a mudança com o servidor IMAP como se o usuário tivesse arrastado a mensagem. Não manipula token nem senha. A API de extensões permite restringir tudo a `move`: o manifesto pede `messagesMove`, mas não `messagesDelete`. O próprio usuário escolhe em quais contas ela pode mexer. |
 | Native messaging (extensão ↔ processo Python) | Descartada. O Thunderbird é **snap**, e o confinamento só aceita hosts de native messaging em caminhos que o snap enxerga, o que dá trabalho de manter. O HTTP local já existe (API do inbox, Bearer `SHELL_EXECUTOR_TOKEN`), e a extensão o acessa por `host_permissions`. |
 | Escrever direto no mbox / `.msf` | Descartada. O Thunderbird sobrescreve o cache offline e a mudança nunca chega ao servidor. Com o Thunderbird aberto, ainda pode corromper o índice. |
 | Filtros / tags do Thunderbird | Descartada como mecanismo. Um filtro roda sobre mensagens que chegam (ou manualmente) e não recebe uma lista de Message-IDs vinda de fora. Um filtro com ação "excluir" é o tipo de regra perigosa que queremos evitar. |
@@ -82,7 +82,7 @@ Tool do Open WebUI (`tools/alfred_pendencias.py`): `listar_limpezas()` e `respon
 
 ## Instalar a extensão (`thunderbird-ext/`)
 
-1. Garanta que a API do inbox está no ar (`run.sh serve` ou `alfred-inbox-api.service`) em `127.0.0.1:7072`.
+1. Garanta que a API do inbox está no ar (`run.sh serve` ou `alfred-inbox-api.service`) em `127.0.0.1:7073`.
 2. Empacote:
    ```bash
    cd services/inbox/thunderbird-ext && zip -r ../alfred-limpeza.xpi manifest.json *.js options.html
@@ -93,7 +93,7 @@ Tool do Open WebUI (`tools/alfred_pendencias.py`): `listar_limpezas()` e `respon
    Uma extensão não assinada exige `xpinstall.signatures.required = false` no Editor de configuração. Se você
    preferir não mudar isso, use a carga temporária, que precisa ser repetida a cada abertura do Thunderbird.
 3. Abra as **opções** da extensão:
-   - URL do Alfred (`http://127.0.0.1:7072`) e token (`SHELL_EXECUTOR_TOKEN` do `.env`);
+   - URL do Alfred (`http://127.0.0.1:7073`) e token (`SHELL_EXECUTOR_TOKEN` do `.env`);
    - marque **só** as contas em que ela pode mexer (vazio = nada é executado);
    - **Modo teste** vem ligado: ela só toca mensagens em pastas cujo caminho contém `Alfred-Teste`;
    - **Executar de verdade** vem desligado: ela só relata `simulado` ao Alfred.

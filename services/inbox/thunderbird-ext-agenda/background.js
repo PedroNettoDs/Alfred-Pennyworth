@@ -2,7 +2,7 @@
 "use strict";
 
 const PADRAO = {
-  urlAlfred: "http://127.0.0.1:7072",
+  urlAlfred: "http://127.0.0.1:7073",
   token: "",
   calendario: "Agenda",      // nome do calendário no Thunderbird (o Google via CalDAV se chama "Agenda")
   intervaloMin: 2,

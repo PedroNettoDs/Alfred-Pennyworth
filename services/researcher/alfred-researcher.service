@@ -1,5 +1,5 @@
 [Unit]
-Description=Alfred Research Service (FastAPI :PORT_RESEARCHER, padrão 7071)
+Description=Alfred Research Service (FastAPI :PORT_RESEARCHER, padrão 7072)
 After=network-online.target
 # Unit de USUÁRIO, como as do inbox: roda com o mesmo usuário que antes ia em User= (sem sudo).
 # run.sh carrega o .env da raiz e escolhe a porta (PORT_RESEARCHER).

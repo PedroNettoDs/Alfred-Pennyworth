@@ -4,7 +4,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 
 **Poder 3 — WhatsApp:** mensagens e áudios recebidos pela Evolution API passam pelo mesmo tratamento (transcrição local com gemma4 → classificação → pendência com texto + áudio em que Alfred pergunta **"o que você quer responder?"**); a resposta de Pedro — por WhatsApp, terminal, chat ou API — é enviada de volta ao contato. Ver [WhatsApp (Poder 3)](#whatsapp-poder-3--evolution-api).
 
-**Painel do Alfred:** interface web local servida pela própria API (`http://127.0.0.1:7072/painel`, só desta máquina, login com o `SHELL_EXECUTOR_TOKEN`) para ver as pendências, revisar a resposta que o Alfred propõe e autorizar, editar ou recusar — além de agenda, lotes de limpeza e estado do sistema. Ver [Painel do Alfred](#painel-do-alfred).
+**Painel do Alfred:** interface web local servida pela própria API (`http://127.0.0.1:7073/painel`, só desta máquina, login com o `SHELL_EXECUTOR_TOKEN`) para ver as pendências, revisar a resposta que o Alfred propõe e autorizar, editar ou recusar — além de agenda, lotes de limpeza e estado do sistema. Ver [Painel do Alfred](#painel-do-alfred).
 
 ## Como rodar
 
@@ -22,7 +22,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh responder-texto <id> "Carlos, mando até quinta."   # pendência de WhatsApp → envia ao contato
 ./run.sh whatsapp status | qrcode | webhook URL | simular payload.json | notificar <id>
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
-./run.sh serve           # API HTTP (FastAPI :7072) para o N8N e para o webhook da Evolution + Painel em /painel
+./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
 ```
 
 Flags do ciclo: `--inbox NOME`, `--desde HORAS`, `--reprocessar` (ignora o `inbox_seen.json`), `--max N`, `--sem-notificar`, `--json`.
@@ -146,7 +146,7 @@ Qualquer caminho atualiza o mesmo `pendencias.yml` (e grava por onde veio em `re
 
 | Caminho | Como |
 |---------|------|
-| Painel do Alfred | `http://127.0.0.1:7072/painel` → detalhe da pendência → **Vou** / **Não vou** (nota opcional) — ver [Painel](#painel-do-alfred) |
+| Painel do Alfred | `http://127.0.0.1:7073/painel` → detalhe da pendência → **Vou** / **Não vou** (nota opcional) — ver [Painel](#painel-do-alfred) |
 | Pergunta gráfica (fica ociosa até o clique) | processo destacado por pendência: notificação com botões **Vou / Não vou / Ouvir** (`notificar_dbus.py`, D-Bus direto) → se não houver suporte a ações, `kdialog --yesnocancel` → `zenity`. "Ouvir" toca o áudio e pergunta de novo |
 | Terminal interativo | `./run.sh perguntar [--ouvir]` — Alfred apresenta uma a uma e espera `vou` / `nao` / `ouvir` / `ver` / `pular` |
 | Terminal | `./run.sh responder <id> vou` |
@@ -155,7 +155,7 @@ Qualquer caminho atualiza o mesmo `pendencias.yml` (e grava por onde veio em `re
 
 ## API HTTP (para o N8N)
 
-`./run.sh serve` sobe o FastAPI em `PORT_INBOX` (7072), autenticado com `Authorization: Bearer <SHELL_EXECUTOR_TOKEN>` (o [Painel](#painel-do-alfred), em `/painel/*`, usa sessão por cookie e só aceita 127.0.0.1):
+`./run.sh serve` sobe o FastAPI em `PORT_INBOX` (7073), autenticado com `Authorization: Bearer <SHELL_EXECUTOR_TOKEN>` (o [Painel](#painel-do-alfred), em `/painel/*`, usa sessão por cookie e só aceita 127.0.0.1):
 
 | Método | Rota | Função |
 |--------|------|--------|
@@ -175,7 +175,7 @@ Qualquer caminho atualiza o mesmo `pendencias.yml` (e grava por onde veio em `re
 | GET | `/whatsapp/status` | configuração, estado da instância, pendências de WhatsApp aguardando, `fila_espera` (mensagens esperando `atraso_minutos`) |
 | GET/POST | `/painel` · `/painel/*` | [Painel do Alfred](#painel-do-alfred): telas HTML e ações do painel — sem Bearer, com sessão por cookie + CSRF, só cliente e Host 127.0.0.1 / localhost / ::1 (não aparece no `/docs`) |
 
-Do container do N8N o host é `http://172.17.0.1:7072`.
+Do container do N8N o host é `http://172.17.0.1:7073`.
 
 ## Painel do Alfred
 
@@ -197,7 +197,7 @@ resposta, agenda ou limpeza.
    Se esquecer, a API sobe assim mesmo (webhook do WhatsApp, N8N, extensões e tools continuam), só **sem** as rotas
    `/painel` (404), e o log avisa: `[painel] Painel desativado: No module named 'jinja2'. Rode venv/bin/pip install -r
    requirements.txt e reinicie a API.` O `GET /pendencias/{id}/audio` continua funcionando com Bearer.
-2. Abra `http://127.0.0.1:7072/painel` e informe o `SHELL_EXECUTOR_TOKEN` do `.env`. Sem token no `.env`, o login
+2. Abra `http://127.0.0.1:7073/painel` e informe o `SHELL_EXECUTOR_TOKEN` do `.env`. Sem token no `.env`, o login
    avisa "SHELL_EXECUTOR_TOKEN não definido no .env"; token errado → "Token inválido" (depois de 0,5 s; o que foi
    digitado nunca é ecoado).
 3. Modo desligado (modo jogo): a API não está no ar, então o painel simplesmente não abre (o painel não alterou o `alfred-switch.sh`).
@@ -233,7 +233,7 @@ resposta, agenda ou limpeza.
 | **Detalhe já resolvido** | "Esta pendência já foi resolvida por <caminho>.", o resultado (status, data, resposta, envio, nota, tarefa) e nenhuma ação |
 | **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
 | **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data) recolhível; **Aprovar** e **Recusar** (nota opcional) só nos lotes aguardando |
-| **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7070}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7071}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
+| **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
 
 O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
 enviado pelo WhatsApp, agenda, resolvida e por qual caminho (`respondido_via`), envio ok/simulado/falhou, áudio apagado.
@@ -394,7 +394,7 @@ A cada 10 min confere e conserta o que dá:
 
 | Checagem | Se falhar |
 |----------|-----------|
-| API do inbox (`:7072/health`) | `systemctl --user restart alfred-inbox-api` |
+| API do inbox (`:7073/health`) | `systemctl --user restart alfred-inbox-api` |
 | containers `alfred-evolution`, `alfred-evolution-db` | `docker start` |
 | conexão do WhatsApp (`connectionState`) | notificação **WhatsApp desconectado** com **[Mostrar QR code]** (gera e abre o QR; escaneie em Aparelhos conectados). Repete no máximo a cada 3 h; avisa quando reconectar |
 | Thunderbird aberto | só informa |
@@ -493,18 +493,18 @@ Com a instância no próprio número, toda conversa passa pelo Alfred — inclus
 - Contato que **já tem pendência aguardando** dentro de `agrupar_minutos` não espera: a mensagem é agrupada na hora, como antes — a pendência aberta já prova que Pedro não respondeu. A decisão vem de uma leitura feita antes da transcrição e da classificação; `agrupar_mensagem` confere de novo dentro da trava (ainda aguardando e do mesmo contato). Se outro processo resolveu a pendência no meio (ex.: Pedro clicou Enviar na notificação do PC), a mensagem não é agrupada e segue o fluxo normal (fila ou pendência nova) — não se perde.
 - O `/whatsapp/webhook` síncrono não devolve `notificacao` para mensagens agendadas (quando o prazo vence ninguém está esperando a resposta HTTP): com o N8N no meio, chame-o com `?notificar=1` para o Python avisar Pedro, ou use `atraso_minutos: 0`.
 - Depurar: `./run.sh whatsapp fila` lista contato, prazo e textos; `./run.sh whatsapp processar-fila --todos --sem-enviar` cria tudo na hora sem chamar a Evolution (com a API no ar a thread dela faz o mesmo — rodar os dois juntos pode duplicar); `whatsapp simular payload.json --imediato` ignora a espera.
-- `atraso_minutos: 0` volta ao comportamento anterior (pendência e avisos na hora). Qualquer mudança (código ou `perfis.yml`) só vale depois de reiniciar a API: `systemctl --user restart alfred-inbox-api` (logs: `journalctl --user -fu alfred-inbox-api`); não suba `./run.sh serve` em paralelo — a porta 7072 é a mesma.
+- `atraso_minutos: 0` volta ao comportamento anterior (pendência e avisos na hora). Qualquer mudança (código ou `perfis.yml`) só vale depois de reiniciar a API: `systemctl --user restart alfred-inbox-api` (logs: `journalctl --user -fu alfred-inbox-api`); não suba `./run.sh serve` em paralelo — a porta 7073 é a mesma.
 
 ### Subir a Evolution API e parear o número (QR code)
 
-1. No `.env`: `EVOLUTION_API_KEY` (`openssl rand -hex 16`), `EVOLUTION_POSTGRES_PASSWORD` (`openssl rand -hex 12`), `EVOLUTION_URL=http://localhost:8080`, `EVOLUTION_INSTANCE=alfred`, `WHATSAPP_NUMERO_PEDRO=55DDDNÚMERO` (só dígitos).
-2. `docker compose up -d evolution-postgres evolution-api` (a porta 8080 fica só em `127.0.0.1`; a imagem está fixada pelo digest da build validada — a `:latest` de 2026-05-06, que reporta v2.3.7). Confira: `curl -s -H "apikey: $EVOLUTION_API_KEY" http://localhost:8080/instance/fetchInstances`.
+1. No `.env`: `EVOLUTION_API_KEY` (`openssl rand -hex 16`), `EVOLUTION_POSTGRES_PASSWORD` (`openssl rand -hex 12`), `EVOLUTION_URL=http://localhost:8081`, `EVOLUTION_INSTANCE=alfred`, `WHATSAPP_NUMERO_PEDRO=55DDDNÚMERO` (só dígitos).
+2. `docker compose up -d evolution-postgres evolution-api` (a porta 8081 fica só em `127.0.0.1`; a imagem está fixada pelo digest da build validada — a `:latest` de 2026-05-06, que reporta v2.3.7). Confira: `curl -s -H "apikey: $EVOLUTION_API_KEY" http://localhost:8081/instance/fetchInstances`.
 3. `./run.sh whatsapp qrcode` — cria a instância (integração Baileys, `token` = `EVOLUTION_API_KEY`) se não existir, salva o QR em `logs/evolution_qr.png` e abre a imagem. No celular: **WhatsApp → Aparelhos conectados → Conectar aparelho** → escanear. Repita o comando se o QR expirar (a Evolution gira o QR a cada ~45 s; `QRCODE_LIMIT=30`). O PNG da Evolution é pequeno (348 px, módulos azuis): na validação o celular só leu depois de ampliado 2× em preto e branco e reaberto a cada QR novo. Depois de parear, `WHATSAPP_NUMERO_PEDRO` = número do `ownerJid` em `fetchInstances` quando a instância é o próprio número de Pedro.
-   - Equivalente em curl: `curl -X POST -H "apikey: $EVOLUTION_API_KEY" -H 'Content-Type: application/json' -d '{"instanceName":"alfred","integration":"WHATSAPP-BAILEYS","qrcode":true,"token":"'$EVOLUTION_API_KEY'"}' http://localhost:8080/instance/create` e depois `curl -H "apikey: ..." http://localhost:8080/instance/connect/alfred` (campo `base64` = PNG do QR).
-   - Ou pelo Evolution Manager (`http://localhost:8080/manager`, chave = `EVOLUTION_API_KEY`).
+   - Equivalente em curl: `curl -X POST -H "apikey: $EVOLUTION_API_KEY" -H 'Content-Type: application/json' -d '{"instanceName":"alfred","integration":"WHATSAPP-BAILEYS","qrcode":true,"token":"'$EVOLUTION_API_KEY'"}' http://localhost:8081/instance/create` e depois `curl -H "apikey: ..." http://localhost:8081/instance/connect/alfred` (campo `base64` = PNG do QR).
+   - Ou pelo Evolution Manager (`http://localhost:8081/manager`, chave = `EVOLUTION_API_KEY`).
 4. `./run.sh whatsapp status` deve mostrar `"estado_instancia": "open"`.
 5. Aponte o webhook da instância para o Alfred (`./run.sh serve` precisa estar no ar):
-   - **Sem N8N:** `./run.sh whatsapp webhook http://172.17.0.1:7072/whatsapp/webhook-async` — responde `202` na hora, processa em segundo plano e o Python manda o resumo + áudio a Pedro.
+   - **Sem N8N:** `./run.sh whatsapp webhook http://172.17.0.1:7073/whatsapp/webhook-async` — responde `202` na hora, processa em segundo plano e o Python manda o resumo + áudio a Pedro.
    - **Com N8N:** importe `n8n/alfred-whatsapp.json`, ative, e `./run.sh whatsapp webhook http://n8n:5678/webhook/alfred-whatsapp` (containers na mesma rede `alfred-net`).
    - O comando configura `base64: true` e só o evento `MESSAGES_UPSERT`, com o header `apikey` para o Alfred validar. **Na v2.3.7 o áudio chegou SEM `base64`** (o webhook foi configurado com a instância já conectada — a Evolution só lê `webhookBase64` ao conectar): o Python baixa com `getBase64FromMediaMessage` passando o `audioMessage` original (com `mediaKey`), e funciona igual.
    - Mensagens que o Alfred envia pela API não voltam como `messages.upsert` (são `SEND_MESSAGE`, que não assinamos) — o eco só aparece para o que Pedro digita no celular.
@@ -543,7 +543,7 @@ Se a pendência for respondida por outro caminho (WhatsApp, terminal, chat, pain
 
 ### Validação com WhatsApp real (2026-10-19)
 
-Instância no **próprio número de Pedro**, Evolution API "v2.3.7" (digest no compose), API do Alfred em `:7072` chamada direto pela Evolution (`/whatsapp/webhook-async`, sem N8N), contato de teste num segundo aparelho. Validado: texto → pendência → resumo + áudio na conversa "Você" → resposta citada entregue ao contato (citando a mensagem dele) + confirmação; áudio → download + transcrição gemma4 (~1 s para 10 s de fala) → pendência; `ignorar` citado; resposta direta pelo celular → `respondida_manual`; notificação no PC → Enviar (rascunho) entregue.
+Instância no **próprio número de Pedro**, Evolution API "v2.3.7" (digest no compose), API do Alfred em `:7073` chamada direto pela Evolution (`/whatsapp/webhook-async`, sem N8N), contato de teste num segundo aparelho. Validado: texto → pendência → resumo + áudio na conversa "Você" → resposta citada entregue ao contato (citando a mensagem dele) + confirmação; áudio → download + transcrição gemma4 (~1 s para 10 s de fala) → pendência; `ignorar` citado; resposta direta pelo celular → `respondida_manual`; notificação no PC → Enviar (rascunho) entregue.
 
 Divergências do formato real e correções (cobertas por `tests/payloads/evolution_v237_*.json` e `TestEvolutionV237`):
 
@@ -632,7 +632,7 @@ Antes só existia o áudio diário do jornal (monólogo de 2-3 min, `audio_jorna
 ./run.sh podcast --semana 2026-W43     # modo antigo: semana ISO
 ./run.sh podcast --dry-run             # só mostra os temas escolhidos (nada gravado, nada de LLM/TTS)
 ./run.sh podcast --sem-audio           # .md + manifesto, sem edge-tts
-curl -X POST :7072/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '{"dias":3}'
+curl -X POST :7073/semanal -H "Authorization: Bearer $SHELL_EXECUTOR_TOKEN" -d '{"dias":3}'
 ```
 (`semanal` continua funcionando como nome do subcomando.)
 
@@ -705,7 +705,7 @@ contra uma API de teste: listou os calendários, criou o evento com título/hor�
    temporário → manifest.json*, repetindo a cada abertura).
 3. *Complementos → engrenagem → Instalar complemento de um arquivo* → `alfred-agenda.xpi`; aceite a permissão
    de "acesso total" (é o que toda Experiment API pede).
-4. Opções da extensão: URL `http://127.0.0.1:7072`, token = `SHELL_EXECUTOR_TOKEN` do `.env`, calendário **Agenda**.
+4. Opções da extensão: URL `http://127.0.0.1:7073`, token = `SHELL_EXECUTOR_TOKEN` do `.env`, calendário **Agenda**.
 5. Teste: `./run.sh agenda anotar "teste do Alfred amanhã às 15h"` → em até 2 min aparece na Agenda → `./run.sh agenda desfazer <id>`.
 
 ## Limitações conhecidas

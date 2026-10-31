@@ -1,5 +1,5 @@
 [Unit]
-Description=Alfred Laya — decisões tipadas locais (laya-serve :PORT_LAYA, padrão 7073)
+Description=Alfred Laya — decisões tipadas locais (laya-serve :PORT_LAYA, padrão 7074)
 After=network-online.target
 # Unit de USUÁRIO, como as do inbox: roda com o mesmo usuário que antes ia em User= (sem sudo).
 # run.sh carrega o .env da raiz e escolhe a porta (PORT_LAYA).

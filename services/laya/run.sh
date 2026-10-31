@@ -21,7 +21,7 @@ fi
 
 # Só local: decisões de máquina não saem do host
 export LAYA_HOST="127.0.0.1"
-export LAYA_PORT="${PORT_LAYA:-7073}"
+export LAYA_PORT="${PORT_LAYA:-7074}"
 export LAYA_PRELOAD="${LAYA_PRELOAD:-1}"
 export LAYA_MODELS="${LAYA_MODELS:-multilingual}"
 export LAYA_DEFAULT_MODEL="${LAYA_DEFAULT_MODEL:-multilingual}"

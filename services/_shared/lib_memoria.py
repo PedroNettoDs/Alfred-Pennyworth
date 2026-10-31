@@ -267,7 +267,7 @@ def _vale_extrair(texto: str) -> bool:
 
     Hoje é heurística — mínimo de palavras e letras, e pelo menos uma palavra que não seja saudação,
     confirmação ou risada. Será trocada por uma decisão sim/não do Laya (classificador local servido em
-    127.0.0.1:7073) quando o modelo treinado for aprovado: mantenha a assinatura texto → bool para a
+    127.0.0.1:7074) quando o modelo treinado for aprovado: mantenha a assinatura texto → bool para a
     troca ficar só aqui.
     """
     palavras = re.findall(r"[^\W\d_]+", (texto or "").lower())

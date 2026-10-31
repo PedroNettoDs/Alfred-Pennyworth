@@ -127,12 +127,12 @@ if tem ollama; then
 fi
 
 # Rede (README → Setup → Rede): inbox/executor/researcher/Ollama escutam em 0.0.0.0; quem barra a rede local é o ufw
-EXPOSTAS="Ollama (11434), API do inbox (7072), executor (7070) e researcher (7071) escutam em 0.0.0.0"
+EXPOSTAS="Ollama (11434), API do inbox (7073), executor (7071) e researcher (7072) escutam em 0.0.0.0"
 if grep -qs "^ENABLED=yes" /etc/ufw/ufw.conf && systemctl is-active --quiet ufw 2>/dev/null; then
     if ! grep -qs '^DEFAULT_INPUT_POLICY="\(DROP\|REJECT\)"' /etc/default/ufw; then
         aviso "ufw ativo mas sem política de entrada DROP: $EXPOSTAS e ficam abertos para a rede local — sudo ufw default deny incoming"
     elif [[ ! -r /etc/ufw/user.rules ]]; then
-        aviso "não consegui ler as regras do ufw (sem permissão) — confira com 'sudo ufw status' se br-alfred está liberado para 7070:7072 e 11434"
+        aviso "não consegui ler as regras do ufw (sem permissão) — confira com 'sudo ufw status' se br-alfred está liberado para 7071:7073 e 11434"
     elif grep -q "br-alfred" /etc/ufw/user.rules; then
         echo "  ✔ ufw ativo (entrada DROP) e libera br-alfred (containers → APIs do host e Ollama)"
     else
@@ -146,7 +146,7 @@ fi
 # por isso a porta publicada por um container alfred-* conta como do Alfred.
 PUBLICADAS=""
 [[ -n "$DOCKER_MODO" ]] && PUBLICADAS=$(dk ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep '^alfred-')
-for v in PORT_WEBUI:3000 PORT_SEARXNG:8888 PORT_CHROMADB:8000 PORT_SHELL_EXECUTOR:7070 PORT_RESEARCHER:7071 PORT_INBOX:7072 PORT_EVOLUTION:8080; do
+for v in PORT_WEBUI:3001 PORT_SEARXNG:8889 PORT_CHROMADB:8001 PORT_SHELL_EXECUTOR:7071 PORT_RESEARCHER:7072 PORT_INBOX:7073 PORT_EVOLUTION:8081; do
     chave=${v%%:*}; porta=$(env_get "$chave"); porta=${porta:-${v##*:}}
     dono=$(ss -tlnpH "sport = :$porta" 2>/dev/null | head -1)
     [[ -z "$dono" ]] && continue
@@ -207,7 +207,7 @@ valores = {
     "WEBUI_SECRET_KEY": e["A_WEBUI"], "N8N_ENCRYPTION_KEY": e["A_N8N"], "N8N_BASIC_AUTH_USER": e["A_USER"],
     "N8N_BASIC_AUTH_PASSWORD": e["A_N8N_PASS"], "SHELL_EXECUTOR_TOKEN": e["A_TOKEN"],
     "EVOLUTION_API_KEY": e["A_EVO"], "EVOLUTION_POSTGRES_PASSWORD": e["A_PG"],
-    "EVOLUTION_URL": "http://localhost:8080", "WHATSAPP_DRY_RUN": "true", "DOCKER_BIND_IP": "127.0.0.1",
+    "EVOLUTION_URL": "http://localhost:8081", "WHATSAPP_DRY_RUN": "true", "DOCKER_BIND_IP": "127.0.0.1",
 }
 vazios = [k for k in ("WEBUI_SECRET_KEY", "N8N_ENCRYPTION_KEY", "N8N_BASIC_AUTH_PASSWORD", "SHELL_EXECUTOR_TOKEN",
                       "EVOLUTION_API_KEY", "EVOLUTION_POSTGRES_PASSWORD") if not valores[k]]
@@ -428,7 +428,7 @@ CLIP="wl-copy"; tem wl-copy || { tem xsel && CLIP="xsel -ib"; } || { tem xclip &
 cat <<EOF
 
 Próximos passos:
-  • Painel:   http://127.0.0.1:$(env_get PORT_INBOX | grep . || echo 7072)/painel — token (vai para a área de transferência, sem aparecer):
+  • Painel:   http://127.0.0.1:$(env_get PORT_INBOX | grep . || echo 7073)/painel — token (vai para a área de transferência, sem aparecer):
               grep -E '^SHELL_EXECUTOR_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '\\n' | $CLIP
   • Modelos:  $0 --modelos
   • Estado:   systemctl --user list-timers 'alfred-*' · $RAIZ/services/scripts/alfred-switch.sh status

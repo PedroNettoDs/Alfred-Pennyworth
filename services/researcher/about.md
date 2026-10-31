@@ -9,7 +9,7 @@ citações `[n]`). Ver [Pesquisa profunda](#pesquisa-profunda).
 ## Como rodar
 
 ```bash
-./run.sh          # inicia na porta PORT_RESEARCHER (default: 7071)
+./run.sh          # inicia na porta PORT_RESEARCHER (default: 7072)
 ```
 
 O `run.sh` lê o `.env` da raiz literalmente, linha a linha (antes fazia `source`, e um valor com `$` ou `(`
@@ -157,7 +157,7 @@ Sem nenhuma nota (busca vazia, tudo filtrado, downloads falharam) ou com síntes
 
 **Filtro de relevância (`_relevante`)** — função isolada, de propósito: hoje compara o embedding da subpergunta com
 o de título + trecho do resultado (`ollama_embed`, cosseno ≥ `pesquisa.relevancia_minima`, padrão 0.5); será
-trocada por uma decisão do **Laya** (classificador local, `127.0.0.1:7073`) quando o modelo treinado for aprovado —
+trocada por uma decisão do **Laya** (classificador local, `127.0.0.1:7074`) quando o modelo treinado for aprovado —
 só o corpo muda. Sem embedding (Ollama fora), deixa passar: o filtro economiza downloads, não derruba a pesquisa.
 O limiar depende do `MODEL_EMBED`; os números de `contagem` (resultados × relevantes) ajudam a calibrar.
 
@@ -166,7 +166,7 @@ nunca escolhe para onde ele vai:
 
 - só `http`/`https`, e o host precisa resolver **apenas** para IPs públicos (nada de `localhost`, rede local,
   `169.254.169.254`, CGNAT, IPv6 local ou IPv4 mapeado em IPv6);
-- redirects seguidos à mão (até 3), cada destino validado de novo — um 302 para `http://127.0.0.1:7072/` é recusado;
+- redirects seguidos à mão (até 3), cada destino validado de novo — um 302 para `http://127.0.0.1:7073/` é recusado;
 - no máximo 2 MB lidos por página (o resto é descartado) e 15 s no total, do pedido ao último byte;
 - só `text/html`, `application/xhtml+xml` e `text/plain` (PDF e afins ficam de fora); menos de 200 caracteres de
   texto (página só de JavaScript, paywall) não vira nota;
@@ -265,7 +265,7 @@ progresso/`interrompido` e o modo rápido. Os testes antigos do researcher conti
 | `SHELL_EXECUTOR_TOKEN` | Token Bearer de autenticação |
 | `VAULT_ALFRED` | Caminho do vault para salvar pesquisas |
 | `WEBUI_API_TOKEN` | Token para sync da Knowledge Base no Open WebUI |
-| `WEBUI_URL` | URL do Open WebUI (default: `http://localhost:3000`) |
-| `PORT_RESEARCHER` | Porta do serviço (default: `7071`) |
+| `WEBUI_URL` | URL do Open WebUI (default: `http://localhost:3001`) |
+| `PORT_RESEARCHER` | Porta do serviço (default: `7072`) |
 | `RESEARCH_MODEL_NOTAS` | Modo profundo: modelo do plano e das notas (sobrescreve `pesquisa.modelo_notas`; padrão `gemma4:e4b`) |
 | `RESEARCH_MODEL_SINTESE` | Modo profundo: modelo do relatório (sobrescreve `pesquisa.modelo_sintese`; padrão `MODEL_CHAT`) |

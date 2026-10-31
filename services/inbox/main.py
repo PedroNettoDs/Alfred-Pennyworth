@@ -2,7 +2,7 @@
 """
 Alfred Inbox API — fachada HTTP do inbox-assistant para o N8N (e outros orquestradores).
 
-Mesmo padrão do Researcher: FastAPI + Bearer SHELL_EXECUTOR_TOKEN, porta PORT_INBOX (7072).
+Mesmo padrão do Researcher: FastAPI + Bearer SHELL_EXECUTOR_TOKEN, porta PORT_INBOX (7073).
 Endpoints síncronos (rodam em threadpool — um /ciclo longo não bloqueia /pendencias).
 
 GET  /health
@@ -573,4 +573,4 @@ if painel is not None:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT_INBOX", "7072")))
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT_INBOX", "7073")))

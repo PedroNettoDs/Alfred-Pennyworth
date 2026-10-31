@@ -38,7 +38,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 │                                                                 │
 │  ┌─────────────────┐   ┌──────────────────┐   ┌─────────────┐  │
 │  │  Ollama          │   │  Shell Executor  │   │  Researcher │  │
-│  │  :11434          │   │  :7070 (systemd) │   │  :7071      │  │
+│  │  :11434          │   │  :7071 (systemd) │   │  :7072      │  │
 │  │  (llama3.1:8b)   │   │  FastAPI         │   │  (systemd)  │  │
 │  └────────▲─────────┘   └────────▲─────────┘   └──────▲──────┘  │
 │           │                      │                     │         │
@@ -50,13 +50,13 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 │           │                      │                     │        │
 │  ┌────────┴─────────────────┐    │                     │        │
 │  │  Open WebUI              │────┘─────────────────────┘        │
-│  │  :3000                   │  (tools chamam host via           │
+│  │  :3001                   │  (tools chamam host via           │
 │  │  (modelo Alfred)         │   172.17.0.1)                     │
 │  └──────────┬───────────────┘                                   │
 │             │                                                    │
 │    ┌────────┴───────┐  ┌──────────────┐  ┌──────────────┐      │
 │    │  SearXNG       │  │  ChromaDB    │  │  N8N         │      │
-│    │  :8888         │  │  :8000       │  │  :5678       │      │
+│    │  :8889         │  │  :8001       │  │  :5679       │      │
 │    └────────────────┘  └──────────────┘  └──────────────┘      │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -65,15 +65,15 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 
 | Serviço          | Porta | Tipo          | Função                                                   |
 |------------------|-------|---------------|----------------------------------------------------------|
-| Open WebUI       | 3000  | Docker        | Interface principal; executa modelo Alfred com tools     |
-| SearXNG          | 8888  | Docker        | Motor de busca privado; usado pelo WebUI e pelo Researcher |
-| ChromaDB         | 8000  | Docker        | Banco vetorial para RAG com embeddings                   |
-| N8N              | 5678  | Docker        | Automação de workflows (futuro)                          |
+| Open WebUI       | 3001  | Docker        | Interface principal; executa modelo Alfred com tools     |
+| SearXNG          | 8889  | Docker        | Motor de busca privado; usado pelo WebUI e pelo Researcher |
+| ChromaDB         | 8001  | Docker        | Banco vetorial para RAG com embeddings                   |
+| N8N              | 5679  | Docker        | Automação de workflows (futuro)                          |
 | Ollama           | 11434 | Host (nativo) | Servidor de LLMs; serve llama3.1:8b e nomic-embed       |
-| Shell Executor   | 7070  | Host (systemd --user; sistema na máquina original) | API REST que executa comandos no host sob whitelist       |
-| Researcher       | 7071  | Host (systemd --user; sistema na máquina original) | Orquestra busca web → síntese LLM → escrita no vault     |
-| Inbox Assistant  | 7072  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N); **Painel do Alfred** em `/painel` (só 127.0.0.1, login com o `SHELL_EXECUTOR_TOKEN`) |
-| Evolution API    | 8080 (127.0.0.1) | Docker  | WhatsApp pareado por QR code; entrega mensagens/áudios por webhook e envia as respostas de Pedro (+ PostgreSQL `evolution-postgres`) |
+| Shell Executor   | 7071  | Host (systemd --user; sistema na máquina original) | API REST que executa comandos no host sob whitelist       |
+| Researcher       | 7072  | Host (systemd --user; sistema na máquina original) | Orquestra busca web → síntese LLM → escrita no vault     |
+| Inbox Assistant  | 7073  | Host (systemd --user) | Lê o Thunderbird, monta o jornal diário das newsletters e cria pendências "vou / não vou"; recebe o webhook do WhatsApp e cria pendências "o que você quer responder?" (CLI + API para o N8N); **Painel do Alfred** em `/painel` (só 127.0.0.1, login com o `SHELL_EXECUTOR_TOKEN`) |
+| Evolution API    | 8081 (127.0.0.1) | Docker  | WhatsApp pareado por QR code; entrega mensagens/áudios por webhook e envia as respostas de Pedro (+ PostgreSQL `evolution-postgres`) |
 
 ### Comunicação entre Serviços
 
@@ -82,14 +82,14 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 | Open WebUI      | Ollama          | `http://172.17.0.1:11434`       | HTTP      |
 | Open WebUI      | SearXNG         | `http://searxng:8080`           | HTTP      |
 | Open WebUI      | ChromaDB        | `http://chromadb:8000`          | HTTP      |
-| Open WebUI      | Shell Executor  | `http://172.17.0.1:7070`        | HTTP (tool) |
-| Open WebUI      | Researcher      | `http://172.17.0.1:7071`        | HTTP (tool) |
-| Researcher      | SearXNG         | `http://localhost:8888`         | HTTP      |
+| Open WebUI      | Shell Executor  | `http://172.17.0.1:7071`        | HTTP (tool) |
+| Open WebUI      | Researcher      | `http://172.17.0.1:7072`        | HTTP (tool) |
+| Researcher      | SearXNG         | `http://localhost:8889`         | HTTP      |
 | Researcher      | Ollama          | `http://localhost:11434`        | HTTP      |
-| Researcher      | Open WebUI API  | `http://localhost:3000`         | HTTP      |
+| Researcher      | Open WebUI API  | `http://localhost:3001`         | HTTP      |
 | Researcher      | Vault (alfred)  | filesystem                      | I/O direto |
-| Evolution API   | Inbox Assistant | `http://172.17.0.1:7072/whatsapp/webhook-async` (ou o Webhook do N8N: `http://n8n:5678/webhook/alfred-whatsapp`) | HTTP (webhook) |
-| Inbox Assistant | Evolution API   | `http://localhost:8080` (`EVOLUTION_URL`; vazio = simulado) | HTTP (`apikey`) |
+| Evolution API   | Inbox Assistant | `http://172.17.0.1:7073/whatsapp/webhook-async` (ou o Webhook do N8N: `http://n8n:5678/webhook/alfred-whatsapp`) | HTTP (webhook) |
+| Inbox Assistant | Evolution API   | `http://localhost:8081` (`EVOLUTION_URL`; vazio = simulado) | HTTP (`apikey`) |
 | N8N             | Evolution API   | `http://evolution-api:8080`     | HTTP (`apikey`) |
 
 > **Nota:** Containers acessam o host via `172.17.0.1` (gateway padrão da bridge `docker0`). Serviços no host acessam containers via `localhost:<porta-exposta>`.
@@ -158,7 +158,7 @@ Alfred-Pennyworth/
 │   │   ├── vigia.py                   # A cada 10 min: API, Evolution, WhatsApp (aviso + QR), Thunderbird, áudios > 2 dias
 │   │   ├── thunderbird-ext-agenda/    # Extensão "Alfred — agenda" (Experiment API de calendário)
 │   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir)
-│   │   ├── main.py                    # FastAPI :7072 — fachada HTTP para o N8N e webhook da Evolution
+│   │   ├── main.py                    # FastAPI :7073 — fachada HTTP para o N8N e webhook da Evolution
 │   │   ├── painel.py                  # Painel do Alfred (/painel, só 127.0.0.1): telas e ações de aprovação
 │   │   ├── painel_web/                # Templates Jinja2 + painel.css / painel.js do painel (sem build)
 │   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
@@ -259,7 +259,7 @@ sudo systemctl daemon-reload
 sudo ufw default deny incoming
 sudo systemctl enable --now ufw
 sudo ufw enable
-sudo ufw allow in on br-alfred to any port 7070:7072 proto tcp comment 'Alfred: containers -> APIs do host'
+sudo ufw allow in on br-alfred to any port 7071:7073 proto tcp comment 'Alfred: containers -> APIs do host'
 sudo ufw allow in on br-alfred to any port 11434 proto tcp comment 'Alfred: containers -> Ollama'
 ```
 
@@ -293,7 +293,7 @@ printf '[Service]\nEnvironment=OLLAMA_HOST=0.0.0.0:11434\n' | sudo tee /etc/syst
 sudo systemctl daemon-reload && sudo systemctl restart ollama.service
 sudo ufw default deny incoming
 sudo ufw enable                       # acesso por SSH? antes: sudo ufw allow ssh
-sudo ufw allow in on br-alfred to any port 7070:7072 proto tcp comment 'Alfred: containers -> APIs do host'
+sudo ufw allow in on br-alfred to any port 7071:7073 proto tcp comment 'Alfred: containers -> APIs do host'
 sudo ufw allow in on br-alfred to any port 11434 proto tcp comment 'Alfred: containers -> Ollama'
 ```
 
@@ -303,13 +303,13 @@ Depois, o mesmo `services/scripts/instalar.sh` (no Ubuntu ele usa `sg docker` at
 
 | Serviço | Escuta em | Quem alcança |
 |---|---|---|
-| Ollama (11434), API do inbox (7072), shell executor (7070), researcher (7071) | `0.0.0.0` | o próprio PC e os containers do Alfred; a rede local só é barrada **com o ufw ativo e entrada DROP** — sem isso, essas portas ficam abertas na rede local |
-| Open WebUI (3000), SearXNG (8888), ChromaDB (8000) | `DOCKER_BIND_IP` (`127.0.0.1` nas instalações novas) | só o próprio PC |
-| Evolution API (8080) | `127.0.0.1` | só o próprio PC |
+| Ollama (11434), API do inbox (7073), shell executor (7071), researcher (7072) | `0.0.0.0` | o próprio PC e os containers do Alfred; a rede local só é barrada **com o ufw ativo e entrada DROP** — sem isso, essas portas ficam abertas na rede local |
+| Open WebUI (3001), SearXNG (8889), ChromaDB (8001) | `DOCKER_BIND_IP` (`127.0.0.1` nas instalações novas) | só o próprio PC |
+| Evolution API (8081) | `127.0.0.1` | só o próprio PC |
 
 Os containers chegam ao host por `172.17.0.1` (`OLLAMA_BASE_URL`, webhook da Evolution, tools do Open WebUI), mas o
 tráfego entra pela bridge da rede `alfred-net`, que tem nome fixo (`br-alfred`, no `docker-compose.yml`). Com o ufw
-ativo e política de entrada DROP, só 7070–7072 e 11434 são liberadas, e só para quem entra por `br-alfred`. O
+ativo e política de entrada DROP, só 7071–7073 e 11434 são liberadas, e só para quem entra por `br-alfred`. O
 `instalar.sh` avisa quando o ufw está inativo (ou ausente), quando a entrada não é DROP e quando falta a regra de
 `br-alfred`. Bind em `127.0.0.1` cortaria os containers e bind em `172.17.0.1` quebraria o Painel (que só aceita
 cliente `127.0.0.1`). Porta publicada pelo Docker passa por cima do ufw — por isso Open WebUI, SearXNG e ChromaDB são
@@ -321,7 +321,7 @@ ou `docker compose down` e o `instalar.sh` de novo.
 
 **Configurar o Open WebUI**
 
-1. Acesse `http://localhost:3000`
+1. Acesse `http://localhost:3001`
 2. Crie a conta de administrador no primeiro acesso
 3. Vá em **Workspace → Tools → +** e importe cada arquivo de `tools/` (ver [seção 5](#5-tools-do-open-webui))
 4. Configure as Valves de cada tool com os tokens corretos (ver [seção 5](#5-tools-do-open-webui))
@@ -417,7 +417,7 @@ sudo systemctl enable --now alfred-executor
 
 # Confirmar que subiu
 sleep 4
-curl -s http://localhost:7070/health
+curl -s http://localhost:7071/health
 ```
 
 **6. Instalar o Researcher**
@@ -432,7 +432,7 @@ venv/bin/pip install -r requirements.txt
 sudo systemctl enable --now alfred-researcher
 
 sleep 4
-curl -s http://localhost:7071/health
+curl -s http://localhost:7072/health
 ```
 
 ---
@@ -468,8 +468,8 @@ curl -s http://localhost:7071/health
 Após importar, clique no ícone de engrenagem de cada tool e preencha:
 
 - **`token`**: valor de `SHELL_EXECUTOR_TOKEN` do `.env`
-- **`executor_url`**: `http://172.17.0.1:7070`
-- **`researcher_url`**: `http://172.17.0.1:7071`
+- **`executor_url`**: `http://172.17.0.1:7071`
+- **`researcher_url`**: `http://172.17.0.1:7072`
 - **`alfred_dir_host`** (Alfred Tech Briefing): a pasta do repositório **no host** — o `instalar.sh` imprime o valor
   no resumo, em "Próximos passos". A tool manda ao executor `<alfred_dir_host>/services/briefing/run.sh`; com o padrão
   `/home/netto/Alfred-Pennyworth` numa instalação em outra pasta, o executor recusa o comando (HTTP 403, "Comando não
@@ -523,9 +523,9 @@ inbox e o briefing já liam.
 
 | Unit | Modelo no repositório | O quê | Quando |
 |---|---|---|---|
-| `alfred-inbox-api.service` | `services/inbox/` | API do inbox + Painel (`PORT_INBOX`, 7072) | sempre no ar |
-| `alfred-executor.service` | `services/shell-executor/` | Shell Executor (`PORT_SHELL_EXECUTOR`, 7070) | sempre no ar |
-| `alfred-researcher.service` | `services/researcher/` | Researcher (`PORT_RESEARCHER`, 7071) | sempre no ar |
+| `alfred-inbox-api.service` | `services/inbox/` | API do inbox + Painel (`PORT_INBOX`, 7073) | sempre no ar |
+| `alfred-executor.service` | `services/shell-executor/` | Shell Executor (`PORT_SHELL_EXECUTOR`, 7071) | sempre no ar |
+| `alfred-researcher.service` | `services/researcher/` | Researcher (`PORT_RESEARCHER`, 7072) | sempre no ar |
 | `alfred-briefing-matinal.timer` / `-vespertino.timer` | `services/briefing/` | briefings por RSS | 07:00 / 18:00 |
 | `alfred-inbox.timer` | `services/inbox/` | ciclo do e-mail | 07:30 e 18:30 |
 | `alfred-semanal.timer` | `services/inbox/` | podcast (`--se-devido`) | 19:00 |
@@ -584,10 +584,10 @@ cd services/inbox
 ./run.sh pendencias      # fila aguardando resposta
 ./run.sh perguntar       # Alfred pergunta uma a uma no terminal e espera vou/nao
 ./run.sh responder <id> vou
-./run.sh serve           # API HTTP :7072 para o N8N + Painel do Alfred em /painel
+./run.sh serve           # API HTTP :7073 para o N8N + Painel do Alfred em /painel
 ```
 
-**Painel do Alfred** — com a API no ar, `http://127.0.0.1:7072/painel` (só desta máquina; login com o `SHELL_EXECUTOR_TOKEN`) mostra as pendências, o rascunho que o Alfred propõe para cada resposta (**Autorizar envio** / **Não enviar** / **Agendar**; **Vou** / **Não vou** no e-mail), a agenda (**Desfazer**), os lotes de limpeza (**Aprovar** / **Recusar**) e o estado do sistema, atualizando a cada 15 s. Dependência nova `jinja2`: num venv existente rode `venv/bin/pip install -r requirements.txt` antes de reiniciar a API (sem ele a API sobe sem o painel e o log avisa). Detalhes: [about.md](services/inbox/about.md#painel-do-alfred).
+**Painel do Alfred** — com a API no ar, `http://127.0.0.1:7073/painel` (só desta máquina; login com o `SHELL_EXECUTOR_TOKEN`) mostra as pendências, o rascunho que o Alfred propõe para cada resposta (**Autorizar envio** / **Não enviar** / **Agendar**; **Vou** / **Não vou** no e-mail), a agenda (**Desfazer**), os lotes de limpeza (**Aprovar** / **Recusar**) e o estado do sistema, atualizando a cada 15 s. Dependência nova `jinja2`: num venv existente rode `venv/bin/pip install -r requirements.txt` antes de reiniciar a API (sem ele a API sobe sem o painel e o log avisa). Detalhes: [about.md](services/inbox/about.md#painel-do-alfred).
 
 Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE` — vazio = descoberta automática: snap, `~/.config/thunderbird` (Thunderbird 158+), `~/.thunderbird` e flatpak —, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
 
@@ -610,8 +610,8 @@ Mensagens e **áudios** recebidos no WhatsApp passam pelo mesmo tratamento do e-
 docker compose up -d evolution-postgres evolution-api       # .env: EVOLUTION_API_KEY, EVOLUTION_POSTGRES_PASSWORD, WHATSAPP_NUMERO_PEDRO
 cd services/inbox
 ./run.sh whatsapp qrcode                                   # cria a instância e abre o QR (WhatsApp → Aparelhos conectados)
-./run.sh serve                                             # API :7072
-./run.sh whatsapp webhook http://172.17.0.1:7072/whatsapp/webhook-async   # ou a URL do Webhook do N8N
+./run.sh serve                                             # API :7073
+./run.sh whatsapp webhook http://172.17.0.1:7073/whatsapp/webhook-async   # ou a URL do Webhook do N8N
 ./run.sh whatsapp status                                   # instância "open", fila
 ./run.sh responder-texto <id> "Carlos, mando até quinta."  # resposta → WhatsApp do contato
 venv/bin/python -m unittest tests.test_whatsapp -v         # 63 testes offline (inclui o formato real da Evolution v2.3.7)
@@ -638,7 +638,7 @@ services/scripts/alfred-switch.sh status
 | Desligar faz | Religar faz |
 |---|---|
 | para os timers (briefings 07:00 e 18:00, e-mail 07:30/18:30, podcast 19:00, vigia) e qualquer execução em andamento | `docker start` banco + Evolution |
-| para a API do Alfred (:7072) — WhatsApp deixa de ser processado e o Painel não abre | sobe a API |
+| para a API do Alfred (:7073) — WhatsApp deixa de ser processado e o Painel não abre | sobe a API |
 | `docker stop` da Evolution API (WhatsApp) e do banco dela | religa só os timers **habilitados** — um timer desabilitado de propósito (ex.: briefing vespertino) continua parado (o vigia confere tudo em seguida) |
 | fecha as notificações que esperam clique (as pendências continuam aguardando) | reabre essas notificações |
 | descarrega os modelos do Ollama da VRAM (GPU livre para jogar) | — |
@@ -674,7 +674,7 @@ Localização: `services/scripts/`
 
 ```bash
 WEBUI_API_TOKEN=<token gerado no WebUI>
-WEBUI_URL=http://localhost:3000
+WEBUI_URL=http://localhost:3001
 RESEARCHER_KB_ALFRED_ID=<ID da KB do Alfred no WebUI>
 RESEARCHER_KB_PEDRO_ID=<ID da KB do Pedro no WebUI>
 VAULT_ALFRED=/caminho/para/vault/alfred
@@ -733,10 +733,10 @@ systemctl --user restart alfred-executor      # Reiniciar após alterar .env
 journalctl --user -fu alfred-researcher       # Logs em tempo real
 
 # ── Health checks ─────────────────────────────────────────────
-curl -s http://localhost:7070/health          # Shell Executor
-curl -s http://localhost:7071/health          # Researcher
-curl -s http://localhost:3000/health          # Open WebUI
-curl -s 'http://localhost:8888/search?q=test&format=json' | head -c 200  # SearXNG
+curl -s http://localhost:7071/health          # Shell Executor
+curl -s http://localhost:7072/health          # Researcher
+curl -s http://localhost:3001/health          # Open WebUI
+curl -s 'http://localhost:8889/search?q=test&format=json' | head -c 200  # SearXNG
 
 # ── Ollama ────────────────────────────────────────────────────
 ollama list                                   # Modelos instalados
@@ -806,19 +806,19 @@ docker compose up -d
 
 ```bash
 systemctl --user restart alfred-researcher     # máquina original: sudo systemctl restart alfred-researcher
-curl -s http://localhost:7071/health
+curl -s http://localhost:7072/health
 ```
 
 ---
 
-### `curl http://localhost:7070/health` retorna "Connection refused" logo após `systemctl start`
+### `curl http://localhost:7071/health` retorna "Connection refused" logo após `systemctl start`
 
 **Causa:** O uvicorn leva alguns segundos para completar a inicialização.  
 **Solução:** Aguarde 3–5 segundos após o start antes de testar. Para scripts de automação, use um loop com retry:
 
 ```bash
 for i in $(seq 1 10); do
-    curl -sf http://localhost:7070/health && break
+    curl -sf http://localhost:7071/health && break
     sleep 1
 done
 ```

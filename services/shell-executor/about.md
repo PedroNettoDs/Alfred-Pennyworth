@@ -5,7 +5,7 @@ API REST mínima que permite ao Open WebUI executar comandos shell no host sob u
 ## Como rodar
 
 ```bash
-./run.sh          # inicia na porta PORT_SHELL_EXECUTOR (default: 7070)
+./run.sh          # inicia na porta PORT_SHELL_EXECUTOR (default: 7071)
 ```
 
 O `run.sh` lê o `.env` da raiz literalmente, linha a linha (antes fazia `source`, e um valor com `$` ou `(`
@@ -136,4 +136,4 @@ Nenhuma lib compartilhada — serviço propositalmente mínimo.
 | Variável | Uso |
 |----------|-----|
 | `SHELL_EXECUTOR_TOKEN` | Token Bearer obrigatório para autenticação |
-| `PORT_SHELL_EXECUTOR` | Porta do serviço (default: `7070`) |
+| `PORT_SHELL_EXECUTOR` | Porta do serviço (default: `7071`) |

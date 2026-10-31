@@ -79,7 +79,7 @@ services:
 
   # ── Evolution API (WhatsApp) ────────────────────────────────
   # Pareia um número de WhatsApp por QR code e entrega as mensagens recebidas
-  # por webhook (texto e áudio em base64) ao Inbox Assistant (:7072) ou ao N8N.
+  # por webhook (texto e áudio em base64) ao Inbox Assistant (:7073) ou ao N8N.
   # Pareamento e webhook: services/inbox/about.md → "Poder 3 — WhatsApp".
   # Porta só em 127.0.0.1: a API é autenticada por uma chave única (EVOLUTION_API_KEY).
   evolution-api:
@@ -136,7 +136,7 @@ services:
 networks:
   alfred-net:
     driver: bridge
-    # Nome fixo da interface no host: o firewall libera as APIs do host (7070-7072) e o Ollama (11434)
+    # Nome fixo da interface no host: o firewall libera as APIs do host (7071-7073) e o Ollama (11434)
     # só para quem entra por br-alfred (os containers), nunca para a rede local. Máquina com a rede
     # antiga (sem este nome): `docker compose down` e `up -d` recriam a rede.
     driver_opts:

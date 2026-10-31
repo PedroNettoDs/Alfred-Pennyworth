@@ -213,7 +213,7 @@ def cmd_whatsapp(args):
     if sub == "webhook":
         url = args.arg
         if not url:
-            print("Uso: whatsapp webhook http://172.17.0.1:7072/whatsapp/webhook-async  (ou a URL do Webhook do N8N)")
+            print("Uso: whatsapp webhook http://172.17.0.1:7073/whatsapp/webhook-async  (ou a URL do Webhook do N8N)")
             return 1
         r = lw.configurar_webhook(url, headers={"apikey": lw.api_key()})
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
