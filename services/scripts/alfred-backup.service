@@ -1,0 +1,20 @@
+[Unit]
+Description=Alfred — backup semanal (logs/, VAULT_ALFRED, bancos SQLite, perfis.yml → tar.gz datado; sem .env e data/)
+# Disparado por alfred-backup.timer. Unit de USUÁRIO: instale em ~/.config/systemd/user/
+# Destino: ALFRED_BACKUP_DIR do .env ou ~/.local/share/alfred/backups (guarda os 8 mais novos).
+
+[Service]
+Type=oneshot
+WorkingDirectory=@ALFRED_DIR@/services/scripts
+ExecStart="@ALFRED_DIR@/services/inbox/venv/bin/python" "@ALFRED_DIR@/services/scripts/backup.py" criar
+StandardOutput=journal
+StandardError=journal
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target
+
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).

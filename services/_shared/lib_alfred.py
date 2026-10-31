@@ -16,6 +16,7 @@ fallbacks sensatos. Nenhum hardcode de URL ou modelo.
 import os
 import re
 import json
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -79,10 +80,82 @@ def load_env(env_path: Optional[Path] = None, override: bool = True) -> dict:
 
 
 # ── 2. log ────────────────────────────────────────────────────
+# Máscaras do sanitizar(), aplicadas nesta ordem: segredos, telefones (+55 antes do número cru) e e-mails.
+_RE_BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9\-._~+/]+=*")
+# WEBUI_API_TOKEN=..., EVOLUTION_API_KEY: ..., ?apikey=..., "access_token": "..." — o nome fica, o valor some
+_RE_CHAVE = re.compile(r"(?i)\b([A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|SENHA))(['\"]?\s*[=:]\s*['\"]?)[^\s'\"&,;})\]]+")
+_RE_MAIS_55 = re.compile(r"\+55[\s.()-]*\d{2}[\s.()-]*\d{4,5}[\s.-]?\d{4}\b")   # +55 (11) 98765-1234
+_RE_NUMERO_55 = re.compile(r"\b55\d{10,11}\b")   # 5511987651234 — cru ou no JID ...@s.whatsapp.net
+# JID do WhatsApp (@s.whatsapp.net, @g.us) não é e-mail: o número já foi mascarado acima
+_RE_EMAIL = re.compile(r"\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@(?!s\.whatsapp\.net\b|g\.us\b)"
+                       r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b")
+
+
+def _mascarar_numero(digitos: str) -> str:
+    """5511987651234 → 55119****1234: DDI + DDD + 1º dígito e os 4 últimos ficam legíveis."""
+    return digitos[:5] + "*" * (len(digitos) - 9) + digitos[-4:]
+
+
+def sanitizar(texto: str) -> str:
+    """
+    Tira segredos e dados pessoais de uma linha de log, mantendo o resto legível:
+      - `Bearer <token>` → `Bearer ***`
+      - `*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`, `apikey` (com `=` ou `:`) → `NOME=***`
+      - telefone `+55 (11) 98765-1234` → `+55119****1234`; `5511987651234[@s.whatsapp.net]` → `55119****1234[...]`
+      - e-mail `pedro@gmail.com` → `p***@gmail.com`
+    Função pura (sem efeito colateral) — log() passa toda mensagem por aqui.
+    """
+    texto = _RE_BEARER.sub(r"\1 ***", texto)
+    texto = _RE_CHAVE.sub(r"\1\2***", texto)
+    texto = _RE_MAIS_55.sub(lambda m: "+" + _mascarar_numero(re.sub(r"\D", "", m.group())), texto)
+    texto = _RE_NUMERO_55.sub(lambda m: _mascarar_numero(m.group()), texto)
+    return _RE_EMAIL.sub(r"\1***@\2", texto)
+
+
 def log(msg: str):
-    """Log padronizado com timestamp [HH:MM:SS]."""
+    """Log padronizado com timestamp [HH:MM:SS]. Passa por sanitizar(): o journal não guarda segredos nem contatos."""
     ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    print(f"[{ts}] {sanitizar(str(msg))}", flush=True)
+
+
+# ── 2b. gravar_atomico ────────────────────────────────────────
+def gravar_atomico(caminho: Path, conteudo: str | bytes) -> None:
+    """
+    Grava `conteudo` (texto vira UTF-8; bytes vão como estão) em `caminho` sem nunca deixar o arquivo pela
+    metade: escreve um temporário oculto e único
+    (`.<nome>.<aleatório>.tmp`) no MESMO diretório, fsync, e troca com os.replace (atômico no mesmo sistema
+    de arquivos). Se a escrita falhar no meio (disco cheio, exceção, queda), o arquivo antigo fica intacto e o
+    temporário é apagado. Mantém as permissões do arquivo trocado; fsync do diretório para a troca sobreviver
+    a um desligamento.
+
+    O nome único dispensa trava só para o temporário: "ler → mudar → gravar" com mais de um processo ainda
+    precisa da trava do arquivo (core.trava_arquivo).
+    """
+    caminho = Path(caminho)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    tmp = caminho.with_name(f".{caminho.name}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)   # 0666 & ~umask, como um open() comum
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(conteudo.encode("utf-8") if isinstance(conteudo, str) else conteudo)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, caminho.stat().st_mode & 0o777)   # mantém as permissões do arquivo que vai ser trocado
+        except OSError:
+            pass
+        os.replace(tmp, caminho)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    try:
+        dfd = os.open(caminho.parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
 
 
 # ── 3. slugify ────────────────────────────────────────────────
@@ -370,7 +443,7 @@ def vault_write(
         body += "---\n\n"
 
     body += content
-    filepath.write_text(body, encoding="utf-8")
+    gravar_atomico(filepath, body)
     return filepath
 
 

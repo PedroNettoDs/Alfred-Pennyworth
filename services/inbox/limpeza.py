@@ -123,8 +123,7 @@ def registrar_classificacoes(classificacao: list[dict]) -> int:
         corte = _now() - timedelta(days=REGISTRO_DIAS)
         reg = {k: v for k, v in reg.items()
                if (core._parse_dt(v.get("registrado_em")) or _now()) > corte}
-        REGISTRO_FILE.parent.mkdir(parents=True, exist_ok=True)
-        REGISTRO_FILE.write_text(json.dumps(reg, indent=1, ensure_ascii=False), encoding="utf-8")
+        core.gravar_atomico(REGISTRO_FILE, json.dumps(reg, indent=1, ensure_ascii=False))
         return len(classificacao or [])
     except Exception as e:
         log(f"[limpeza] não consegui registrar categorias: {e}")
