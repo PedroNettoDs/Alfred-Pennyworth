@@ -1186,7 +1186,7 @@ def _desfazer_agenda_da_pendencia(pid: str) -> list[str]:
 _IDS_CORROMPIDO: dict[str, int] = {}   # tasks.yml ilegível → maior id que ele tinha (ver _load_tasks)
 
 
-def _add_task(title: str, due_date: Optional[str], tags: list[str]) -> Optional[int]:
+def _add_task(title: str, due_date: Optional[str], tags: list[str], priority: str = "normal") -> Optional[int]:
     """Cria tarefa em VAULT_ALFRED/tasks.yml no mesmo formato da tool alfred_tasks.
     Trava + gravação atômica: a tool do Open WebUI e o agendamento gravam o mesmo arquivo (ids únicos)."""
     f = vault() / "tasks.yml"
@@ -1194,7 +1194,7 @@ def _add_task(title: str, due_date: Optional[str], tags: list[str]) -> Optional[
         data = _load_tasks(f)
         tid = max(max((t.get("id", 0) for t in data["tasks"]), default=0), _IDS_CORROMPIDO.get(str(f), 0)) + 1
         data["tasks"].append({
-            "id": tid, "title": title, "status": "open", "priority": "normal", "tags": tags,
+            "id": tid, "title": title, "status": "open", "priority": priority, "tags": tags,
             "due_date": due_date, "created_at": datetime.now().isoformat(timespec="minutes"), "completed_at": None,
         })
         gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))

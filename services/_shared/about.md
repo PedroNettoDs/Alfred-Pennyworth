@@ -108,6 +108,36 @@ Memória automática: fatos duráveis sobre Pedro e seus contatos ("é vegetaria
 - `inbox/core.py` → `responder()` (nota de Pedro numa pendência de e-mail) e e-mails da categoria `contato`/`pessoal`: `extrair(..., fonte="email", sujeito=remetente)`.
 - Um timer diário (`alfred-vigia` ou novo) chamando `auditar()` — sem mudança, não chama o LLM.
 
+### `lib_ferramentas.py`
+Registro de ferramentas do Alfred para tool calling nativo do Ollama (`/api/chat` com `tools`), sem LangChain. Substitui as 10 tools do Open WebUI em `tools/*.py` (classe `Tools` + `Valves`); quem usa é a aba Conversa do Painel (próxima etapa).
+
+| Função | O que faz |
+|--------|-----------|
+| `@ferramenta(nome, descricao, perigosa=False, timeout=60)` | Registra uma função comum. O JSON Schema dos parâmetros sai da assinatura (`str`, `int`, `float`, `bool`, `Optional[...]`, `Literal[...]` → `enum`, valores padrão → fora de `required` e "(padrão: …)" no fim da descrição) e das linhas `:param x:` da docstring. Tipo não suportado ou nome repetido falham já na importação |
+| `esquemas()` | Lista `[{"type": "function", "function": {name, description, parameters}}]` pronta para o campo `tools` (cópia: mexer nela não muda o registro) |
+| `executar(nome, argumentos)` | Converte os argumentos do modelo para os tipos da assinatura (`"5"` → 5, `"true"` → True, `null`/ausente → padrão, chave desconhecida ignorada, `enum` conferido; aceita dict ou texto JSON), roda a função numa thread com o `timeout` do registro e devolve o texto para a mensagem `role: "tool"`, cortado em `MAX_SAIDA` (12 000) caracteres. **Nunca levanta:** argumento inválido, exceção e timeout viram uma linha `[erro] …`. Timeout abandona a thread (não dá para matá-la); numa ferramenta perigosa o texto avisa que a ação pode ter terminado depois |
+| `perigosa(nome)` | `True` para `executar_comando`, `responder_pendencia`, `responder_limpeza`, `salvar_nota` e `completar_tarefa`. A aprovação **não** é feita aqui: o chat mostra "Executar? [Sim] [Não]" e só então chama `executar()` |
+
+**Ferramentas (27):**
+
+| Origem (`tools/`) | Ferramentas | Como |
+|---|---|---|
+| `alfred_shell_executor` | `executar_comando` ⚠ | HTTP `POST /execute` no Shell Executor (whitelist dele; teto 1800 s) |
+| `alfred_system_monitor` | `relatorio_sistema`, `status_disco`, `status_gpu` | HTTP no Shell Executor, comandos fixos; `status_disco` só aceita caminho com letras, números, espaço e `/ . _ -` |
+| `alfred_researcher` | `pesquisar(tema, profundo=False)`, `andamento_pesquisa(job_id)` | HTTP `POST /research`; `profundo=true` → 202 + `job_id`, progresso em `GET /research/{id}` |
+| `alfred_briefing` | `gerar_briefing`, `ver_briefings`, `ler_briefing` | `services/briefing/run.sh` como subprocesso (600 s; lê o `BRIEFING_FILE=` impresso) e `VAULT_ALFRED/briefings/` |
+| `alfred_daily_digest` | `resumo_do_dia(dias=1)` | Sem LLM: briefings, `research/*/synthesis.md`, `decisions/`, `logs/`, `tasks.yml` e fatos da `lib_memoria` que vencem em 7 dias |
+| `alfred_pendencias` | `listar_pendencias`, `ver_pendencia`, `responder_pendencia` ⚠, `jornal_de_hoje`, `listar_limpezas`, `responder_limpeza` ⚠ | Direto: `core.listar_pendencias` / `obter_pendencia` / `responder(..., so_se_aguardando=True)`, `whatsapp.responder_texto` (pendência de WhatsApp), `core.ultimo_jornal_md`, `limpeza.listar_lotes` / `aprovar` / `recusar`. Origem gravada: `respondido_via: chat` |
+| `alfred_tasks` | `adicionar_tarefa`, `listar_tarefas`, `completar_tarefa` ⚠, `tarefas_vencidas` | O mesmo `VAULT_ALFRED/tasks.yml` do "vou" e da agenda: cria por `core._add_task` (ganhou `priority`), marca dentro de `core.trava_arquivo` com gravação atômica. `tasks.yml` ilegível → erro, nada é gravado por cima |
+| `alfred_memory` | `lembrar(texto, sujeito)`, `buscar_memoria(consulta)`, `listar_memoria(sujeito)` | `lib_memoria.extrair` / `contexto` / `listar` — o `memory.yml` chave-valor fica para trás (não há "esquecer": a `lib_memoria` não apaga fato avulso; a auditoria faz a faxina) |
+| `alfred_vault_reader` + `alfred_vault_writer` | `buscar_cofre(consulta, cofre="todos")`, `ler_nota(caminho, cofre="pedro")`, `listar_cofre`, `salvar_nota` ⚠ | As duas `search_vault` viraram `buscar_cofre`. Caminhos resolvidos dentro do cofre (absoluto, `..` ou symlink para fora → erro); `salvar_nota` nunca sobrescreve |
+
+- **Busca:** `buscar_cofre` passa por `_buscar(query, cofre, limite) -> [{cofre, caminho, titulo, trecho, score}]`, hoje `lib_db.buscar_notas` (FTS5). A busca híbrida de `lib_rag.py` entra trocando só essa função, com a mesma saída.
+- **Serviços:** sempre `127.0.0.1` — Shell Executor em `PORT_SHELL_EXECUTOR` (7070), Researcher em `PORT_RESEARCHER` (7071) —, com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN`. Nada de `172.17.0.1`.
+- **Importação:** `core`, `whatsapp` e `limpeza` (de `services/inbox/`) só são importados quando uma ferramenta precisa; `esquemas()` não carrega o pipeline do inbox.
+- Testes: `inbox/tests/test_ferramentas.py` (offline: vault temporário, índice FTS5 de verdade, HTTP / subprocess / WhatsApp / limpeza / `lib_memoria` mockados).
+- Os 27 esquemas custam ~3 200 tokens de prompt no `gemma4:e4b`. Teste real (31/10/2026): "quais pendências tenho?" → `listar_pendencias` com argumentos válidos.
+
 ### `lib_tts.py`
 `generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open; com `bloquear=True` passa ao próximo player se um sair com erro).
 
@@ -175,6 +205,7 @@ from _shared.lib_titulo import generate_title_via_llm
 from _shared.lib_audio import transcrever_audio
 from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
 from _shared.lib_memoria import extrair, contexto, auditar
+from _shared.lib_ferramentas import esquemas, executar, perigosa
 ```
 
 ## Variáveis de ambiente relevantes
@@ -195,3 +226,6 @@ from _shared.lib_memoria import extrair, contexto, auditar
 | `WHATSAPP_NUMERO_PEDRO` | `""` | Número de Pedro (DDI + DDD + número, só dígitos) que recebe os resumos |
 | `WHATSAPP_DRY_RUN` | `false` | `true` = simula os envios mesmo com a URL configurada |
 | `MEMORIA_DB` | `""` | Banco da memória automática (vazio = `db` da seção `memoria:` → `VAULT_ALFRED/memoria/memoria.db`) |
+| `VAULT_PEDRO` | `""` | Cofre do Pedro (`ler_nota(..., cofre="pedro")` em `lib_ferramentas`; indexado por `core.indexar_cofres`) |
+| `PORT_SHELL_EXECUTOR` / `PORT_RESEARCHER` | `7070` / `7071` | Portas em `127.0.0.1` que `lib_ferramentas` chama |
+| `SHELL_EXECUTOR_TOKEN` | `""` | Bearer do Shell Executor e do Researcher (`lib_ferramentas`) |
