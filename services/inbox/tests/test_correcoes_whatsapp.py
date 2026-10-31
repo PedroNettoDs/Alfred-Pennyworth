@@ -288,6 +288,46 @@ class TestVigiaFallback(unittest.TestCase):
         self.assertEqual(self.rodar(depois), [])
 
 
+class TestVivo(tp.Base):
+    """Rajada de webhooks ocupa o threadpool → /health não responde → o vigia reiniciava a API no meio do
+    processamento (31/10/2026, 226 mensagens atrasadas da Evolution). O vigia agora olha /vivo."""
+
+    def test_vivo_nao_toca_em_pendencias_nem_thunderbird(self):
+        def trava(*a, **k):
+            raise AssertionError("/vivo não pode fazer I/O")
+        with mock.patch.object(tp.main.core, "listar_pendencias", trava), \
+             mock.patch.object(tp.main, "find_thunderbird_profile", trava):
+            r = self.cliente().get("/vivo")
+        self.assertEqual((r.status_code, r.json()), (200, {"status": "ok"}))
+
+    def test_mensagem_anterior_ao_inicio_e_descartada(self):
+        import json, time
+        from pathlib import Path
+        from datetime import datetime, timezone
+        payload = json.loads((Path(tp.__file__).parent / "payloads" / "evolution_texto.json").read_text())
+        recente = json.loads(json.dumps(payload))
+        recente.setdefault("data", recente)["messageTimestamp"] = int(time.time())
+        with mock.patch.object(tp.main, "INICIO_API", datetime.now(timezone.utc)):
+            self.assertTrue(tp.main._anterior_ao_inicio(payload))      # capturado em 19/10
+            self.assertFalse(tp.main._anterior_ao_inicio(recente))
+            with mock.patch.object(tp.main.whatsapp, "processar_mensagem_whatsapp") as proc:
+                r = self.cliente().post("/whatsapp/webhook-async", json=payload,
+                                        headers={"Authorization": "Bearer " + tp.ENV["SHELL_EXECUTOR_TOKEN"]})
+            self.assertEqual(r.json()["status"], "ignorada")
+            proc.assert_not_called()
+        self.assertFalse(tp.main._anterior_ao_inicio(payload))          # sem lifespan (INICIO_API None): sem filtro
+
+    def test_vigia_checa_vivo_e_nao_health(self):
+        import vigia
+        urls = []
+        def get(url, **k):
+            urls.append(url)
+            return mock.Mock(status_code=200)
+        with mock.patch.object(vigia.httpx, "get", get):
+            self.assertEqual(vigia.checar_api(consertar=False), {"ok": True})
+        self.assertTrue(urls[0].endswith("/vivo"), urls)
+
+
 # ══════════════════════════════════════════════════════════════
 #  7. CLI: whatsapp qrcode, perguntar (EOF na nota), responder, podcast
 # ══════════════════════════════════════════════════════════════

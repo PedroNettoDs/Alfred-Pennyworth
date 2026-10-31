@@ -60,7 +60,7 @@ def _marcar_aviso(est: dict, chave: str) -> None:
 # ── checagens ─────────────────────────────────────────────────
 
 def checar_api(consertar: bool = True) -> dict:
-    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7073')}/health"
+    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7073')}/vivo"   # não /health: ver main.vivo
     try:
         r = httpx.get(url, timeout=8)
         if r.status_code == 200:

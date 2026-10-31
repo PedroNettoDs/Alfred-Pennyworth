@@ -39,6 +39,7 @@ import json
 import os
 import sys
 import threading
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -81,12 +82,32 @@ def _laco_fila_whatsapp(parar: threading.Event):
             return
 
 
+# Mensagens com horário anterior à subida da API (Alfred desligado, Evolution reconectando e despejando o
+# atraso) são descartadas no webhook: o Alfred só trata o que chega depois de ligado. None = sem filtro
+# (TestClient sem lifespan).
+INICIO_API: Optional[datetime] = None
+TOLERANCIA_INICIO = timedelta(minutes=2)   # o timestamp normalizado tem precisão de minuto
+
+
+def _anterior_ao_inicio(payload: dict) -> bool:
+    if INICIO_API is None:
+        return False
+    msg = whatsapp.normalizar_payload(payload) or {}
+    try:
+        return datetime.fromisoformat(msg.get("timestamp") or "") < INICIO_API - TOLERANCIA_INICIO
+    except ValueError:
+        return False
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global INICIO_API
+    INICIO_API = datetime.now(timezone.utc)
     parar = threading.Event()
     threading.Thread(target=_laco_fila_whatsapp, args=(parar,), name="whatsapp-fila", daemon=True).start()
     yield
     parar.set()   # se estiver no meio de um item, ele continua na fila e sai na próxima subida
+    INICIO_API = None
 
 
 app = FastAPI(title="Alfred Inbox", version="1.1.0", lifespan=lifespan)
@@ -146,6 +167,14 @@ class RespostaTextoRequest(BaseModel):
     texto: str
     enviar: bool = True
     nota: Optional[str] = ""
+
+
+@app.get("/vivo")
+async def vivo():
+    """Liveness para o vigia: roda no event loop, sem I/O. A /health usa o threadpool (pendências com trava,
+    SQLite, Thunderbird) e fica sem resposta quando uma rajada de webhooks ocupa todas as threads — o vigia
+    lia isso como API caída e reiniciava, matando o processamento em andamento."""
+    return {"status": "ok"}
 
 
 @app.get("/health")
@@ -306,6 +335,8 @@ def pendencia_links(pid: str, req: LinksRequest, authorization: Optional[str] = 
 # ══════════════════════════════════════════════════════════════
 
 def _processar_webhook(payload: dict, notificar: bool, enviar: bool) -> dict:
+    if _anterior_ao_inicio(payload):
+        return {"acao": "ignorada", "motivo": "mensagem anterior ao Alfred ser ligado"}
     try:
         return whatsapp.processar_mensagem_whatsapp(payload, notificar=notificar, enviar=enviar)
     except (KeyError, RuntimeError) as e:
@@ -349,6 +380,9 @@ def whatsapp_webhook_async(
     """Mesmo que /whatsapp/webhook, mas responde 202 na hora e processa em segundo plano —
     para a Evolution chamar direto, sem N8N (por padrão o Python avisa Pedro: notificar=1)."""
     check_webhook_auth(apikey, authorization, payload)
+    if _anterior_ao_inicio(payload):
+        return JSONResponse(status_code=202, content={"status": "ignorada",
+                                                      "motivo": "mensagem anterior ao Alfred ser ligado"})
     background.add_task(whatsapp.processar_mensagem_whatsapp, payload, None, enviar, notificar)
     return JSONResponse(status_code=202, content={"status": "aceito", "notificar": notificar, "enviar": enviar})
 
