@@ -45,13 +45,15 @@ Funções utilitárias base usadas por todos os serviços:
 
 | Função | O que faz |
 |--------|-----------|
-| `log(msg)` | Print com timestamp `[HH:MM:SS]` |
+| `log(msg)` | Print com timestamp `[HH:MM:SS]`, passado por `sanitizar()` |
+| `sanitizar(texto)` | Função pura que mascara segredos e contatos numa linha de log, deixando o resto legível: `Bearer ***`, `NOME_TOKEN=***` / `*_KEY` / `*_SECRET` / `*_PASSWORD` / `apikey=***` (também em JSON e dict), telefone `55119****1234` (cru, no JID `@s.whatsapp.net` ou `+55 (11) 9…`) e e-mail `p***@gmail.com`. JIDs de grupo (`@g.us`) ficam como estão |
+| `gravar_atomico(caminho, conteudo)` | Grava texto (UTF-8) ou bytes sem nunca deixar o arquivo pela metade: temporário oculto e único no mesmo diretório (`.<nome>.<aleatório>.tmp`), fsync, `os.replace` e fsync do diretório. Falhou no meio → o arquivo antigo fica intacto e o temporário some. Mantém as permissões do arquivo trocado. Não substitui a trava (`core.trava_arquivo`) em "ler → mudar → gravar" concorrente. É o mesmo objeto que `core.gravar_atomico` |
 | `slugify(text)` | Texto → slug seguro para nome de arquivo |
 | `ollama_generate(prompt, model, timeout, fmt, think, options, system, images)` | Chama `/api/generate` do Ollama. `images` = mídias em base64 — imagem **ou áudio** (WAV/MP3) em modelos com capacidade `audio`, como o gemma4 |
 | `ollama_embed(text, model)` | Gera embedding via `/api/embeddings` |
 | `ollama_embed_batch(texts, model)` | Embeddings em lote, reutiliza um único client HTTP |
 | `searxng_search(query, categories, max_results)` | Busca no SearXNG, retorna `[{title, url, snippet, source}]` |
-| `vault_write(vault_path, folder, filename, content, frontmatter)` | Escreve arquivo no vault Obsidian com frontmatter YAML |
+| `vault_write(vault_path, folder, filename, content, frontmatter)` | Escreve arquivo no vault Obsidian com frontmatter YAML (por `gravar_atomico`) |
 | `deduplicate_by_url_and_title(items, title_key)` | Remove duplicatas por URL exata ou título similar (≥80% palavras) |
 | `load_env(env_path)` | Carrega `.env` da raiz do projeto para `os.environ` |
 

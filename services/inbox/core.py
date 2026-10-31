@@ -39,7 +39,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import (  # noqa: E402
-    log, slugify, ollama_generate, ollama_generate_json, deduplicate_by_url_and_title,
+    log, slugify, ollama_generate, ollama_generate_json, deduplicate_by_url_and_title, gravar_atomico,
 )
 from _shared.lib_mail import (  # noqa: E402
     find_thunderbird_profile, list_accounts, fetch_messages, imap_fetch, limpar_url,
@@ -270,22 +270,8 @@ def trava_pendencias():
     return trava_arquivo(pend_file())
 
 
-def gravar_atomico(f: Path, texto: str) -> None:
-    """Escreve `<f>.tmp` no mesmo diretório e troca com os.replace — leitor nunca vê arquivo pela metade.
-    Chame dentro da trava do arquivo (o .tmp tem nome fixo)."""
-    f = Path(f)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_name(f.name + ".tmp")
-    tmp.unlink(missing_ok=True)   # sobra de uma queda (talvez de outro dono, ex.: root do container)
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(texto)
-        fh.flush()
-        os.fsync(fh.fileno())
-    try:
-        os.chmod(tmp, f.stat().st_mode & 0o777)   # mantém as permissões do arquivo que vai ser trocado
-    except OSError:
-        pass
-    os.replace(tmp, f)
+# gravar_atomico(f, texto) vem de _shared.lib_alfred (temporário único + fsync + os.replace) e continua
+# exposto como core.gravar_atomico. O temporário não precisa mais da trava, o "ler → mudar → gravar" sim.
 
 
 # ══════════════════════════════════════════════════════════════
@@ -317,8 +303,7 @@ def load_seen(path: Optional[Path] = None) -> dict:
 
 def save_seen(seen: dict, path: Optional[Path] = None):
     path = path or SEEN_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(seen, indent=2, ensure_ascii=False), encoding="utf-8")
+    gravar_atomico(path, json.dumps(seen, indent=2, ensure_ascii=False))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -654,7 +639,7 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
     log(f"[jornal] Markdown salvo: {md_path.name}")
     # Metadados para o podcast semanal (semanal.py): e-mails e notícias desta edição
     try:
-        (jd / f"{base}.json").write_text(json.dumps({
+        gravar_atomico(jd / f"{base}.json", json.dumps({
             "data": date_str,
             "emails": [{"message_id": e["message_id"], "from": f"{e['from_name']} <{e['from_addr']}>",
                         "from_name": e["from_name"] or e["from_domain"], "subject": e["subject"],
@@ -662,7 +647,7 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
                        for e in emails_noticia],
             "noticias": [{k: it.get(k, "") for k in ("title", "url", "snippet", "source", "published", "email_id")}
                          for it in unique],
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        }, ensure_ascii=False, indent=2))
     except Exception as e:
         log(f"[jornal] Falha ao gravar metadados JSON: {e}")
 

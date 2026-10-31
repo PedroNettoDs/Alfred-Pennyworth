@@ -530,6 +530,7 @@ inbox e o briefing já liam.
 | `alfred-inbox.timer` | `services/inbox/` | ciclo do e-mail | 07:30 e 18:30 |
 | `alfred-semanal.timer` | `services/inbox/` | podcast (`--se-devido`) | 19:00 |
 | `alfred-vigia.timer` | `services/inbox/` | vigia | 2 min após o login e a cada 10 min |
+| `alfred-backup.timer` | `services/scripts/` | backup (`backup.py criar`, ver [Backup e restore](#backup-e-restore)) | domingo 13:00 (`Persistent=true`) |
 
 Units de usuário sobem no login (com `loginctl enable-linger` sobem já no boot — o `instalar.sh` não liga o linger).
 Os containers voltam sozinhos com o Docker (`restart: unless-stopped`).
@@ -659,6 +660,7 @@ Localização: `services/scripts/`
 | `sync-knowledge.py`    | Sync incremental do vault → Knowledge Base do Open WebUI. Só re-indexa arquivos modificados desde o último sync (timestamp em `logs/alfred_last_sync`). | Após editar notas manualmente no Obsidian, ou para forçar re-indexação. Também é disparado automaticamente pelo Researcher após cada pesquisa. | `services/researcher/venv/bin/python services/scripts/sync-knowledge.py` (usa httpx do venv; log do disparo automático em `logs/sync-knowledge.log`) |
 | `webui-indexer.py`     | Indexa arquivos `.md` dos vaults nas *memories* do Open WebUI (não na Knowledge Base). | Quando quiser popular as memories globais do WebUI com o conteúdo dos vaults. | Implementação pendente — ver placeholder. |
 | `chromadb-indexer.py`  | Indexa arquivos `.md` no ChromaDB com embeddings via `nomic-embed-text`. Permite buscas vetoriais diretas fora do WebUI. | Quando precisar de RAG externo ao Open WebUI (ex.: workflows N8N consultando ChromaDB diretamente). | Implementação pendente — ver placeholder. |
+| `backup.py`            | Backup datado (`.tar.gz`) de `logs/`, do `VAULT_ALFRED`, dos bancos SQLite e do `perfis.yml`; restore com confirmação e `--dry-run`. Ver [Backup e restore](#backup-e-restore). | Toda semana pelo `alfred-backup.timer`; à mão antes de mexer em algo grande; restore depois de perda de dados ou ao trocar de máquina. | `services/inbox/venv/bin/python services/scripts/backup.py criar` |
 
 ### Diferença entre os três scripts
 
@@ -677,6 +679,39 @@ RESEARCHER_KB_ALFRED_ID=<ID da KB do Alfred no WebUI>
 RESEARCHER_KB_PEDRO_ID=<ID da KB do Pedro no WebUI>
 VAULT_ALFRED=/caminho/para/vault/alfred
 VAULT_PEDRO=/caminho/para/vault/pedro
+```
+
+### Backup e restore
+
+`services/scripts/backup.py` guarda o estado do Alfred num `.tar.gz` datado (`alfred-backup-AAAA-MM-DD_HHMMSS.tar.gz`).
+Roda com o Python de um venv do Alfred e lê o `.env` só para achar o `VAULT_ALFRED` e o `ALFRED_BACKUP_DIR`.
+
+| Entra | Não entra |
+|---|---|
+| `logs/` (seen, fila, categorias, estado do vigia…) | `.env` — segredos; guarde à parte ou refaça com o `instalar.sh` |
+| `VAULT_ALFRED` inteiro (pendências, agenda, memória, jornal, podcast) | `data/` — volumes do Docker, do root |
+| bancos SQLite (ex.: `VAULT_ALFRED/.alfred/alfred.db`), copiados pela API de backup online do SQLite (a do `sqlite3 .backup`): cópia consistente mesmo com a API gravando | `-wal`/`-shm`, `*.tmp`, `*.lock`, symlinks |
+| `services/_shared/perfis.yml` | o resto do repositório (está no git) |
+
+- **Destino:** `--destino`, `ALFRED_BACKUP_DIR` do `.env` ou `~/.local/share/alfred/backups` — nunca o `/tmp`, que
+  some no reboot. Para sobreviver a um disco que morre, aponte o `ALFRED_BACKUP_DIR` para outro disco.
+- O arquivo nasce `0600` (tem e-mails e conversas do WhatsApp), só ganha o nome final depois de completo e ficam os
+  `--manter` mais novos (padrão 8; `0` = todos).
+- **Restore:** escreve só o que está no backup (não apaga nada a mais), cada arquivo por troca atômica, e apaga o
+  `-wal`/`-shm` velho ao lado de cada banco restaurado. `repo/` volta para a raiz do repositório (`--raiz`) e `vault/`
+  para o `VAULT_ALFRED` (`--vault`; sem nenhum dos dois, o caminho de origem gravado no backup). Recusa o arquivo
+  inteiro se algum caminho escapar dessas pastas.
+- **Agendamento:** `alfred-backup.timer` (domingo 13:00, `Persistent=true`), instalado e habilitado pelo
+  `instalar.sh` como os outros timers. Ele não para no modo jogo (só lê e compacta, sem GPU).
+
+```bash
+services/inbox/venv/bin/python services/scripts/backup.py criar                              # backup agora
+services/inbox/venv/bin/python services/scripts/backup.py criar --destino /media/hd/alfred   # em outro disco
+services/inbox/venv/bin/python services/scripts/backup.py restaurar ARQUIVO.tar.gz --dry-run  # só mostra o que faria
+services/scripts/alfred-switch.sh off                                                         # pare o Alfred antes de restaurar
+services/inbox/venv/bin/python services/scripts/backup.py restaurar ARQUIVO.tar.gz            # pede "sim" (--sim pula)
+services/scripts/alfred-switch.sh on
+journalctl --user -u alfred-backup                                                            # resultado do backup semanal
 ```
 
 ---

@@ -534,7 +534,7 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
     if nao_resolvidos:
         manifesto["nao_resolvidos"] = nao_resolvidos   # sem message_id: a limpeza deve ignorá-los
     man_path = podcast_dir("manifestos") / f"{semana}.json"
-    man_path.write_text(json.dumps(manifesto, ensure_ascii=False, indent=2), encoding="utf-8")
+    core.gravar_atomico(man_path, json.dumps(manifesto, ensure_ascii=False, indent=2))
     log(f"[semanal] Manifesto: {man_path} ({len(emails)} e-mail(s), {len(nao_resolvidos)} sem message_id)")
 
     core._notify("Alfred — Resumo do Alfred (podcast)", f"{titulo}\n{len(temas)} temas" + (f" · {dur / 60:.0f} min" if audio_ok else ""))

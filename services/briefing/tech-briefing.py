@@ -26,7 +26,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import (
     log, slugify, ollama_generate, ollama_embed_batch, searxng_search,
-    deduplicate_by_url_and_title, vault_write,
+    deduplicate_by_url_and_title, vault_write, gravar_atomico,
 )
 from _shared.perfis import get_briefing, list_all
 from _shared.lib_templates import render_template
@@ -147,10 +147,8 @@ def load_seen() -> dict:
 
 
 def save_seen(seen: dict):
-    """Persiste dict em logs/briefing_seen.json. Cria diretório se não existir."""
-    SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(seen, f, indent=2, ensure_ascii=False)
+    """Persiste dict em logs/briefing_seen.json (gravação atômica). Cria diretório se não existir."""
+    gravar_atomico(SEEN_FILE, json.dumps(seen, indent=2, ensure_ascii=False))
 
 
 def split_new_vs_continuation(

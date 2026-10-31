@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer — Alfred backup semanal (domingo 13:00; se o PC estava desligado, roda no próximo login)
+# Sem Requires=alfred-backup.service: o timer já ativa a .service de mesmo nome (ver alfred-semanal.timer).
+
+[Timer]
+OnCalendar=Sun *-*-* 13:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

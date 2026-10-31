@@ -111,8 +111,16 @@ pendência lia o yml, gastava LLM + TTS e gravava a lista velha + 1).
   é criado com modo 0666 para o host e o root do container do Open WebUI abrirem o mesmo arquivo (mesmo inode pelo bind
   mount → o flock vale dos dois lados). São arquivos vazios e ocultos: não apague com processos rodando.
 - Só **gravações** pegam a trava ("ler → mudar → gravar", trecho curto: nada de LLM, TTS ou rede dentro). Leituras não
-  pegam — por isso toda gravação é **atômica** (`core.gravar_atomico`: `.tmp` + fsync + `os.replace`): quem lê vê o
-  arquivo velho inteiro ou o novo inteiro, nunca pela metade.
+  pegam — por isso toda gravação é **atômica** (`core.gravar_atomico`, que é o `_shared.lib_alfred.gravar_atomico`:
+  temporário oculto e único + fsync + `os.replace`): quem lê vê o arquivo velho inteiro ou o novo inteiro, nunca pela
+  metade. Também passam por ela `inbox_seen.json`/`whatsapp_seen.json` (`core.save_seen`), `inbox_categorias.json`
+  (limpeza), o `.json` de cada edição do jornal, os manifestos do podcast e o `briefing_seen.json`.
+- **Ainda sem gravação atômica** (arquivos em edição por outra sessão em 31/10/2026 — trocar quando liberarem):
+  `vigia.py:_salvar_estado` (`logs/vigia_estado.json`, `write_text` direto); `whatsapp.py:_save_fila` e
+  `lib_whatsapp` (ids enviados) usam `.tmp` de nome fixo + `replace` — atômico, mas sem fsync e com o `.tmp`
+  compartilhado entre processos; e `tools/alfred_memory.py:_save` (memória no vault, `write_text` direto, roda no
+  container). As notas `.md` (jornal, pendências, lotes, podcast) continuam com `write_text`: são escritas uma vez,
+  não são estado relido a cada ciclo.
 - Ordem das travas (evita deadlock): `whatsapp._LOCK` → pendências → tasks; agenda → tasks; limpeza sozinha; fila
   sozinha. Nunca pegar pendências segurando agenda ou tasks.
 - Criar pendência: o id é reservado dentro da trava, criando o `.md` vazio (`core._reservar_id`); LLM/TTS rodam fora e no
