@@ -220,6 +220,20 @@ agenda:
   criar_tarefa: true            # tarefa/lembrete também vira item em tasks.yml
   notificar: true               # notificação no PC com [Ok] [Desfazer]
 
+# ── Memória automática — fatos duráveis sobre Pedro e seus contatos ──
+# _shared/lib_memoria.py: extrai fatos (LLM local) → deduplica → SQLite FTS5 + vetores bge-m3.
+# Espelho legível em VAULT_ALFRED/memoria/<sujeito>.md (gerado; editar lá não muda a memória).
+# Ainda não ligada aos fluxos do inbox — ver _shared/about.md.
+memoria:
+  ativo: true
+  db: ""                        # vazio = VAULT_ALFRED/memoria/memoria.db (MEMORIA_DB no ambiente vence)
+  modelo: ""                    # vazio = MODEL_CLASSIFY → MODEL_CHAT
+  modelo_embed: "bge-m3"        # trocar exige rodar `auditar` (refaz os vetores do modelo antigo)
+  limiar_duplicata: 0.85        # cosseno acima disso → o LLM decide manter_novo / manter_antigo / fundir
+  limiar_contexto: 0.45         # cosseno mínimo para um fato entrar no contexto pela busca vetorial
+  max_caracteres: 6000          # texto mais longo que isso é cortado antes da extração
+  auditar_lote: 60              # fatos por chamada do LLM na auditoria
+
 # ── Defaults globais ──────────────────────────────────────────
 defaults:
   vault_alfred_subfolders:
