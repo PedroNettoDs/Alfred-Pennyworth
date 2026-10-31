@@ -10,7 +10,7 @@
 #  DESLIGAR:
 #    1. grava logs/alfred_desligado  → os run.sh recusam rodar sob o systemd (timers, API) mesmo
 #       depois de reiniciar o PC: o modo jogo só termina quando você liga de novo
-#    2. para os timers (briefing, e-mail, podcast, vigia) e qualquer execução em andamento
+#    2. para os timers (briefing, e-mail, podcast, vigia, índice do RAG) e qualquer execução em andamento
 #    3. para a API do Alfred (:7073) — o WhatsApp deixa de ser processado
 #    4. para a Evolution API (WhatsApp) — `docker stop`; com restart unless-stopped, continua parada após reboot
 #    5. fecha as notificações que esperam clique (as pendências continuam aguardando; voltam ao religar)
@@ -27,8 +27,8 @@ DESKTOP_FILE="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")/alfred
 APP_FILE="$HOME/.local/share/applications/alfred-switch.desktop"
 OLLAMA="${OLLAMA_BASE_URL:-http://localhost:11434}"
 
-TIMERS=(alfred-briefing-matinal.timer alfred-briefing-vespertino.timer alfred-inbox.timer alfred-semanal.timer alfred-vigia.timer)
-SERVICOS=(alfred-briefing-matinal.service alfred-briefing-vespertino.service alfred-inbox.service alfred-semanal.service alfred-vigia.service)
+TIMERS=(alfred-briefing-matinal.timer alfred-briefing-vespertino.timer alfred-inbox.timer alfred-semanal.timer alfred-vigia.timer alfred-rag.timer)
+SERVICOS=(alfred-briefing-matinal.service alfred-briefing-vespertino.service alfred-inbox.service alfred-semanal.service alfred-vigia.service alfred-rag.service)
 CONTAINERS_ORDEM_LIGAR=(alfred-evolution-db alfred-evolution)
 CONTAINERS_ORDEM_DESLIGAR=(alfred-evolution alfred-evolution-db)
 

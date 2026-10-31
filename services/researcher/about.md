@@ -127,11 +127,12 @@ vault_write() → salva synthesis.md em VAULT_ALFRED/research/<slug>/
     ↓
 _index_synthesis() → upsert no ChromaDB (não-bloqueante, falha silenciosa)
     ↓
-trigger_sync() → dispara sync assíncrono do vault para Knowledge Base do Open WebUI
+indexar_local() → põe as notas novas no RAG local (_shared/lib_rag: FTS5 + vetores), em thread
 ```
 
-O `trigger_sync()` só roda com `WEBUI_API_TOKEN` preenchido: executa `services/scripts/sync-knowledge.py` com o
-Python do venv do researcher (o script usa `httpx`) e grava a saída em `<repositório>/logs/sync-knowledge.log`.
+O `indexar_local()` roda `lib_rag.indexar_cofre(VAULT_ALFRED, "alfred")` em segundo plano: incremental, então só as
+notas desta pesquisa vão ao Ollama. Sem ChromaDB, atualiza só o FTS5. O researcher não chama mais o
+`sync-knowledge.py` (Knowledge Base do Open WebUI); o script e as variáveis `WEBUI_*` saem junto com o Open WebUI.
 
 ## Pesquisa profunda
 
@@ -239,7 +240,7 @@ sources: 12
 ```
 fastapi, uvicorn, httpx, pyyaml, beautifulsoup4
 ```
-E as libs compartilhadas: `lib_alfred`, `lib_chromadb`, `perfis`.
+E as libs compartilhadas: `lib_alfred`, `lib_chromadb`, `lib_rag` (que usa `lib_db`), `perfis`.
 
 `beautifulsoup4` (só o modo profundo usa; parser `html.parser` da biblioteca padrão, sem lxml) entrou na versão 3.2.
 O `run.sh` só instala dependências quando cria o venv — num venv que já existe, rode uma vez

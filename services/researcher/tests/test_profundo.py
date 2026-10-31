@@ -353,7 +353,7 @@ class TestFluxoProfundo(_Base):
             mock.patch.object(researcher, "VAULT_ALFRED", self.vault),
             mock.patch.object(researcher, "JOBS_DIR", self.jobs),
             mock.patch.object(researcher, "TOKEN", "tk"),
-            mock.patch.object(researcher, "WEBUI_TOKEN", ""),
+            mock.patch.object(researcher, "indexar_local", mock.Mock()),
             mock.patch.object(researcher, "_get_chroma", lambda: None),
             mock.patch.object(researcher, "searxng_search", lambda q, max_results=8: [dict(r) for r in RESULTADOS]),
             mock.patch.object(researcher, "ollama_generate_json", self._llm_json),

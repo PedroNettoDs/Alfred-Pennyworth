@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -175,6 +176,7 @@ class TestExecutorExecucao(unittest.TestCase):
 # ══════════════════════════════════════════════════════════════
 
 researcher = carregar(SERVICES / "researcher" / "main.py", "alfred_researcher_main")
+INDEXAR_LOCAL = researcher.indexar_local   # o setUp troca por um Mock; test_indexar_local_em_segundo_plano usa o original
 
 
 class TestResearcher(unittest.TestCase):
@@ -182,10 +184,11 @@ class TestResearcher(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.vault = Path(self.tmp.name) / "vault"
         self.vault.mkdir()
+        self.indexar = mock.Mock()
         self.patches = [
             mock.patch.object(researcher, "VAULT_ALFRED", self.vault),
             mock.patch.object(researcher, "TOKEN", "tk"),
-            mock.patch.object(researcher, "WEBUI_TOKEN", ""),
+            mock.patch.object(researcher, "indexar_local", self.indexar),
             mock.patch.object(researcher, "_get_chroma", lambda: None),
             mock.patch.object(researcher, "searxng_search",
                               lambda q, max_results=8: [{"url": f"http://x/{q}", "title": q, "snippet": "s"}]),
@@ -228,26 +231,22 @@ class TestResearcher(unittest.TestCase):
         self.assertTrue(slug.startswith("tema-") and len(slug) > 5)
         self.assertTrue((self.vault / "research" / slug / "synthesis.md").exists())
         self.assertFalse((self.vault / "research" / "synthesis.md").exists())
+        self.indexar.assert_called_once_with()   # nota nova vai para o índice local (RAG), não para o Open WebUI
         # outro tema só de símbolos não pega esta síntese como "cache exato"
         with mock.patch.object(researcher, "ollama_generate", lambda *a, **k: "## Visão Geral\nok"):
             self.assertFalse(self._post("!!!").json()["cached"])
 
-    def test_trigger_sync_usa_venv_e_loga(self):
-        scripts = Path(self.tmp.name) / "scripts"
-        scripts.mkdir()
-        (scripts / "sync-knowledge.py").write_text(
-            "import sys\nprint('exe=' + sys.executable)\nprint('erro-do-sync', file=sys.stderr)\n")
-        log = Path(self.tmp.name) / "logs" / "sync-knowledge.log"
-        with mock.patch.object(researcher, "SCRIPTS_DIR", scripts), mock.patch.object(researcher, "SYNC_LOG", log), \
-                mock.patch.object(researcher, "WEBUI_TOKEN", "tok"):
-            researcher.trigger_sync()
-            for _ in range(100):
-                if log.exists() and "erro-do-sync" in log.read_text():
-                    break
-                time.sleep(0.05)
-        texto = log.read_text()
-        self.assertIn("erro-do-sync", texto)
-        self.assertIn(f"exe={sys.executable}", texto)
+    def test_indexar_local_em_segundo_plano(self):
+        chamadas, pronto = [], threading.Event()
+
+        def indexar_cofre(vault, nome):
+            chamadas.append((vault, nome, threading.current_thread() is threading.main_thread()))
+            pronto.set()
+
+        with mock.patch.object(researcher.rag, "indexar_cofre", indexar_cofre):
+            INDEXAR_LOCAL()
+            self.assertTrue(pronto.wait(5))
+        self.assertEqual(chamadas, [(self.vault, "alfred", False)])
 
 
 class TestSyncKnowledge(unittest.TestCase):

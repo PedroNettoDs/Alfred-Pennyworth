@@ -14,8 +14,8 @@ registrada com @ferramenta(nome, descricao, perigosa=False); o JSON Schema dos p
                                   chamar executar()
 
 Código do repositório é chamado direto (services/inbox: core, whatsapp, limpeza; _shared: lib_db, lib_memoria).
-HTTP só para os serviços separados — Shell Executor (PORT_SHELL_EXECUTOR, 7070) e Researcher (PORT_RESEARCHER,
-7071) —, sempre em 127.0.0.1 com Bearer SHELL_EXECUTOR_TOKEN.
+HTTP só para os serviços separados — Shell Executor (PORT_SHELL_EXECUTOR, 7071) e Researcher (PORT_RESEARCHER,
+7072) —, sempre em 127.0.0.1 com Bearer SHELL_EXECUTOR_TOKEN.
 
 Sobreposições das tools antigas, juntas aqui:
   - alfred_memory (chave-valor em memory.yml) → lib_memoria: lembrar / buscar_memoria / listar_memoria
@@ -307,7 +307,7 @@ def _detalhe(r: httpx.Response) -> str:
 
 def _executor(comando: str, timeout: int) -> dict:
     """POST /execute no Shell Executor → {stdout, stderr, returncode}. Recusa ou falha → RuntimeError."""
-    r = _pedir("Shell Executor", "POST", _servico("PORT_SHELL_EXECUTOR", "7070") + "/execute",
+    r = _pedir("Shell Executor", "POST", _servico("PORT_SHELL_EXECUTOR", "7071") + "/execute",
                json={"command": comando, "timeout": timeout}, timeout=timeout + 5)
     if r.status_code == 200:
         return r.json()
@@ -395,7 +395,7 @@ def pesquisar(tema: str, profundo: bool = False) -> str:
     :param tema: O tema, ex.: "Kubernetes operators", "RAG com SQLite"
     :param profundo: true para a pesquisa profunda (subperguntas, leitura das páginas, relatório com citações)
     """
-    r = _pedir("Researcher", "POST", _servico("PORT_RESEARCHER", "7071") + "/research",
+    r = _pedir("Researcher", "POST", _servico("PORT_RESEARCHER", "7072") + "/research",
                json={"topic": tema, "num_queries": 4, "results_per_query": 8, "profundo": profundo}, timeout=300)
     if r.status_code == 202:
         d = r.json()
@@ -425,7 +425,7 @@ def andamento_pesquisa(job_id: str) -> str:
     """
     :param job_id: O job_id devolvido por pesquisar, ex.: "3f9c0a1b2d4e"
     """
-    r = _pedir("Researcher", "GET", _servico("PORT_RESEARCHER", "7071") + f"/research/{job_id.strip()}",
+    r = _pedir("Researcher", "GET", _servico("PORT_RESEARCHER", "7072") + f"/research/{job_id.strip()}",
                timeout=15)
     if r.status_code == 404:
         return f"Pesquisa não encontrada: {job_id}"

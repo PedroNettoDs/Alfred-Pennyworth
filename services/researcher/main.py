@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Alfred Research Service v3.2
-Orquestrador: cache exato → cache semântico → busca web → síntese LLM → vault → sync KB
+Orquestrador: cache exato → cache semântico → busca web → síntese LLM → vault → índice local (RAG)
 
 POST /research  {"topic": "...", "num_queries": 4, "results_per_query": 8,
                   "perfil": null, "refresh": false,
@@ -22,7 +22,6 @@ import math
 import os
 import re
 import socket
-import subprocess
 import sys
 import tempfile
 import threading
@@ -51,16 +50,13 @@ from _shared.lib_alfred import (
 )
 from _shared.perfis import get_perfil, load as carregar_perfis
 import _shared.lib_chromadb as chroma
+import _shared.lib_rag as rag
 
 app = FastAPI(title="Alfred Researcher", version="3.2.0")
 
 # ── Config ────────────────────────────────────────────────────
 TOKEN        = os.getenv("SHELL_EXECUTOR_TOKEN", "")
 VAULT_ALFRED = Path(os.getenv("VAULT_ALFRED", ""))
-WEBUI_TOKEN  = os.getenv("WEBUI_API_TOKEN", "")
-WEBUI_URL    = os.getenv("WEBUI_URL", "http://localhost:3001")
-SCRIPTS_DIR  = Path(__file__).parent.parent / "scripts"
-SYNC_LOG     = Path(__file__).resolve().parent.parent.parent / "logs" / "sync-knowledge.log"
 CACHE_DAYS   = 7
 CHROMA_COLLECTION = "research_alfred"
 SEMANTIC_DIST_MAX = 0.25   # distância coseno ≤ 0.25 ≡ similaridade ≥ 0.75
@@ -275,28 +271,13 @@ def _build_perfil_context(perfil_nome: str) -> str:
         return ""
 
 
-# ── Sync ──────────────────────────────────────────────────────
-def trigger_sync():
-    """Dispara sync incremental assíncrono do vault para a Knowledge Base.
-    Roda com o Python deste venv (o python3 do sistema não tem as libs) e grava a saída em
-    logs/sync-knowledge.log (antes ia para DEVNULL e toda falha passava em silêncio)."""
-    sync_script = SCRIPTS_DIR / "sync-knowledge.py"
-    if sync_script.exists() and WEBUI_TOKEN:
-        env = {**os.environ, "WEBUI_API_TOKEN": WEBUI_TOKEN, "WEBUI_URL": WEBUI_URL}
-        try:
-            SYNC_LOG.parent.mkdir(parents=True, exist_ok=True)
-            with open(SYNC_LOG, "a", encoding="utf-8") as saida:
-                saida.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} sync disparado pelo researcher ===\n")
-                saida.flush()
-                subprocess.Popen(
-                    [sys.executable, str(sync_script)],
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=saida,
-                    stderr=subprocess.STDOUT,
-                )
-        except OSError as e:
-            log(f"[researcher] Falha ao disparar sync-knowledge: {e}")
+# ── Índice local (RAG) ────────────────────────────────────────
+def indexar_local():
+    """Põe as notas recém-gravadas no índice local dos cofres (_shared/lib_rag: FTS5 + vetores no ChromaDB).
+    Em segundo plano — os embeddings levam alguns segundos e a resposta não espera. Incremental: no cofre
+    alfred só o que é novo ou mudou vai ao Ollama, ou seja, as notas desta pesquisa."""
+    threading.Thread(target=rag.indexar_cofre, args=(VAULT_ALFRED, "alfred"), name="indexar-rag",
+                     daemon=True).start()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -760,7 +741,7 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
     })
 
     _index_synthesis(slug, topic, date_str, topic_dir, relatorio, modo="profundo")
-    trigger_sync()
+    indexar_local()
 
     return {
         "status":        "success",
@@ -948,8 +929,8 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     # ── 5. Indexar no ChromaDB ────────────────────────────────
     _index_synthesis(slug, topic, date_str, topic_dir, synthesis)
 
-    # ── 6. Sync KB ────────────────────────────────────────────
-    trigger_sync()
+    # ── 6. Índice local (RAG) ─────────────────────────────────
+    indexar_local()
 
     return {
         "status":       "success",

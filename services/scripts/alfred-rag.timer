@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer — Alfred RAG local (5 min após o login e a cada 30 min)
+# Sem Requires=alfred-rag.service: o timer já ativa a .service de mesmo nome (ver alfred-semanal.timer).
+
+[Timer]
+# Só OnStartupSec: numa unit de usuário conta do início do gerenciador do usuário (= login, ou boot com linger).
+OnStartupSec=5min
+OnUnitActiveSec=30min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

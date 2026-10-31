@@ -84,6 +84,45 @@ Divide o mbox pelo separador real do Thunderbird (`From - <data>`), evitando os 
 ### `lib_db.py`
 SQLite + FTS5 em `VAULT_ALFRED/.alfred/alfred.db` (`ALFRED_DB` troca): `indexar_cofre()` / `buscar_notas()` (índice derivado dos `.md`), `registrar_wa()` / `historico_contato()` / `buscar_wa()` / `podar_wa()` (histórico do WhatsApp) e `cache_get()` / `cache_put()` (cache de classificação do LLM). Nenhuma função levanta: sem banco, devolve vazio/None e o chamador segue pelo caminho antigo. Detalhes e regras do cache em [`inbox/about.md`](../inbox/about.md#busca-e-histórico--sqlite-fts5-_sharedlib_dbpy).
 
+### `lib_rag.py`
+RAG local sobre os dois cofres (`VAULT_ALFRED` → `alfred`, `VAULT_PEDRO` → `pedro`) — substitui a Knowledge Base do Open WebUI. Sem LangChain; nada sai da máquina.
+
+| Função | O que faz |
+|--------|-----------|
+| `buscar(query, cofre=None, pasta="", limite=8)` | Busca híbrida: FTS5 (`lib_db.buscar_notas`) + vetores no ChromaDB (`ollama_embed`, `MODEL_EMBED`), fundidos por Reciprocal Rank Fusion (`1/(60 + posição)` somado por nota). Devolve `[{cofre, caminho, titulo, trecho, pontuacao, origem}]`, `origem` = `fts` / `vetor` / `ambos`; o trecho é o pedaço inteiro quando veio do vetor, o snippet do FTS5 quando não. `cofre` filtra (`where` no ChromaDB); `pasta` é prefixo do caminho. Vizinho com distância coseno > `DISTANCIA_MAX` (0,5) fica de fora |
+| `contexto(query, limite_chars=4000)` | Bloco para o prompt: `Trechos das notas dos cofres (cite a fonte como [n]):` + `[n] caminho (cofre)` e o trecho de cada nota, cortado em `limite_chars`. Nota achada só pelo FTS5 entra com o pedaço que tem mais termos da pergunta (lido do disco), não com o snippet de ~24 palavras. `""` se nada for achado |
+| `indexar(cofre=None, tudo=False)` | `indexar_cofre()` para os cofres do `.env` (ou só um) |
+| `indexar_cofre(vault, nome, tudo=False)` | FTS5 (`lib_db.indexar_cofre`) + vetores, incremental. Pula nota com o mesmo mtime; mtime novo com o mesmo sha1 só atualiza o mtime; nota nova/alterada é partida, embedada e gravada (ids `cofre:caminho#n`), e os pedaços que sobraram da versão anterior saem; nota apagada sai do ChromaDB. `tudo=True` reembeda tudo. Uma por vez no processo (trava) |
+| `pedacos(texto)` | Nota → `[{secao, texto}]`: sem frontmatter, um pedaço por seção Markdown (`#` dentro de bloco de código não conta), partido entre parágrafos acima de `MAX_PEDACO` (1200 caracteres); seção com menos de 300 junta com a vizinha. Tira "palavras" de 200+ caracteres sem espaço — imagem colada em base64, JSON comprimido do Excalidraw: no cofre pedro eram 95% do texto (12.774 pedaços → 1.238) |
+
+- **Vetores:** coleção `cofres-<MODEL_EMBED>` (`bge-m3` → `cofres-bge-m3`), metadados `cofre`, `caminho`, `titulo`, `secao`, `pedaco`. Trocar o modelo = coleção nova, reindexada sozinha na rodada seguinte.
+- **Estado:** tabela `rag_vetores` (cofre, caminho, mtime, sha1, nº de pedaços, id da coleção) no mesmo `alfred.db` do `lib_db`. Coleção recriada (volume do ChromaDB zerado) tem outro id → tudo é reembedado.
+- **Sem ChromaDB ou sem Ollama:** a busca cai só no FTS5 e a indexação atualiza só o FTS5 (`"offline": true`); nada levanta. Três notas seguidas sem embedding/gravação interrompem a rodada sem apagar nada do índice — a próxima retoma.
+- **Quem indexa:** `alfred-rag.timer` (5 min após o login e a cada 30 min; parado em modo jogo, entra no `alfred-switch.sh`) e o researcher logo depois de gravar uma pesquisa (`indexar_local()`, em thread). Primeira indexação dos dois cofres: 888 notas, 1.520 pedaços, ~43 s com `bge-m3` na GPU.
+- **Quem busca:** a ferramenta `buscar_cofre` (`_shared/lib_ferramentas.py`) e a aba Conversa do Painel — a ligar.
+- **CLI** (Python de um venv do Alfred; lê o `.env`):
+  `services/scripts/chromadb-indexer.py indexar [--cofre alfred|pedro] [--tudo]` e `buscar "consulta" [--cofre] [--pasta] [--limite]`.
+  Testes: `inbox/tests/test_rag.py` (offline: ChromaDB em memória, embeddings falsos, cofres temporários).
+
+**Comparação nos cofres reais (31/10/2026).** O ChromaDB do Alfred estava fora do ar (a porta 8000 respondia outro
+serviço), então `buscar()` devolveu só FTS5 — o caminho de queda funcionando. Para ver o híbrido, os mesmos cofres
+foram indexados com `bge-m3` real numa coleção em memória no lugar do ChromaDB. Cinco primeiros resultados
+(`origem` entre parênteses; só caminhos):
+
+| Pergunta | Só FTS5 (3 primeiros) | Híbrido |
+|---|---|---|
+| como ver quais portas estão abertas no linux | `…/Utilitários/SS - Socket Statistics.md`, `…/Utilitários/netstat - Network Statistics.md`, `AWS Security Fundamentals.md` | SS - Socket Statistics (ambos), netstat - Network Statistics (ambos), AWS Security Fundamentals (fts), `…/GNU Linux/Xorg.md` (vetor), `briefings/2026-10-22_vulnerabilidades-críticas-no-php-e-no-kernel-linux…` (fts) |
+| proxy reverso para servir um site | `Pedro Netto/Projetos/Guia de Distribuição de IP público Dinâmico.md`, `Glossário/Termos/Proxy Reverso.md`, `…/Ferramentas e Softwares/Nginx.md` | os mesmos três, `Canddy.md`, `…/Ferramentas e Softwares/cURL (Client URL).md` — todos ambos |
+| monitoramento de métricas dos servidores | `…/Hardware/Servidor.md`, `…/AWS/EC2 - Elastic Compute Cloud.md`, `AWS Security Fundamentals.md` | os mesmos três (ambos), netstat - Network Statistics (vetor), `…/Ferramentas e Softwares/New Relic.md` (vetor) |
+| onde guardar senhas e segredos com segurança | `…/Desenvolvimento/Env - variáveis de ambiente da pasta.md`, `briefings/2026-10-23_ia-da-microsoft-supera-médicos…`, `…/HTTPS (Hypertext Transfer Protocol Secure).md` | Env - variáveis de ambiente (ambos), AWS Security Fundamentals (ambos), briefing 2026-10-23 (fts), `claude-mem.md` (vetor), HTTPS (fts) |
+| vulnerabilidade no kernel linux | `briefings/2026-10-22_vulnerabilidades-críticas-no-php-e-no-kernel-linux…`, `podcast/episodios/2026-10-18_2026-10-20_resumo-do-alfred.md`, `briefings/2026-10-20_deepseek-libera-motor…` | briefing 2026-10-22 (ambos), `briefings/2026-10-28_falha-crítica-em-firmware-uefi…` (ambos), podcast 2026-10-18 (fts), `briefings/2026-10-29_descoberta-de-cpu-risc-v…` (vetor), briefing 2026-10-20 (fts) |
+
+- O vetor confirma os melhores do FTS5 (viram `ambos` e sobem) e traz notas sem a palavra da pergunta (New Relic para
+  "monitoramento", o briefing de UEFI para "kernel"). No fim da lista também traz ruído (Xorg, claude-mem).
+- `Prometheus.md` e `HashCorp Vault.md` existem mas estão vazias (0 bytes): nenhuma das buscas as acha.
+- Limiar: distância dos acertos 0,26–0,48; perguntas sem relação com os cofres (receita de bolo, futebol) ficaram em
+  0,53+ → `DISTANCIA_MAX = 0,5`. Amostra pequena — recalibrar se trocar de modelo.
+
 ### `lib_memoria.py`
 Memória automática: fatos duráveis sobre Pedro e seus contatos ("é vegetariano", "é diretor de TI da Unimed Bauru"), extraídos pelo LLM local, guardados e devolvidos como contexto para os prompts. Ideia trazida do Odysseus (só o comportamento; o código é próprio).
 
@@ -133,7 +172,7 @@ Registro de ferramentas do Alfred para tool calling nativo do Ollama (`/api/chat
 | `alfred_vault_reader` + `alfred_vault_writer` | `buscar_cofre(consulta, cofre="todos")`, `ler_nota(caminho, cofre="pedro")`, `listar_cofre`, `salvar_nota` ⚠ | As duas `search_vault` viraram `buscar_cofre`. Caminhos resolvidos dentro do cofre (absoluto, `..` ou symlink para fora → erro); `salvar_nota` nunca sobrescreve |
 
 - **Busca:** `buscar_cofre` passa por `_buscar(query, cofre, limite) -> [{cofre, caminho, titulo, trecho, score}]`, hoje `lib_db.buscar_notas` (FTS5). A busca híbrida de `lib_rag.py` entra trocando só essa função, com a mesma saída.
-- **Serviços:** sempre `127.0.0.1` — Shell Executor em `PORT_SHELL_EXECUTOR` (7070), Researcher em `PORT_RESEARCHER` (7071) —, com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN`. Nada de `172.17.0.1`.
+- **Serviços:** sempre `127.0.0.1` — Shell Executor em `PORT_SHELL_EXECUTOR` (7071), Researcher em `PORT_RESEARCHER` (7072) —, com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN`. Nada de `172.17.0.1`.
 - **Importação:** `core`, `whatsapp` e `limpeza` (de `services/inbox/`) só são importados quando uma ferramenta precisa; `esquemas()` não carrega o pipeline do inbox.
 - Testes: `inbox/tests/test_ferramentas.py` (offline: vault temporário, índice FTS5 de verdade, HTTP / subprocess / WhatsApp / limpeza / `lib_memoria` mockados).
 - Os 27 esquemas custam ~3 200 tokens de prompt no `gemma4:e4b`. Teste real (31/10/2026): "quais pendências tenho?" → `listar_pendencias` com argumentos válidos.
@@ -206,6 +245,7 @@ from _shared.lib_audio import transcrever_audio
 from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
 from _shared.lib_memoria import extrair, contexto, auditar
 from _shared.lib_ferramentas import esquemas, executar, perigosa
+from _shared import lib_rag   # lib_rag.buscar(), lib_rag.contexto()
 ```
 
 ## Variáveis de ambiente relevantes
@@ -218,6 +258,7 @@ from _shared.lib_ferramentas import esquemas, executar, perigosa
 | `SEARXNG_URL` | `http://localhost:8889` | Endpoint do SearXNG |
 | `CHROMADB_URL` | `http://localhost:8001` | Endpoint do ChromaDB |
 | `VAULT_ALFRED` | `""` | Caminho do vault Obsidian |
+| `VAULT_PEDRO` | `""` | Cofre pessoal de Pedro (indexado pelo `lib_rag` como `pedro`) |
 | `OLLAMA_THINK` | `""` | `false` desliga o thinking (gemma4/qwen3); vazio não envia o campo |
 | `OLLAMA_NUM_CTX` | `""` | `options.num_ctx` enviado ao Ollama (ex.: 8192) |
 | `THUNDERBIRD_PROFILE` | `""` | Vazio = descoberta automática do perfil (inclui `~/.config/thunderbird` do Thunderbird ≥ 158) |
@@ -227,5 +268,5 @@ from _shared.lib_ferramentas import esquemas, executar, perigosa
 | `WHATSAPP_DRY_RUN` | `false` | `true` = simula os envios mesmo com a URL configurada |
 | `MEMORIA_DB` | `""` | Banco da memória automática (vazio = `db` da seção `memoria:` → `VAULT_ALFRED/memoria/memoria.db`) |
 | `VAULT_PEDRO` | `""` | Cofre do Pedro (`ler_nota(..., cofre="pedro")` em `lib_ferramentas`; indexado por `core.indexar_cofres`) |
-| `PORT_SHELL_EXECUTOR` / `PORT_RESEARCHER` | `7070` / `7071` | Portas em `127.0.0.1` que `lib_ferramentas` chama |
+| `PORT_SHELL_EXECUTOR` / `PORT_RESEARCHER` | `7071` / `7072` | Portas em `127.0.0.1` que `lib_ferramentas` chama |
 | `SHELL_EXECUTOR_TOKEN` | `""` | Bearer do Shell Executor e do Researcher (`lib_ferramentas`) |
