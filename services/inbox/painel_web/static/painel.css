@@ -765,3 +765,8 @@ textarea.entrada { resize: vertical; }
   .selo, .botao, .cartao, .aviso, .mensagem, .entrada { border: 1px solid CanvasText; }
   .nav__link[aria-current="page"], .aba[aria-current="page"] { outline: 2px solid Highlight; }
 }
+
+/* Pareamento do WhatsApp (/painel/whatsapp) */
+.qr > * + * { margin-top: var(--e-3); }
+.qr__imagem { display: block; width: 264px; max-width: 100%; height: auto; background: #fff; padding: var(--e-3); border-radius: 8px; }
+.qr__texto { white-space: pre-wrap; word-break: break-all; }

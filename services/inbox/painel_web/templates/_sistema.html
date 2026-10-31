@@ -21,6 +21,11 @@
   <ul class="sistema-lista">
     {{ m.item_sistema("Conexão", wa.estado, wa.detalhe, rotulo=wa.rotulo) }}
     {{ m.item_sistema("Instância", "neutro", wa_status.instancia or "—", rotulo="Evolution API") }}
+  </ul>
+  {%- if wa.estado != "ok" and not wa_status.simulado %}
+  <p>{{ m.botao("Mostrar QR code", variante="primario", href="/painel/whatsapp") }}</p>
+  {%- endif %}
+  <ul class="sistema-lista">
     {%- if wa_status.simulado %}
     {{ m.item_sistema("Envios", "simulado", "Nada sai da máquina (sem EVOLUTION_URL ou WHATSAPP_DRY_RUN=true).") }}
     {%- else %}

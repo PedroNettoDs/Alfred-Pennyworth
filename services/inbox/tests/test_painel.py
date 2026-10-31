@@ -861,6 +861,34 @@ class TestEvolutionForaDoAr(Base):
         self.assertIn("Modo jogo desde 25/10 22:00", self.guardar(cli.get("/painel/sistema")).text)
 
 
+class TestTelaQR(Base):
+    def qr(self, r):
+        cli = self.entrar()
+        with mock.patch.object(painel.whatsapp, "obter_qrcode", lambda: r):
+            return self.guardar(cli.get("/painel/whatsapp"))
+
+    def test_mostra_o_qr_e_recarrega(self):
+        r = self.qr({"ok": True, "base64": "data:image/png;base64,iVBORw0KGgo=", "pairingCode": "ABCD-1234"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('src="data:image/png;base64,iVBORw0KGgo="', r.text)
+        self.assertIn("ABCD-1234", r.text)
+        self.assertIn('http-equiv="refresh"', r.text)
+
+    def test_mostra_o_erro_da_evolution(self):
+        r = self.qr({"ok": False, "erro": "Evolution API inacessível em http://x: recusada"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Evolution API inacessível", r.text)
+
+    def test_conectado_nao_recarrega(self):
+        r = self.qr({"ok": True, "conectado": True})
+        self.assertIn("Nada a parear", r.text)
+        self.assertNotIn('http-equiv="refresh"', r.text)
+
+    def test_sem_sessao_vai_para_o_login(self):
+        r = self.guardar(self.cliente().get("/painel/whatsapp", follow_redirects=False))
+        self.assertEqual(r.status_code, 303)
+
+
 class TestResolvidas(Base):
     def test_respondida_na_espera_lado_a_lado(self):
         ESTADO["atraso"] = 20

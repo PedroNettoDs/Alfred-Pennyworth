@@ -560,6 +560,10 @@ def _conexao_whatsapp(st: dict) -> dict:
         return {"tom": "erro", "rotulo": "Sem instância", "estado": "erro",
                 "detalhe": f"A instância {st.get('instancia')} não existe na Evolution — "
                            f"rode ./run.sh whatsapp qrcode para criar e parear"}
+    if est == "outro serviço":
+        return {"tom": "erro", "rotulo": "Porta ocupada", "estado": "erro",
+                "detalhe": f"Quem responde em {lib_whatsapp.url_base()} não é a Evolution API — "
+                           f"outro programa ocupa a porta"}
     if est in ("HTTP 401", "HTTP 403"):
         return {"tom": "erro", "rotulo": "Chave recusada", "estado": "erro",
                 "detalhe": f"Evolution API respondeu {est}: confira EVOLUTION_API_KEY no .env"}
@@ -976,6 +980,23 @@ def tela_sistema(request: Request):
     if not _nonce_da_sessao(request):
         return _para_login(request)
     return _pagina(request, "sistema.html", "sistema", **_dados_sistema())
+
+
+@router.get("/whatsapp")
+def tela_whatsapp(request: Request):
+    """Pareamento: gera o QR na hora (expira em ~40 s na Evolution; a página recarrega sozinha)."""
+    if not _nonce_da_sessao(request):
+        return _para_login(request)
+    try:
+        qr = whatsapp.obter_qrcode()
+    except Exception as e:
+        qr = {"ok": False, "erro": str(e)[:300]}
+    _CACHE_WA.clear()   # o estado mostrado ao lado do QR é o de agora
+    b64 = qr.get("base64") or ""
+    if b64 and not b64.startswith("data:"):
+        b64 = "data:image/png;base64," + b64
+    return _pagina(request, "whatsapp.html", "sistema", qr=qr, qr_img=b64,
+                   wa=_conexao_whatsapp(_status_whatsapp()), instancia=lib_whatsapp.instancia())
 
 
 # ── Fragmentos do polling (mesmos parciais das páginas) ──

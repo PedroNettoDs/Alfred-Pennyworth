@@ -184,30 +184,15 @@ def cmd_whatsapp(args):
         print(json.dumps(whatsapp.status(), ensure_ascii=False, indent=2))
         return 0
     if sub == "qrcode":
-        if not lw.configurado():
-            print("EVOLUTION_URL / EVOLUTION_API_KEY não configurados no .env")
-            return 1
-        est = lw.estado_instancia()
-        if not est.get("ok") and est.get("status") in (401, 403):
-            print(f"A Evolution API recusou a chave (HTTP {est['status']}) — confira EVOLUTION_API_KEY no .env.")
-            return 1
-        if not est.get("ok") and est.get("status") != 404:   # rede/timeout ou outro erro: não é "instância não existe"
-            print(f"Evolution API inacessível em {lw.url_base()}: "
-                  f"{est.get('erro') or ('HTTP ' + str(est.get('status')))} — confira se o container está no ar.")
-            return 1
-        if not est.get("ok"):
+        r = whatsapp.obter_qrcode()
+        if r.get("criando"):
             print(f"Instância '{lw.instancia()}' não existe ainda — criando...")
-            r = lw.criar_instancia()
-            if not r.get("ok"):
-                print(f"Falha ao criar instância: {r.get('erro') or r.get('resposta')}")
-                return 1
-        elif est.get("estado") == "open":
+        if not r.get("ok"):
+            print(r["erro"])
+            return 1
+        if r.get("conectado"):
             print(f"Instância '{lw.instancia()}' já está conectada (open). Nada a parear.")
             return 0
-        r = lw.qrcode_instancia()
-        if not r.get("ok"):
-            print(f"Falha ao obter QR code: {r.get('erro') or r.get('resposta')}")
-            return 1
         if r.get("pairingCode"):
             print(f"Código de pareamento (WhatsApp → Aparelhos conectados → Conectar com número): {r['pairingCode']}")
         b64 = r.get("base64") or ""

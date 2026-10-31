@@ -1,0 +1,36 @@
+{#
+  Pareamento do WhatsApp (/painel/whatsapp). Vars de painel.tela_whatsapp(): qr (whatsapp.obter_qrcode()),
+  qr_img (data-URI do PNG ou ""), wa {tom, rotulo, detalhe}, instancia.
+  Sem conexão a página recarrega a cada 30 s: o QR da Evolution expira em ~40 s.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}WhatsApp{% endblock %}
+{% block head %}{% if not qr.conectado %}<meta http-equiv="refresh" content="30">{% endif %}{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Conectar o WhatsApp", "Instância " ~ instancia ~ " na Evolution API", voltar=("/painel/sistema", "Sistema")) }}
+<div class="pilha">
+  <section class="cartao">
+    <div class="selos">{{ m.selo(wa.tom, wa.rotulo) }}</div>
+    {%- if wa.detalhe %}<p class="pequeno suave">{{ wa.detalhe }}</p>{% endif %}
+  </section>
+  {%- if qr.conectado %}
+  {{ m.aviso("sucesso", "WhatsApp conectado. Nada a parear.") }}
+  {%- elif not qr.ok %}
+  {{ m.aviso("erro", qr.erro) }}
+  <p class="pequeno suave">Tentando de novo a cada 30 s.</p>
+  {%- else %}
+  <section class="cartao qr">
+    {%- if qr_img %}
+    <img class="qr__imagem" src="{{ qr_img }}" alt="QR code para parear o WhatsApp" width="264" height="264">
+    {%- elif qr.code %}
+    <p class="pequeno">Texto do QR (sem imagem da Evolution):</p><pre class="qr__texto">{{ qr.code }}</pre>
+    {%- endif %}
+    {%- if qr.pairingCode %}<p>Código de pareamento: <strong>{{ qr.pairingCode }}</strong></p>{% endif %}
+    <p>No celular: WhatsApp → Aparelhos conectados → Conectar aparelho, e escaneie.</p>
+    <p class="pequeno suave">O QR expira em cerca de 40 s; a página gera um novo a cada 30 s.</p>
+    {{ m.botao("Gerar novo QR agora", href="/painel/whatsapp") }}
+  </section>
+  {%- endif %}
+</div>
+{% endblock %}

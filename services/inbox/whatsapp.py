@@ -1877,9 +1877,48 @@ def status(timeout: Optional[float] = None) -> dict:
         est = estado_instancia() if timeout is None else estado_instancia(timeout=timeout)
         # 404 = a Evolution respondeu, mas a instância não existe (falta ./run.sh whatsapp qrcode);
         # "erro" (sem status) = rede/timeout; outros códigos ficam "HTTP nnn" (401/403: chave recusada)
-        cfg["estado_instancia"] = est.get("estado") or ("inexistente" if est.get("status") == 404 else
+        cfg["estado_instancia"] = est.get("estado") or ("outro serviço" if _nao_e_evolution(est) else
+                                                        "inexistente" if est.get("status") == 404 else
                                                         est.get("erro") or f"HTTP {est.get('status')}")
     aguard = [p for p in core.listar_pendencias("aguardando") if p.get("tipo") == "whatsapp"]
     cfg["pendencias_whatsapp_aguardando"] = len(aguard)
     cfg["fila_espera"] = listar_fila()
     return cfg
+
+
+def _nao_e_evolution(r: dict) -> bool:
+    """404 com corpo que não é JSON: outro programa responde na EVOLUTION_URL (ex.: túnel ssh na mesma porta)."""
+    return r.get("status") == 404 and "raw" in (r.get("resposta") or {})
+
+
+def obter_qrcode() -> dict:
+    """
+    QR code para parear a instância (CLI `whatsapp qrcode`, painel e botão do vigia).
+    → {"ok", "erro"?, "criando"?, "conectado"?, "base64"?, "code"?, "pairingCode"?}; "erro" já vem em texto para Pedro.
+    """
+    from _shared import lib_whatsapp as lw
+    if not lw.configurado():
+        return {"ok": False, "erro": "EVOLUTION_URL / EVOLUTION_API_KEY não configurados no .env"}
+    est = lw.estado_instancia()
+    if not est.get("ok") and est.get("status") in (401, 403):
+        return {"ok": False, "erro": f"A Evolution API recusou a chave (HTTP {est['status']}) — "
+                                     f"confira EVOLUTION_API_KEY no .env."}
+    if _nao_e_evolution(est):
+        return {"ok": False, "erro": f"Quem responde em {lw.url_base()} não é a Evolution API (resposta HTML) — "
+                                     f"outro programa ocupa a porta; confira `ss -ltnp` e o container alfred-evolution."}
+    if not est.get("ok") and est.get("status") != 404:   # rede/timeout ou outro erro: não é "instância não existe"
+        return {"ok": False, "erro": f"Evolution API inacessível em {lw.url_base()}: "
+                                     f"{est.get('erro') or ('HTTP ' + str(est.get('status')))} — "
+                                     f"confira se o container está no ar."}
+    criando = not est.get("ok")
+    if criando:
+        r = lw.criar_instancia()
+        if not r.get("ok"):
+            return {"ok": False, "criando": True, "erro": f"Falha ao criar instância: {r.get('erro') or r.get('resposta')}"}
+    elif est.get("estado") == "open":
+        return {"ok": True, "conectado": True}
+    r = lw.qrcode_instancia()
+    if not r.get("ok"):
+        return {"ok": False, "criando": criando, "erro": f"Falha ao obter QR code: {r.get('erro') or r.get('resposta')}"}
+    return {"ok": True, "criando": criando, "base64": r.get("base64") or "", "code": r.get("code") or "",
+            "pairingCode": r.get("pairingCode") or "", "resposta": r.get("resposta")}
