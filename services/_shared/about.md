@@ -82,6 +82,30 @@ Divide o mbox pelo separador real do Thunderbird (`From - <data>`), evitando os 
 ### `lib_db.py`
 SQLite + FTS5 em `VAULT_ALFRED/.alfred/alfred.db` (`ALFRED_DB` troca): `indexar_cofre()` / `buscar_notas()` (índice derivado dos `.md`), `registrar_wa()` / `historico_contato()` / `buscar_wa()` / `podar_wa()` (histórico do WhatsApp) e `cache_get()` / `cache_put()` (cache de classificação do LLM). Nenhuma função levanta: sem banco, devolve vazio/None e o chamador segue pelo caminho antigo. Detalhes e regras do cache em [`inbox/about.md`](../inbox/about.md#busca-e-histórico--sqlite-fts5-_sharedlib_dbpy).
 
+### `lib_memoria.py`
+Memória automática: fatos duráveis sobre Pedro e seus contatos ("é vegetariano", "é diretor de TI da Unimed Bauru"), extraídos pelo LLM local, guardados e devolvidos como contexto para os prompts. Ideia trazida do Odysseus (só o comportamento; o código é próprio).
+
+| Função | O que faz |
+|--------|-----------|
+| `extrair(texto, fonte, sujeito=None)` | Portão `_vale_extrair()` → LLM (`memoria_extrair.md`, JSON Schema `{fatos: [{fato, sujeito, tipo, validade}]}`) → `guardar()`. `sujeito` = quem escreveu (o "eu" do texto); um nome que é parte dele ("Carlos" para "Carlos Silva") vira o nome completo. Devolve os fatos com `id` e `acao` (`novo` / `fundido` / `substituiu` / `descartado`) |
+| `guardar(fatos, fonte)` | Dedup contra o mesmo sujeito: texto igual → descarta sem LLM; cosseno > `limiar_duplicata` (0,85) → LLM decide `manter_novo` / `manter_antigo` / `fundir` (`memoria_deduplicar.md`). LLM sem decisão → o novo entra (a auditoria junta depois) |
+| `auditar()` | Por sujeito: apaga vencidos (sem LLM), refaz vetores que faltam ou de outro modelo, e manda os fatos em lotes ao LLM (`memoria_auditar.md`) para juntar duplicatas, reescrever vagos e tirar lixo. Guarda a impressão digital (sha256) do estado auditado na tabela `estado` e pula o sujeito que não mudou. Recusa lote que apagaria mais da metade (8+ fatos); ids inventados são ignorados |
+| `contexto(consulta, k=8)` | Bloco `Fatos que Alfred já sabe...` com até `k` linhas `- [Sujeito] fato`. Busca vetorial (cosseno ≥ `limiar_contexto`) + FTS5 (inclusive pelo nome do sujeito), fundidas por RRF; sem Ollama, só FTS5. `""` se nada servir |
+| `listar(sujeito=None)` | Fatos guardados, sem o vetor |
+
+- **Banco:** `MEMORIA_DB`, `db` da seção `memoria:`, ou `VAULT_ALFRED/memoria/memoria.db`. Tabela `fatos` + FTS5 + vetor `bge-m3` normalizado (float32) como blob na mesma linha; cosseno em Python puro.
+- **Espelho:** `<pasta do banco>/<sujeito>.md` (ex.: `VAULT_ALFRED/memoria/carlos-silva.md`), regravado de forma atômica (temporário + `os.replace`) a cada mudança. Editar o `.md` não muda a memória.
+- **Portão:** `_vale_extrair(texto) -> bool` é heurística (3+ palavras, 15+ letras, não é só saudação/risada). Vai virar uma decisão sim/não do Laya (127.0.0.1:7073) quando o classificador treinado for aprovado — a troca fica só nessa função.
+- **Configuração:** seção `memoria:` do `perfis.yml` (`ativo`, `db`, `modelo`, `modelo_embed`, limiares, `auditar_lote`).
+- Nenhuma função levanta: sem banco ou sem Ollama, devolve vazio.
+- **CLI** (de `services/`): `python -m _shared.lib_memoria {extrair,listar,auditar,buscar}`. Testes: `inbox/tests/test_memoria.py` (offline).
+
+**Onde ligar depois (ainda não integrado):**
+- `inbox/whatsapp.py` → `gerar_rascunho()` e o prompt da pergunta (`pergunta_whatsapp.md`): `contexto(f"{contato} {conteudo}")` como variável nova do template, ao lado de `historico`.
+- `inbox/whatsapp.py` → `processar_mensagem_whatsapp()` (mensagem do contato, `sujeito=contato`, `fonte="whatsapp"`) e `responder_texto()` / `registrar_resposta_direta()` (texto de Pedro, `sujeito="Pedro"`): `extrair()` em segundo plano, depois da resposta, para não atrasar a notificação.
+- `inbox/core.py` → `responder()` (nota de Pedro numa pendência de e-mail) e e-mails da categoria `contato`/`pessoal`: `extrair(..., fonte="email", sujeito=remetente)`.
+- Um timer diário (`alfred-vigia` ou novo) chamando `auditar()` — sem mudança, não chama o LLM.
+
 ### `lib_tts.py`
 `generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open; com `bloquear=True` passa ao próximo player se um sair com erro).
 
@@ -127,6 +151,9 @@ Templates de prompt versionados como arquivos de texto:
 | `whatsapp_classificar.md` | WhatsApp: classifica uma mensagem curta (profissional / pessoal / grupo / automatico / spam) e diz se requer resposta e a urgência — JSON |
 | `pergunta_whatsapp.md` | WhatsApp: texto em que Alfred resume a mensagem e pergunta "o que você quer responder?" |
 | `audio_pergunta_whatsapp.md` | WhatsApp: recado de voz curto (20-40s) com a mesma pergunta |
+| `memoria_extrair.md` | Memória: fatos duráveis de um texto (`{fatos: [{fato, sujeito, tipo, validade}]}`) — JSON |
+| `memoria_deduplicar.md` | Memória: fato novo × parecido já guardado → `manter_novo` / `manter_antigo` / `fundir` — JSON |
+| `memoria_auditar.md` | Memória: faxina dos fatos de um sujeito (duplicatas, vagos, lixo), devolve a lista limpa por id — JSON |
 
 ## Como importar nos serviços
 
@@ -145,6 +172,7 @@ from _shared.lib_tts import tts_save, tocar_audio
 from _shared.lib_titulo import generate_title_via_llm
 from _shared.lib_audio import transcrever_audio
 from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
+from _shared.lib_memoria import extrair, contexto, auditar
 ```
 
 ## Variáveis de ambiente relevantes
@@ -164,3 +192,4 @@ from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
 | `EVOLUTION_URL` / `EVOLUTION_API_KEY` / `EVOLUTION_INSTANCE` | `""` / `""` / `alfred` | Evolution API (`lib_whatsapp`). URL vazia = envios simulados |
 | `WHATSAPP_NUMERO_PEDRO` | `""` | Número de Pedro (DDI + DDD + número, só dígitos) que recebe os resumos |
 | `WHATSAPP_DRY_RUN` | `false` | `true` = simula os envios mesmo com a URL configurada |
+| `MEMORIA_DB` | `""` | Banco da memória automática (vazio = `db` da seção `memoria:` → `VAULT_ALFRED/memoria/memoria.db`) |
