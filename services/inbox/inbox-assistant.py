@@ -22,6 +22,7 @@ Uso:
     inbox-assistant.py whatsapp notificar ID                        → manda a Pedro o resumo + áudio da pergunta
     inbox-assistant.py whatsapp fila                                → mensagens esperando atraso_minutos (prazo, textos)
     inbox-assistant.py whatsapp processar-fila [--todos] [--sem-enviar]  → cria as pendências vencidas (--todos: já)
+    inbox-assistant.py conversa "pergunta" [--conversa ID] [--modelo M]   → conversa com o Alfred (motor da aba Conversa)
 
 Saída final do ciclo: linhas JORNAL_FILE=... e PENDENCIA_NOVA=... (uma por pendência),
 fáceis de consumir por shell/N8N.
@@ -706,8 +707,8 @@ def cmd_perguntar(args):
 # ── Main ──────────────────────────────────────────────────────
 
 SUBCOMANDOS = ("ciclo", "scan", "jornal", "pendencias", "perguntar", "ver", "ouvir", "responder", "responder-texto",
-               "whatsapp", "semanal", "limpeza", "agenda", "vigia", "_aguardar-resposta", "_aguardar-whatsapp",
-               "_aguardar-agenda", "_vigia-qr")
+               "whatsapp", "semanal", "limpeza", "agenda", "vigia", "conversa", "_aguardar-resposta",
+               "_aguardar-whatsapp", "_aguardar-agenda", "_vigia-qr")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -768,6 +769,8 @@ def build_parser() -> argparse.ArgumentParser:
     agenda.adicionar_parser(sub)
     import vigia
     vigia.adicionar_parser(sub)
+    import conversa
+    conversa.adicionar_parser(sub)
     return ap
 
 
@@ -830,6 +833,9 @@ def main() -> int:
     if args.cmd == "_vigia-qr":
         import vigia
         return vigia.aguardar_qr(args.estado)
+    if args.cmd == "conversa":
+        import conversa
+        return conversa.cmd_conversa(args)
     build_parser().print_help()
     return 1
 

@@ -23,6 +23,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh whatsapp status | qrcode | webhook URL | simular payload.json | notificar <id>
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
 ./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
+./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa
 ```
 
 Flags do ciclo: `--inbox NOME`, `--desde HORAS`, `--reprocessar` (ignora o `inbox_seen.json`), `--max N`, `--sem-notificar`, `--json`.
@@ -707,6 +708,127 @@ contra uma API de teste: listou os calendários, criou o evento com título/hor�
    de "acesso total" (é o que toda Experiment API pede).
 4. Opções da extensão: URL `http://127.0.0.1:7073`, token = `SHELL_EXECUTOR_TOKEN` do `.env`, calendário **Agenda**.
 5. Teste: `./run.sh agenda anotar "teste do Alfred amanhã às 15h"` → em até 2 min aparece na Agenda → `./run.sh agenda desfazer <id>`.
+
+## Conversa com o Alfred — o motor (`conversa.py`)
+
+Fase 1 de [`docs/planos/chat-alfred.md`](../../docs/planos/chat-alfred.md): o chat que substitui o Open WebUI, ainda
+sem interface (a aba Conversa do Painel é a Fase 3 e serve os eventos abaixo por SSE).
+
+```
+enviar(conversa_id, texto) ── grava a pergunta ──► fila do chat (executor próprio, 1 worker — fora do threadpool
+                                                   do FastAPI: em 31/10 uma rajada de webhooks esgotou o pool)
+   contexto: personalidade + bloco "Agora" + memória + RAG (heurística) + resumo + histórico
+   Ollama /api/chat (stream, tools=esquemas(), think: false, num_ctx 16384)
+      │ texto ─────────────────► evento "texto"
+      │ ferramenta segura ─────► executar() ─► evento "ferramenta" (rodando → ok | erro)
+      │ ferramenta perigosa ───► evento "aprovar" ─► aprovar(id) | negar(id) | 5 min sem resposta = cancelada
+      └ repete (no máximo 6 voltas de ferramenta; a 7ª chamada vai sem tools e tem de responder)
+   grava a resposta ──► evento "fim" (ou "erro")          parar(turno_id) corta e grava o que já veio
+```
+
+```bash
+./run.sh conversa "quais pendências tenho?"                  # conversa nova
+./run.sh conversa --conversa <id> "e as tarefas vencidas?"   # continua (o id sai na última linha)
+./run.sh conversa --modelo gemma4:e4b "..."                  # outro modelo só neste turno
+```
+
+No terminal, ferramenta perigosa pergunta `Executar? [s/N]` (Enter ou fim da entrada = não); Ctrl+C para o turno.
+
+**Módulo** (o que a Fase 3 liga nas rotas): `nova_conversa()`, `listar_conversas()`, `obter_conversa(id)`,
+`mensagens(id)`, `buscar(texto)` (FTS5, sem acento acha com acento) · `enviar(conversa_id, texto, modelo=None)` →
+`Turno` (eventos em `turno.fila`, um `queue.Queue`; `KeyError` conversa inexistente, `ValueError` texto vazio,
+`RuntimeError` se a conversa já tem turno em andamento — uma pergunta por vez) · `aprovar(id)` / `negar(id)` /
+`parar(turno_id)` → `bool` (a primeira decisão vence; tarde demais = `False`) · `obter_turno(id)` · `ocupado()`.
+
+| Evento | Campos (além de `tipo`, `turno` e `n`, a sequência) |
+|---|---|
+| `texto` | `texto` — pedaço da resposta, na ordem |
+| `ferramenta` | `nome`, `argumentos`, `perigosa`, `estado` (`rodando`, depois `ok` / `erro` / `negada` / `expirada` / `cancelada`), `resultado`, `tempo_ms` |
+| `aprovar` | `id`, `nome`, `argumentos`, `expira_em` — o turno espera a decisão |
+| `fim` | `mensagem_id`, `texto` (resposta inteira), `parado`, `modelo`, `tokens_entrada`, `tokens_saida`, `tempo_ms`, `voltas` |
+| `erro` | `erro` — Ollama fora do ar, resposta vazia... A pergunta fica gravada; a resposta não |
+
+O último evento de um turno é sempre `fim` ou `erro`.
+
+**Contexto de cada volta** (uma mensagem `system` + histórico + a pergunta):
+
+1. Personalidade: [`docs/alfred-system-prompt.md`](../../docs/alfred-system-prompt.md) como está, sem a linha
+   `/no_think` (o payload leva `think: false`). O texto ainda cita o Open WebUI e nomes antigos de ferramenta — a
+   revisão é a Fase 4.
+2. Bloco "Agora": data, hora e dia da semana em pt-BR; compromissos das próximas 48 h (`agenda.yml`, sem
+   desfeitos/cancelados); tarefas abertas vencidas ou de hoje (`tasks.yml`); pendências aguardando (total + as 3 mais
+   urgentes, na ordem do Painel: urgência alta, depois as mais recentes); estado do WhatsApp (`connectionState` com
+   timeout de 1,5 s e cache de 60 s — Evolution lenta vira "não respondeu agora"). Uma parte que falha some do
+   bloco, com log.
+3. Memória: `lib_memoria.contexto(pergunta)`.
+4. RAG automático: `lib_rag.contexto(pergunta, 1500)` só quando `_quer_rag(pergunta)` — regex para "minhas notas",
+   "anotei", "cofre", "estudei", "na aula", "certificação", "você já pesquisou"... No resto, o modelo usa
+   `buscar_cofre` / `ler_nota`. A função é isolada: o Laya assume essa decisão na Fase 5.
+5. Histórico: as mensagens de Pedro e do Alfred depois do resumo, inteiras — de 12 a 32. Passou de 32, o resumo é
+   refeito depois do `fim` (mesmo modelo e `num_ctx` do chat, formato de máquina, incremental) cobrindo todas menos
+   as 12 últimas: ou seja, a cada ~20 mensagens. Chamadas e resultados de ferramenta de turnos anteriores não voltam
+   (a resposta daquele turno já diz o que importava).
+
+**GPU e a fila do WhatsApp:** com turno na fila ou rodando, `ocupado()` é `True` e `whatsapp.processar_fila` segura
+o próximo item (ele espera a volta seguinte da thread `whatsapp-fila`, 60 s; não é descartado). Só vale dentro do
+mesmo processo: a API (Fase 3) sim; o `run.sh conversa` não segura a fila da API.
+
+**Persistência:** `VAULT_ALFRED/conversas.db` (SQLite WAL + FTS5). Tabelas `conversas`
+(id, título, criada/atualizada, resumo, `resumo_ate`), `mensagens` (papel `user` / `assistant` / `tool`, texto,
+ferramenta, argumentos, resultado, modelo, tokens de entrada e saída, tempo, turno) e `aprovacoes` (ferramenta,
+argumentos, `aguardando` → `aprovada` / `negada` / `expirada` / `cancelada`, resultado). Cada gravação é uma
+transação. Título: `lib_titulo.extrair_titulo_manchete` da primeira pergunta (sem LLM: não disputa a GPU).
+
+**Configuração** (`perfis.yml → conversa:`): `modelo` (vazio = `MODEL_CHAT`), `modelo_ferramentas` (vazio = o
+mesmo; outro modelo decide as ferramentas sem mostrar texto e o `modelo` escreve a resposta final sem tools),
+`num_ctx` (16384). No código: `MAX_VOLTAS` 6, `APROVACAO_S` 300, `HISTORICO` 12, `RESUMO_A_CADA` 20, `RAG_CHARS` 1500.
+
+### Medição na RTX 3060 12 GB (31/10/2026)
+
+VRAM (`nvidia-smi`; desktop ~1,2 GB e Laya 1,4 GB sempre carregados):
+
+| Modelo | `llama-server` | GPU inteira |
+|---|---|---|
+| `gemma4:12b`, `num_ctx` 4096 / 8192 / 16384 / 32768 | 8378 / 8310 / 8438 / 8428 MiB | 11,4–11,6 de 12,3 GB |
+| `gemma4:e4b`, 16384 | 4844 MiB | 7,8–8,0 GB |
+| `bge-m3` (embeddings da memória e do RAG) | ~0,7 GB | — |
+
+Turnos reais (`conversa "quais pendências tenho?"` → `listar_pendencias` e resposta; 2 chamadas ao Ollama; ~6,4 mil
+tokens de prompt, dos quais ~3,2 mil são os esquemas das 27 ferramentas):
+
+| Cenário | Tempo do turno |
+|---|---|
+| `gemma4:12b` frio (nada carregado; carregar leva ~10 s) | 23,7 s |
+| `gemma4:12b` quente | 9,7–13,0 s (prompt ~1,3 mil tokens/s, resposta ~40 tokens/s) |
+| `gemma4:12b`, com o 12b carregado por outro cliente com `num_ctx` 8192 | 24,6 s (recarrega) |
+| `gemma4:12b`, pergunta que liga o RAG automático (embedding no `bge-m3`) | 38,1 s (o `bge-m3` tira o 12b da GPU) |
+| misto: `modelo_ferramentas: gemma4:e4b` + 12b na resposta | 30,4 s (troca e4b ↔ 12b a cada turno) |
+| `gemma4:e4b` sozinho | 38–60 s com outro cliente usando o 12b ao mesmo tempo; e respondeu mal: uma resposta vazia depois da ferramenta e outra sem conteúdo |
+
+O que isso quer dizer:
+
+- **O 12b com 16k cabe** (11,6 de 12,3 GB), e o contexto quase não pesa no gemma4 (janela deslizante): o
+  `num_ctx` 16384 fica, e o modelo do chat continua o `MODEL_CHAT` (12b). O e4b como modelo da conversa não serve.
+- **O 12b e o `bge-m3` não cabem juntos** (faltam ~0,1 GB). Toda chamada de embedding durante a conversa tira o 12b
+  da GPU e o turno seguinte paga ~15 s para recarregar: RAG automático, memória com fatos (hoje a memória está vazia
+  e não chama o `bge-m3`) e o `buscar_cofre` quando passar a usar o `lib_rag` (Fase 2). Saídas: tirar o Laya da GPU
+  (1,4 GB) ou rodar o `bge-m3` na CPU — fica como próximo passo, não foi mexido aqui.
+- **`num_ctx` diferente é outro runner:** o Ollama recarrega o 12b quando a chamada seguinte pede outro contexto
+  (~10 s). O `ollama ps` mostrou o 12b em 8192 vindo de `/api/generate` de outro cliente. Como 16384 não custa VRAM,
+  o certo é igualar: `OLLAMA_NUM_CTX=16384` no `.env` (decisão de Pedro; o `.env` não foi alterado).
+- **`modelo_ferramentas: gemma4:e4b` não ajuda nesta GPU:** e4b (4,8 GB) + 12b (8,4 GB) não cabem juntos, então
+  cada turno troca de modelo duas vezes. Fica configurável e vazio por padrão.
+
+**Testes:** `venv/bin/python -m unittest tests.test_conversa -v` (offline: o Ollama é um roteiro trocado no lugar de
+`_stream_ollama`; vault e `conversas.db` temporários; memória, RAG e resumo mockados). Cobrem o contexto montado
+(bloco "Agora" com agenda, tarefas, pendências e WhatsApp; memória; RAG só pela heurística), o laço com ferramenta
+segura (payload com `tools`, `think: false`, `num_ctx`; mensagem `tool`), aprovação aprovada / negada / expirada, o
+limite de 6 voltas, `parar` no meio do texto, durante a aprovação e na fila, o resumo do histórico, a persistência
+(título, busca, transação) e a fila do WhatsApp segurando o próximo item durante um turno.
+
+**Limitações:** `parar` age na próxima linha do stream (enquanto o modelo carrega, espera) e não interrompe uma
+ferramenta que já está rodando. Turnos vivem na memória do processo: reiniciar a API perde o turno em andamento (o
+que já foi gravado fica). O título é heurístico (a primeira pergunta).
 
 ## Limitações conhecidas
 
