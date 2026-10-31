@@ -9,18 +9,20 @@ registrada com @ferramenta(nome, descricao, perigosa=False); o JSON Schema dos p
     executar(nome, argumentos)  → texto para a mensagem role "tool". Nunca levanta: argumento inválido,
                                   exceção e timeout viram texto curto começando com "[erro]"
     perigosa(nome)              → True para o que age fora do chat ou é difícil de desfazer (comando shell,
-                                  responder pendência / limpeza, gravar no cofre, completar tarefa). A aprovação
-                                  NÃO é feita aqui: quem conversa pergunta "Executar? [Sim] [Não]" antes de
-                                  chamar executar()
+                                  responder pendência / limpeza, gravar no cofre, completar tarefa, criar
+                                  compromisso). A aprovação NÃO é feita aqui: quem conversa pergunta
+                                  "Executar? [Sim] [Não]" antes de chamar executar()
 
-Código do repositório é chamado direto (services/inbox: core, whatsapp, limpeza; _shared: lib_db, lib_memoria).
-HTTP só para os serviços separados — Shell Executor (PORT_SHELL_EXECUTOR, 7071) e Researcher (PORT_RESEARCHER,
-7072) —, sempre em 127.0.0.1 com Bearer SHELL_EXECUTOR_TOKEN.
+Código do repositório é chamado direto (services/inbox: core, agenda, whatsapp, limpeza; _shared: lib_db,
+lib_memoria, lib_rag, lib_mail via core.coletar). HTTP só para os serviços separados — Shell Executor
+(PORT_SHELL_EXECUTOR, 7071) e Researcher (PORT_RESEARCHER, 7072), sempre em 127.0.0.1 com Bearer
+SHELL_EXECUTOR_TOKEN —, para o SearXNG local (SEARXNG_URL) e para a página que ler_pagina lê (lib_web: só
+http/https público, nada da rede local).
 
 Sobreposições das tools antigas, juntas aqui:
   - alfred_memory (chave-valor em memory.yml) → lib_memoria: lembrar / buscar_memoria / listar_memoria
   - alfred_tasks → o mesmo VAULT_ALFRED/tasks.yml que o "vou" das pendências e a agenda gravam (core._add_task)
-  - search_vault do vault_reader e do vault_writer → buscar_cofre, que passa por _buscar()
+  - search_vault do vault_reader e do vault_writer → buscar_cofre, que passa por _buscar() (lib_rag)
 """
 
 import copy
@@ -41,13 +43,19 @@ from typing import Literal, Optional, Union, get_args, get_origin
 import httpx
 import yaml
 
-from _shared import lib_db, lib_memoria
-from _shared.lib_alfred import PROJECT_ROOT, gravar_atomico, log
+from _shared import lib_db, lib_memoria, lib_rag, lib_web
+from _shared.lib_alfred import PROJECT_ROOT, gravar_atomico, log, searxng_search
+from _shared.lib_mail import compactar_urls, html_to_text
 
 INBOX_DIR = Path(__file__).resolve().parent.parent / "inbox"
 TIMEOUT_PADRAO = 60       # s — teto de uma ferramenta que não declara o seu
 MAX_SAIDA = 12000         # caracteres devolvidos ao modelo; o resto é cortado (nota longa, jornal, briefing)
 MAX_ERRO = 300            # caracteres de uma mensagem de erro
+TRECHO_MAX = 600          # caracteres de cada trecho de buscar_cofre (o pedaço vetorial do lib_rag tem até 1200)
+PAGINA_MAX = 8000         # caracteres do texto de uma página (ler_pagina)
+EMAIL_MAX = 6000          # caracteres do corpo de um e-mail (ler_email)
+EMAILS_LISTA_MAX = 40     # linhas de emails_recentes
+EMAILS_LER_DIAS = 30      # quão para trás ler_email procura o message_id
 
 _REGISTRO: dict[str, dict] = {}
 _TIPOS = {str: "string", int: "integer", float: "number", bool: "boolean"}
@@ -448,6 +456,48 @@ def andamento_pesquisa(job_id: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
+#  Web (SearXNG local e leitura de página)
+# ══════════════════════════════════════════════════════════════
+
+@ferramenta("buscar_web",
+            "Busca rápida na internet pelo SearXNG da máquina: títulos, URLs e trechos. Use para fatos atuais, "
+            "notícias, documentação, \"procura na internet\". Para ler uma página inteira, ler_pagina(url); para um "
+            "estudo com notas salvas no cofre, pesquisar.",
+            timeout=30)
+def buscar_web(consulta: str, n: int = 5) -> str:
+    """
+    :param consulta: O que buscar, ex.: "novidades Python 3.14"
+    :param n: Quantos resultados (até 10)
+    """
+    achados = searxng_search(consulta, categories="general", max_results=min(max(n, 1), 10))
+    if not achados:
+        return f"Nenhum resultado na web para {consulta!r} (ou o SearXNG está fora do ar)."
+    return f"{len(achados)} resultado(s) para {consulta!r} — leia uma página com ler_pagina(url):\n\n" + "\n\n".join(
+        f"[{i}] {r['title'] or r['url']}\n{r['url']}" + (f"\n{r['snippet']}" if r.get("snippet") else "")
+        for i, r in enumerate(achados, 1))
+
+
+@ferramenta("ler_pagina",
+            "Lê o texto de uma página da web (só http/https públicos: localhost e rede local são recusados). Use "
+            "depois de buscar_web ou quando Pedro mandar um link para ler ou resumir.",
+            timeout=30)
+def ler_pagina(url: str) -> str:
+    """
+    :param url: Endereço completo, ex.: "https://docs.python.org/3/whatsnew/3.14.html"
+    """
+    pagina = lib_web.baixar(url.strip())   # recusa, HTTP ≠ 200, tipo não texto, tempo → ErroPagina → "[erro] ..."
+    bruto = lib_web.decodificar(pagina["corpo"], pagina["charset"])
+    texto = (bruto if pagina["tipo"] == "text/plain" else html_to_text(bruto)[0]).strip()
+    if not texto:
+        return f"A página {pagina['url']} não tem texto legível (talvez só JavaScript)."
+    corte = ""
+    if len(texto) > PAGINA_MAX:
+        texto, corte = texto[:PAGINA_MAX], f"\n… (cortado: mais {len(texto) - PAGINA_MAX} caracteres)"
+    aviso = f" (página grande: só os primeiros {lib_web.MAX_BYTES} bytes foram lidos)" if pagina["truncada"] else ""
+    return f"Página: {pagina['url']}{aviso}\n\n{texto}{corte}"
+
+
+# ══════════════════════════════════════════════════════════════
 #  Briefing e resumo do dia
 # ══════════════════════════════════════════════════════════════
 
@@ -734,6 +784,136 @@ def responder_limpeza(lote_id: str, decisao: Literal["aprovar", "recusar"], nota
 
 
 # ══════════════════════════════════════════════════════════════
+#  Mensagens do WhatsApp (histórico wa_msgs do lib_db)
+# ══════════════════════════════════════════════════════════════
+
+def _conversa(contato: str) -> tuple[Optional[str], str]:
+    """Nome, número ou JID → (JID, nome legível), pelo histórico (lib_db.contatos_wa). Nenhuma ou mais de uma
+    conversa → (None, texto que explica ao modelo o que perguntar)."""
+    alvo = contato.strip()
+    if "@" in alvo:
+        return alvo, alvo
+    achados = lib_db.contatos_wa(alvo)
+    if not achados:
+        return None, f"Nenhuma conversa de WhatsApp com {alvo!r} no histórico."
+    if len(achados) > 1:
+        return None, (f"Mais de uma conversa para {alvo!r}: "
+                      + "; ".join(f"{a['contato']} ({a['remote_jid']})" for a in achados)
+                      + ". Pergunte a Pedro qual, ou repita com o nome completo ou o JID.")
+    return achados[0]["remote_jid"], achados[0]["contato"]
+
+
+@ferramenta("buscar_mensagens",
+            "Busca por palavras no histórico do WhatsApp (mensagens recebidas e enviadas, áudios transcritos). Use "
+            "para \"o que o Carlos falou do orçamento?\", \"quem me mandou o endereço?\".")
+def buscar_mensagens(consulta: str, contato: str = "", limite: int = 10) -> str:
+    """
+    :param consulta: Palavras a buscar, ex.: "orçamento servidor"
+    :param contato: Só a conversa com esta pessoa: nome, número ou JID (vazio = todas as conversas)
+    :param limite: Máximo de mensagens (até 50)
+    """
+    jid, nome = None, ""
+    if contato.strip():
+        jid, nome = _conversa(contato)
+        if not jid:
+            return nome
+    achados = lib_db.buscar_wa(consulta, jid=jid, limite=min(max(limite, 1), 50))
+    onde = f" na conversa com {nome}" if jid else ""
+    if not achados:
+        return f"Nenhuma mensagem com {consulta!r}{onde}."
+    linhas = [f"• [{lib_db._hora(a['ts'])}] {'Pedro' if a['from_me'] else a['contato'] or a['remote_jid']}"
+              + ("" if jid else f" ({a['remote_jid']})") + f": {' '.join((a['trecho'] or '').split())}"
+              for a in achados]
+    return (f"{len(achados)} mensagem(ns) com {consulta!r}{onde}:\n" + "\n".join(linhas)
+            + "\n\nPara ver a conversa inteira: conversa_com(contato).")
+
+
+@ferramenta("conversa_com",
+            "Últimas mensagens da conversa de WhatsApp com uma pessoa, em ordem (as de Pedro e as do contato). Use "
+            "para \"o que a Ana me mandou?\", \"como ficou a conversa com o Carlos?\".")
+def conversa_com(contato: str, n: int = 20) -> str:
+    """
+    :param contato: Nome (ou parte dele), número ou JID do contato
+    :param n: Quantas mensagens (até 100)
+    """
+    jid, nome = _conversa(contato)
+    if not jid:
+        return nome
+    historico = lib_db.historico_contato(jid, n=min(max(n, 1), 100), max_chars=MAX_SAIDA - 500)
+    if not historico:
+        return f"Nenhuma mensagem guardada da conversa com {nome}."
+    return f"Últimas mensagens com {nome} ({jid}):\n{historico}"
+
+
+# ══════════════════════════════════════════════════════════════
+#  E-mail (caixa do Thunderbird via core.coletar — só leitura)
+# ══════════════════════════════════════════════════════════════
+
+def _emails(horas: int, maximo: int) -> list[dict]:
+    """E-mails da inbox padrão das últimas `horas`, mais recentes primeiro (lib_mail.parse_message)."""
+    core = _inbox("core")
+    _, cfg = core.carregar_cfg()
+    return core.coletar(cfg, janela_horas=horas, max_emails=maximo)
+
+
+@ferramenta("emails_recentes",
+            "E-mails que chegaram na caixa nos últimos dias: data, remetente, assunto, categoria (noticia, evento, "
+            "contato, transacional, promocao, pessoal, outro, ignorado) e message_id. Use para \"chegou algum e-mail "
+            "importante?\", \"e-mails de hoje\". Leia um com ler_email(message_id).",
+            timeout=90)
+def emails_recentes(dias: int = 2, categoria: str = "") -> str:
+    """
+    :param dias: Quantos dias para trás (1 = últimas 24 h, até 30)
+    :param categoria: Só esta categoria, ex.: "pessoal", "evento", "contato" (vazio = todas)
+    """
+    core = _inbox("core")
+    validas = (*core.CATEGORIAS, "ignorado")
+    cat = core._ascii(categoria).strip().lower()
+    if cat and cat not in validas:
+        return f"Categoria desconhecida: {categoria!r}. Use uma destas: {', '.join(validas)} (ou vazio para todas)."
+    dias = min(max(dias, 1), 30)
+    registro = _inbox("limpeza").carregar_registro()   # message_id → categoria (gravado pelo ciclo do inbox)
+    emails = [(m, (registro.get(m["message_id"]) or {}).get("categoria") or "") for m in _emails(dias * 24, 300)]
+    if cat:
+        emails = [(m, c) for m, c in emails if c == cat]
+    periodo = "nas últimas 24 h" if dias == 1 else f"nos últimos {dias} dias"
+    if not emails:
+        return f"Nenhum e-mail {periodo}" + (f" na categoria {cat}" if cat else "") + "."
+    linhas = []
+    for m, c in emails[:EMAILS_LISTA_MAX]:
+        quando = f"{m['date']:%d/%m %H:%M}" if m["date"] else "?"
+        linhas.append(f"• {quando} · {m['from_name']} <{m['from_addr']}> · {m['subject'] or '(sem assunto)'} · "
+                      f"{c or 'sem categoria'}" + ("" if m["read"] else " · não lido") + f" · id {m['message_id']}")
+    mais = f"\n… e mais {len(emails) - EMAILS_LISTA_MAX}" if len(emails) > EMAILS_LISTA_MAX else ""
+    return (f"{len(emails)} e-mail(s) {periodo}" + (f" na categoria {cat}" if cat else "") + ":\n"
+            + "\n".join(linhas) + mais + "\n\nLeia um com ler_email(message_id).")
+
+
+@ferramenta("ler_email",
+            "Lê um e-mail da caixa (texto limpo, sem HTML) pelo message_id que emails_recentes mostrou.",
+            timeout=90)
+def ler_email(message_id: str) -> str:
+    """
+    :param message_id: O id do e-mail, ex.: "CAF=abc123@mail.gmail.com"
+    """
+    mid = message_id.strip().strip("<>").strip()
+    m = next((m for m in _emails(EMAILS_LER_DIAS * 24, 2000) if m["message_id"] == mid), None)
+    if not m:
+        return f"E-mail não encontrado nos últimos {EMAILS_LER_DIAS} dias: {mid}. Confira o id com emails_recentes."
+    categoria = (_inbox("limpeza").carregar_registro().get(mid) or {}).get("categoria")
+    corpo = compactar_urls(m["text"] or "").strip() or "(e-mail sem texto)"
+    if len(corpo) > EMAIL_MAX:
+        corpo = corpo[:EMAIL_MAX] + f"\n… (cortado: mais {len(corpo) - EMAIL_MAX} caracteres)"
+    cabecalho = [f"De: {m['from_name']} <{m['from_addr']}>",
+                 f"Para: {', '.join(m['to'])}" if m["to"] else "",
+                 f"Data: {m['date']:%d/%m/%Y %H:%M}" if m["date"] else "",
+                 f"Assunto: {m['subject'] or '(sem assunto)'}",
+                 f"Categoria: {categoria}" if categoria else "",
+                 f"Anexos: {', '.join(m['attachments'])}" if m["attachments"] else ""]
+    return "\n".join(l for l in cabecalho if l) + "\n\n" + corpo
+
+
+# ══════════════════════════════════════════════════════════════
 #  Tarefas (VAULT_ALFRED/tasks.yml — o mesmo do "vou" e da agenda)
 # ══════════════════════════════════════════════════════════════
 
@@ -873,6 +1053,64 @@ def tarefas_vencidas() -> str:
 
 
 # ══════════════════════════════════════════════════════════════
+#  Agenda (VAULT_ALFRED/agenda/agenda.yml → calendário do Thunderbird)
+# ══════════════════════════════════════════════════════════════
+
+_STATUS_AGENDA = {"pendente": "a caminho do calendário", "em_execucao": "a caminho do calendário",
+                  "no_calendario": "no calendário", "erro": "erro ao pôr no calendário"}
+
+
+@ferramenta("ver_agenda",
+            "Compromissos da agenda dos próximos dias (eventos, lembretes e tarefas com data), com dia, hora e "
+            "local. Use para \"o que tenho essa semana?\", \"tenho algo amanhã?\", \"minha agenda\".")
+def ver_agenda(dias: int = 7) -> str:
+    """
+    :param dias: Quantos dias à frente, contando hoje (1 = só hoje, até 90)
+    """
+    agenda = _inbox("agenda")
+    dias = min(max(dias, 1), 90)
+    hoje = date.today().isoformat()
+    fim = (date.today() + timedelta(days=dias - 1)).isoformat()
+    itens = sorted((i for i in agenda.listar()
+                    if i.get("status") not in ("desfeito", "cancelado", "desfazer")
+                    and hoje <= (_data_ou_none(str(i.get("inicio") or "")[:10]) or "") <= fim),
+                   key=lambda i: str(i.get("inicio")))
+    periodo = "hoje" if dias == 1 else f"nos próximos {dias} dias"
+    if not itens:
+        return f"Nada na agenda {periodo}."
+    linhas = [f"• {agenda._quando_legivel(i)} — **{i.get('titulo')}** ({i.get('tipo')})"
+              + (f" · {i['local']}" if i.get("local") else "")
+              + f" · {_STATUS_AGENDA.get(i.get('status'), i.get('status'))}" for i in itens]
+    return f"Agenda {periodo} ({len(itens)}):\n" + "\n".join(linhas)
+
+
+@ferramenta("criar_compromisso",
+            "Anota um compromisso na agenda a partir do pedido de Pedro, ex.: \"marca dentista sexta 15h\", "
+            "\"reunião com o Carlos dia 12 às 10h no Zoom\". Vai para o calendário do Thunderbird (e do celular). "
+            "Passe o pedido como Pedro disse: o dia e a hora são resolvidos aqui.",
+            perigosa=True, timeout=150)
+def criar_compromisso(texto: str) -> str:
+    """
+    :param texto: O pedido com o quê, quando (dia e hora) e, se houver, onde — ex.: "dentista sexta 15h"
+    """
+    agenda = _inbox("agenda")
+    # o mesmo caminho do POST /agenda da API: detectar (Ollama) → adicionar (agenda.yml, notificação [Desfazer])
+    comp = agenda.detectar_compromisso(texto, contexto="Pedro pedindo na conversa com Alfred", para_mim=True)
+    if not comp:
+        return (f"Não achei um compromisso com data em {texto!r} (sem dia, já passou ou o Ollama não respondeu). "
+                "Nada foi criado: pergunte a Pedro o dia e a hora.")
+    item = agenda.adicionar(comp["titulo"] or texto[:60], comp["inicio"], dia_inteiro=comp["dia_inteiro"],
+                            tipo=comp["tipo"], fim=comp["fim"], local=comp["local"],
+                            descricao=f"Anotado na conversa: “{texto[:600]}”", origem={"canal": "conversa"})
+    resumo = f"{item['titulo']} ({item['tipo']}) — {agenda._quando_legivel(item)}" \
+        + (f" · {item['local']}" if item.get("local") else "") + f" [id {item['id']}]"
+    if not item.get("_novo"):
+        return f"Já estava na agenda: {resumo}. Nada foi duplicado."
+    return (f"Anotado na agenda: {resumo}. Vai para o calendário \"{item.get('calendario')}\" na próxima passada "
+            "da extensão do Thunderbird; Pedro pode desfazer pela notificação ou pelo Painel.")
+
+
+# ══════════════════════════════════════════════════════════════
 #  Memória (lib_memoria)
 # ══════════════════════════════════════════════════════════════
 
@@ -925,28 +1163,36 @@ def listar_memoria(sujeito: Optional[str] = None) -> str:
 
 def _buscar(query: str, cofre: Optional[str], limite: int) -> list[dict]:
     """
-    Busca nos cofres → [{cofre, caminho, titulo, trecho, score}], do mais relevante para o menos. Ponto único
-    de troca: hoje FTS5 (lib_db.buscar_notas, índice de `inbox-assistant.py indexar`); a busca híbrida de
-    _shared/lib_rag.py entra aqui, com a mesma saída. cofre None = todos.
+    Busca nos cofres → [{cofre, caminho, titulo, trecho, pontuacao, origem}], do mais relevante para o menos:
+    busca híbrida do _shared/lib_rag.py (FTS5 + vetores no ChromaDB, fundidos por RRF; sem ChromaDB ou sem
+    Ollama, só o FTS5). cofre None = todos.
     """
-    return lib_db.buscar_notas(query, cofre=cofre, limite=limite)
+    return lib_rag.buscar(query, cofre=cofre, limite=limite)
 
 
 @ferramenta("buscar_cofre",
-            "Busca notas nos cofres do Obsidian por palavras-chave: \"pedro\" (anotações, projetos e decisões do "
-            "Pedro) e \"alfred\" (pesquisas, briefings, logs e decisões que Alfred salvou). Use quando Pedro "
-            "perguntar das próprias notas e antes de pesquisar na web, para não repetir o que já existe.")
+            "Busca notas nos cofres do Obsidian por assunto (palavras exatas e significado): \"pedro\" (estudos, "
+            "cursos, anotações, projetos e decisões do Pedro) e \"alfred\" (pesquisas, briefings, logs e decisões que "
+            "Alfred salvou). Use quando Pedro perguntar das próprias notas ou do que estudou, e antes de pesquisar "
+            "na web, para não repetir o que já existe. Cite a nota de onde tirou a resposta.")
 def buscar_cofre(consulta: str, cofre: Literal["todos", "pedro", "alfred"] = "todos", limite: int = 5) -> str:
     """
-    :param consulta: Termos a buscar
+    :param consulta: Termos ou pergunta a buscar
     :param cofre: Em qual cofre buscar
     :param limite: Máximo de resultados (até 20)
     """
     achados = _buscar(consulta, None if cofre == "todos" else cofre, min(max(limite, 1), 20))
     if not achados:
         return f"Nenhuma nota encontrada para {consulta!r}."
-    return f"{len(achados)} resultado(s) para {consulta!r} — leia com ler_nota(caminho, cofre):\n\n" + "\n\n".join(
-        f"### [{a['cofre']}] {a['caminho']} (score {a['score']})\n{a['trecho']}" for a in achados)
+
+    def trecho(texto: str) -> str:
+        texto = " ".join((texto or "").split())
+        return texto if len(texto) <= TRECHO_MAX else texto[:TRECHO_MAX - 1] + "…"
+
+    return (f"{len(achados)} resultado(s) para {consulta!r} — cite a fonte como [n] (caminho da nota); leia a nota "
+            "inteira com ler_nota(caminho, cofre):\n\n"
+            + "\n\n".join(f"[{n}] {a['caminho']} (cofre {a['cofre']})\n{trecho(a['trecho'])}"
+                          for n, a in enumerate(achados, 1)))
 
 
 @ferramenta("ler_nota", "Lê o conteúdo completo de uma nota de um dos cofres (caminho de buscar_cofre ou listar_cofre).")

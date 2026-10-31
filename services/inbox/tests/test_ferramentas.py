@@ -5,16 +5,22 @@ argumentos, erro e timeout virando texto, marcação de perigosas e cada ferrame
     cd services/inbox
     venv/bin/python -m unittest tests.test_ferramentas -v
 
-Offline: vault temporário (pendências, tasks.yml, briefings, jornal e o índice FTS5 de verdade); HTTP (Shell
-Executor, Researcher), subprocess do briefing, envio de WhatsApp, limpeza e lib_memoria mockados.
+Offline: vault temporário (pendências, tasks.yml, agenda.yml, briefings, jornal, o índice FTS5 e o histórico do
+WhatsApp de verdade); HTTP (Shell Executor, Researcher, SearXNG, páginas da web — httpx.MockTransport e DNS falso),
+Ollama da agenda, caixa de e-mail (core.coletar), subprocess do briefing, envio de WhatsApp, limpeza, vetores do
+lib_rag e lib_memoria mockados.
 """
 
+import functools
+import ipaddress
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -29,14 +35,17 @@ INBOX = AQUI.parent
 sys.path.insert(0, str(INBOX))
 sys.path.insert(0, str(INBOX.parent))
 
+import agenda      # noqa: E402
 import core        # noqa: E402
 import whatsapp    # noqa: E402
 import limpeza     # noqa: E402
-from _shared import lib_db, lib_memoria  # noqa: E402
+from email.message import EmailMessage  # noqa: E402
+from _shared import lib_alfred, lib_chromadb, lib_db, lib_mail, lib_memoria, lib_rag, lib_web  # noqa: E402
 from _shared import lib_ferramentas as lf  # noqa: E402
 
 TOKEN = "token-de-teste"
-PERIGOSAS = {"executar_comando", "responder_pendencia", "responder_limpeza", "salvar_nota", "completar_tarefa"}
+PERIGOSAS = {"executar_comando", "responder_pendencia", "responder_limpeza", "salvar_nota", "completar_tarefa",
+             "criar_compromisso"}
 
 
 def resposta(status: int = 200, dados=None) -> httpx.Response:
@@ -56,8 +65,10 @@ class Base(unittest.TestCase):
             "ALFRED_DB": str(self.tmp / "alfred.db"), "MEMORIA_DB": str(self.tmp / "memoria.db"),
             "SHELL_EXECUTOR_TOKEN": TOKEN, "PORT_SHELL_EXECUTOR": "7170", "PORT_RESEARCHER": "7171",
             "OLLAMA_BASE_URL": "http://127.0.0.1:9",   # nada deve chegar ao Ollama
+            "CHROMADB_URL": "http://127.0.0.1:9",      # nem ao ChromaDB
         }
         for p in (mock.patch.dict(os.environ, env),
+                  mock.patch.dict(lib_chromadb._collection_cache, clear=True),
                   mock.patch.object(core, "_notify", lambda *a, **k: None),
                   mock.patch.object(core, "_iniciar_aguardador", lambda *a, **k: None)):
             p.start()
@@ -611,21 +622,42 @@ class TestCofres(Base):
         lib_db.indexar_cofre(self.pedro, "pedro")
         lib_db.indexar_cofre(self.vault, "alfred")
 
+        # ChromaDB fora do ar (CHROMADB_URL na porta 9): lib_rag cai no FTS5 sozinho
         r = lf.executar("buscar_cofre", {"consulta": "servidor"})
         self.assertIn("2 resultado(s)", r)
-        self.assertIn("[pedro] projetos/servidor.md", r)
-        self.assertIn("[alfred] decisions/quic.md", r)
+        self.assertIn("cite a fonte como [n]", r)
+        self.assertIn("] projetos/servidor.md (cofre pedro)\n", r)
+        self.assertIn("] decisions/quic.md (cofre alfred)\n", r)
         r = lf.executar("buscar_cofre", {"consulta": "servidor", "cofre": "alfred"})
         self.assertIn("1 resultado(s)", r)
-        self.assertNotIn("[pedro]", r)
+        self.assertIn("[1] decisions/quic.md (cofre alfred)", r)
+        self.assertNotIn("cofre pedro", r)
         self.assertIn("Nenhuma nota", lf.executar("buscar_cofre", {"consulta": "inexistentequalquer"}))
 
     def test_buscar_cofre_passa_por_buscar(self):
-        achado = {"cofre": "pedro", "caminho": "a.md", "titulo": "a", "trecho": "trecho", "score": 3.2}
-        with mock.patch.object(lf, "_buscar", return_value=[achado]) as buscar:
+        achados = [{"cofre": "pedro", "caminho": "a.md", "titulo": "a", "trecho": "trecho\n curto", "pontuacao": 0.03,
+                    "origem": "ambos"},
+                   {"cofre": "alfred", "caminho": "research/x/synthesis.md", "titulo": "x", "trecho": "y" * 1200,
+                    "pontuacao": 0.01, "origem": "vetor"}]
+        with mock.patch.object(lf, "_buscar", return_value=achados) as buscar:
             r = lf.executar("buscar_cofre", {"consulta": "rag", "limite": 99})
         buscar.assert_called_once_with("rag", None, 20)
-        self.assertIn("### [pedro] a.md (score 3.2)\ntrecho", r)
+        self.assertIn("[1] a.md (cofre pedro)\ntrecho curto", r)
+        self.assertIn("[2] research/x/synthesis.md (cofre alfred)\n" + "y" * (lf.TRECHO_MAX - 1) + "…", r)
+        self.assertNotIn("y" * lf.TRECHO_MAX, r)   # pedaço vetorial (até 1200) cortado
+
+    def test_buscar_cofre_usa_busca_hibrida_do_lib_rag(self):
+        (self.pedro / "carros.md").write_text("# Carros\n\nManutenção do carro a cada 10 mil km.\n", encoding="utf-8")
+        (self.pedro / "viagem.md").write_text("# Viagem\n\nIr de automóvel até a praia.\n", encoding="utf-8")
+        lib_db.indexar_cofre(self.pedro, "pedro")
+        vetor = [{"cofre": "pedro", "caminho": "viagem.md", "titulo": "viagem", "trecho": "Ir de automóvel até a praia."},
+                 {"cofre": "pedro", "caminho": "carros.md", "titulo": "carros", "trecho": "Manutenção do carro."}]
+        with mock.patch.object(lib_rag, "_buscar_vetores", return_value=vetor) as vetores:
+            r = lf.executar("buscar_cofre", {"consulta": "carro", "cofre": "pedro"})
+        vetores.assert_called_once_with("carro", "pedro", "", 10)
+        self.assertIn("2 resultado(s)", r)
+        self.assertIn("[1] carros.md (cofre pedro)", r)    # FTS + vetor ("ambos") vem primeiro
+        self.assertIn("[2] viagem.md (cofre pedro)", r)    # só o vetor acha "automóvel" para "carro"
 
     def test_ler_nota(self):
         (self.pedro / "ideias.md").write_text("Ideia boa", encoding="utf-8")
@@ -658,6 +690,434 @@ class TestCofres(Base):
         self.assertIn("2 nota(s)", r)
         self.assertIn(f"- decisions/{hoje} Decisão usar QUIC.md", r)
         self.assertIn("não encontrada", lf.executar("listar_cofre", {"pasta": "nada"}))
+
+
+
+# ══════════════════════════════════════════════════════════════
+#  Agenda (agenda.yml de verdade; Ollama da detecção mockado)
+# ══════════════════════════════════════════════════════════════
+
+def deteccao(dia: date, hora: str = "15:00", titulo: str = "Dentista", local: str = "Clínica Sorriso") -> dict:
+    """Resposta do Ollama (SCHEMA_COMPROMISSO) para agenda.detectar_compromisso."""
+    return {"existe": True, "tipo": "evento", "titulo": titulo, "data": dia.isoformat(), "hora": hora,
+            "hora_fim": "", "local": local, "confianca": 0.9, "trecho": "dentista sexta 15h"}
+
+
+class TestAgenda(Base):
+    def em(self, dias: int, hora: int = 15) -> datetime:
+        d = date.today() + timedelta(days=dias)
+        return datetime(d.year, d.month, d.day, hora, 0)
+
+    def test_ver_agenda(self):
+        self.assertEqual(lf.executar("ver_agenda", {}), "Nada na agenda nos próximos 7 dias.")
+        agenda.adicionar("Consulta hoje", self.em(0), local="Hospital", notificar=False)
+        agenda.adicionar("Prova de cálculo", self.em(3), dia_inteiro=True, tipo="lembrete", notificar=False)
+        agenda.adicionar("Viagem longe", self.em(10), notificar=False)
+        agenda.adicionar("Ontem", self.em(-1), notificar=False)
+        desfeito = agenda.adicionar("Desmarcado", self.em(1), notificar=False)
+        agenda.desfazer(desfeito["id"])
+
+        r = lf.executar("ver_agenda", {})
+        self.assertIn("Agenda nos próximos 7 dias (2):", r)
+        self.assertIn("**Consulta hoje** (evento) · Hospital · a caminho do calendário", r)
+        self.assertIn("**Prova de cálculo** (lembrete)", r)
+        self.assertIn("dia inteiro", r)
+        self.assertLess(r.index("Consulta hoje"), r.index("Prova de cálculo"))   # em ordem de data
+        for fora in ("Viagem longe", "Ontem", "Desmarcado"):
+            self.assertNotIn(fora, r)
+        r = lf.executar("ver_agenda", {"dias": 1})
+        self.assertIn("Agenda hoje (1):", r)
+        self.assertNotIn("Prova", r)
+        self.assertIn("Viagem longe", lf.executar("ver_agenda", {"dias": 11}))
+
+    def test_criar_compromisso_e_perigosa(self):
+        self.assertTrue(lf.perigosa("criar_compromisso"))
+        self.assertFalse(lf.perigosa("ver_agenda"))
+        esq = next(e for e in lf.esquemas() if e["function"]["name"] == "criar_compromisso")
+        self.assertEqual(esq["function"]["parameters"]["required"], ["texto"])
+
+    def test_criar_compromisso(self):
+        dia = date.today() + timedelta(days=2)
+        detectar = mock.Mock(wraps=agenda.detectar_compromisso)
+        with mock.patch.object(agenda, "ollama_generate_json", return_value=deteccao(dia)) as llm, \
+                mock.patch.object(agenda, "detectar_compromisso", detectar):
+            r = lf.executar("criar_compromisso", {"texto": "marca dentista daqui a 2 dias às 15h"})
+            self.assertEqual(detectar.call_args.kwargs["para_mim"], True)   # Pedro anotando para ele mesmo
+            self.assertIn("o próprio Pedro", llm.call_args.args[0])
+            self.assertIn(f"Anotado na agenda: Dentista (evento) — {dia:%d/%m}", r)
+            self.assertIn("15:00 · Clínica Sorriso", r)
+            itens = agenda.listar()
+            self.assertEqual(len(itens), 1)
+            item = itens[0]
+            self.assertEqual((item["titulo"], item["status"], item["origem"]), ("Dentista", "pendente", {"canal": "conversa"}))
+            self.assertTrue(item["inicio"].startswith(f"{dia.isoformat()}T15:00"))
+            self.assertIn("marca dentista", item["descricao"])
+            self.assertIn(f"[id {item['id']}]", r)
+            # pedir de novo não duplica (agenda.adicionar é idempotente por título + dia)
+            r = lf.executar("criar_compromisso", {"texto": "marca dentista daqui a 2 dias às 15h"})
+        self.assertIn("Já estava na agenda", r)
+        self.assertEqual(len(agenda.listar()), 1)
+
+    def test_criar_compromisso_sem_data_nao_cria(self):
+        sem = {**deteccao(date.today()), "existe": False, "tipo": "nenhum"}
+        with mock.patch.object(agenda, "ollama_generate_json", return_value=sem):
+            r = lf.executar("criar_compromisso", {"texto": "marca dentista sexta"})
+        self.assertIn("Nada foi criado", r)
+        # sem cara de compromisso (prefiltro), nem chama o Ollama
+        with mock.patch.object(agenda, "ollama_generate_json") as llm:
+            self.assertIn("Nada foi criado", lf.executar("criar_compromisso", {"texto": "oi tudo bem"}))
+        llm.assert_not_called()
+        self.assertEqual(agenda.listar(), [])
+
+
+# ══════════════════════════════════════════════════════════════
+#  WhatsApp (histórico wa_msgs de verdade num banco temporário)
+# ══════════════════════════════════════════════════════════════
+
+SILVA, SOUZA, ANA, GRUPO = ("5511999990001@s.whatsapp.net", "5511999990002@s.whatsapp.net",
+                            "5511999990003@s.whatsapp.net", "120363000000000001@g.us")
+
+
+class TestMensagens(Base):
+    def setUp(self):
+        super().setUp()
+        msgs = [
+            ("m1", SILVA, "Carlos Silva", "O orçamento do servidor ficou em 8 mil", False),
+            ("m2", SILVA, "Carlos Silva", "Fechado, pode comprar o servidor", True),
+            ("m3", SOUZA, "Carlos Souza", "Orçamento da festa: 2 mil", False),
+            ("m4", ANA, "Ana Júlia", "Meu endereço novo é Rua das Flores, 10", False),
+            ("m5", ANA, "Ana Júlia", "Valeu, anotei", True),
+            ("m6", ANA, "Ana Júlia", "Amanhã passo aí", False),
+            ("m7", GRUPO, "Carlos Silva", "Orçamento no grupo da Fatec", False),
+        ]
+        for i, (mid, jid, contato, texto, eu) in enumerate(msgs):
+            lib_db.registrar_wa(mid, jid, contato, texto, grupo=jid == GRUPO, from_me=eu,
+                                ts=f"2026-10-2{i}T10:0{i}:00")
+
+    def test_buscar_mensagens_em_todas_as_conversas(self):
+        r = lf.executar("buscar_mensagens", {"consulta": "orçamento"})
+        self.assertIn("3 mensagem(ns) com 'orçamento':", r)
+        for jid in (SILVA, SOUZA, GRUPO):
+            self.assertIn(f"({jid})", r)
+        self.assertIn("Carlos Silva", r)
+        self.assertIn("Nenhuma mensagem com 'inexistentequalquer'.",
+                      lf.executar("buscar_mensagens", {"consulta": "inexistentequalquer"}))
+
+    def test_buscar_mensagens_de_um_contato(self):
+        r = lf.executar("buscar_mensagens", {"consulta": "servidor", "contato": "carlos silva"})   # sem caixa
+        self.assertIn("na conversa com Carlos Silva", r)
+        self.assertIn("Pedro: Fechado, pode comprar o servidor", r)
+        self.assertNotIn("festa", r)
+        self.assertNotIn("grupo", r)                                  # grupo fica fora da conversa individual
+        r = lf.executar("buscar_mensagens", {"consulta": "endereço", "contato": "ana julia"})   # sem acento
+        self.assertIn("na conversa com Ana Júlia", r)
+        self.assertIn("Rua das Flores", r)
+        r = lf.executar("buscar_mensagens", {"consulta": "orçamento", "contato": GRUPO})        # JID direto
+        self.assertIn("Orçamento no grupo da Fatec", r)
+        self.assertIn("Nenhuma mensagem com 'festa' na conversa com Ana Júlia.",
+                      lf.executar("buscar_mensagens", {"consulta": "festa", "contato": "Ana"}))
+
+    def test_contato_ambiguo_ou_desconhecido(self):
+        r = lf.executar("buscar_mensagens", {"consulta": "orçamento", "contato": "Carlos"})
+        self.assertIn("Mais de uma conversa para 'Carlos'", r)
+        self.assertIn(f"Carlos Silva ({SILVA})", r)
+        self.assertIn(f"Carlos Souza ({SOUZA})", r)
+        self.assertNotIn(GRUPO, r)
+        self.assertIn("Nenhuma conversa de WhatsApp com 'Beatriz'",
+                      lf.executar("conversa_com", {"contato": "Beatriz"}))
+
+    def test_conversa_com(self):
+        r = lf.executar("conversa_com", {"contato": "Ana", "n": 2})
+        self.assertTrue(r.startswith(f"Últimas mensagens com Ana Júlia ({ANA}):\n"), r)
+        linhas = r.splitlines()[1:]
+        self.assertEqual(len(linhas), 2)
+        self.assertIn("Pedro: Valeu, anotei", linhas[0])              # em ordem cronológica
+        self.assertIn("Ana Júlia: Amanhã passo aí", linhas[1])
+        self.assertIn("Rua das Flores", lf.executar("conversa_com", {"contato": "99990003"}))   # pelo número
+        self.assertIn("Nenhuma mensagem guardada", lf.executar("conversa_com", {"contato": "5511000@s.whatsapp.net"}))
+
+
+# ══════════════════════════════════════════════════════════════
+#  E-mail (core.coletar mockado com e-mails reais passados pelo lib_mail.parse_message)
+# ══════════════════════════════════════════════════════════════
+
+def email_(mid: str, de: str, assunto: str, quando: datetime, texto: str = "", html: str = "", lido: bool = True):
+    m = EmailMessage()
+    m["Message-ID"], m["From"], m["To"], m["Subject"] = f"<{mid}>", de, "pedro@example.com", assunto
+    m["Date"] = quando.astimezone().strftime("%a, %d %b %Y %H:%M:%S %z")
+    m["X-Mozilla-Status"] = "0001" if lido else "0000"
+    if html:
+        m.set_content(texto or "")
+        m.add_alternative(html, subtype="html")
+    else:
+        m.set_content(texto or "oi")
+    return lib_mail.parse_message(m, folder="INBOX", account="imap.example.com")
+
+
+class TestEmail(Base):
+    def setUp(self):
+        super().setUp()
+        agora = datetime.now()
+        self.emails = [
+            email_("a1@x", "Carlos Silva <carlos@fatec.br>", "Reunião do TCC", agora - timedelta(hours=2),
+                   texto="Podemos nos ver quinta?", lido=False),
+            email_("b2@x", "Loja <promo@loja.com>", "50% OFF", agora - timedelta(hours=5),
+                   html="<html><head><style>p{color:red}</style><script>rastreio()</script></head><body>"
+                        "<p>Só <b>hoje</b>: 50% OFF em tudo</p>"
+                        "<a href='https://loja.com/oferta?utm_source=x'>ver</a></body></html>"),
+            email_("c3@x", "Mãe <mae@example.com>", "Almoço domingo", agora - timedelta(hours=30),
+                   texto="Vem almoçar domingo?"),
+        ]
+        registro = self.tmp / "inbox_categorias.json"
+        registro.write_text(json.dumps({"a1@x": {"categoria": "contato"}, "b2@x": {"categoria": "promocao"}}),
+                            encoding="utf-8")
+        self.coletar = mock.Mock(return_value=list(self.emails))
+        for p in (mock.patch.object(limpeza, "REGISTRO_FILE", registro),
+                  mock.patch.object(core, "coletar", self.coletar)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_emails_recentes(self):
+        r = lf.executar("emails_recentes", {"dias": 1})
+        self.assertEqual(self.coletar.call_args.kwargs["janela_horas"], 24)
+        self.assertIn("3 e-mail(s) nas últimas 24 h:", r)
+        self.assertIn("Carlos Silva <carlos@fatec.br> · Reunião do TCC · contato · não lido · id a1@x", r)
+        self.assertIn("Loja <promo@loja.com> · 50% OFF · promocao · id b2@x", r)
+        self.assertIn("Mãe <mae@example.com> · Almoço domingo · sem categoria · id c3@x", r)
+        self.assertIn("ler_email(message_id)", r)
+        lf.executar("emails_recentes", {})
+        self.assertEqual(self.coletar.call_args.kwargs["janela_horas"], 48)   # padrão: 2 dias
+
+    def test_emails_recentes_por_categoria(self):
+        r = lf.executar("emails_recentes", {"categoria": "Promoção"})       # caixa e acento não importam
+        self.assertIn("1 e-mail(s) nos últimos 2 dias na categoria promocao:", r)
+        self.assertNotIn("Reunião", r)
+        self.assertIn("Nenhum e-mail nos últimos 2 dias na categoria pessoal.",
+                      lf.executar("emails_recentes", {"categoria": "pessoal"}))
+        self.coletar.reset_mock()
+        r = lf.executar("emails_recentes", {"categoria": "urgente"})
+        self.assertIn("Categoria desconhecida: 'urgente'", r)
+        self.assertIn("promocao", r)
+        self.coletar.assert_not_called()
+
+    def test_ler_email_texto_limpo(self):
+        r = lf.executar("ler_email", {"message_id": "<b2@x>"})               # aceita com < >
+        self.assertIn("De: Loja <promo@loja.com>", r)
+        self.assertIn("Assunto: 50% OFF", r)
+        self.assertIn("Categoria: promocao", r)
+        self.assertIn("Só hoje: 50% OFF em tudo", r)
+        for sujeira in ("<p>", "<b>", "rastreio", "color:red"):
+            self.assertNotIn(sujeira, r)
+        self.assertEqual(self.coletar.call_args.kwargs["janela_horas"], lf.EMAILS_LER_DIAS * 24)
+        r = lf.executar("ler_email", {"message_id": "c3@x"})
+        self.assertIn("Vem almoçar domingo?", r)
+        self.assertNotIn("Categoria:", r)
+        self.assertIn("E-mail não encontrado", lf.executar("ler_email", {"message_id": "zz@x"}))
+
+    def test_ler_email_longo_e_cortado(self):
+        longo = email_("d4@x", "Newsletter <news@x.com>", "Edição", datetime.now(), texto="palavra " * 2000)
+        self.coletar.return_value = [longo]
+        r = lf.executar("ler_email", {"message_id": "d4@x"})
+        self.assertIn("… (cortado: mais", r)
+        self.assertLess(len(r), lf.EMAIL_MAX + 300)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Web: SearXNG e leitura de página (httpx.MockTransport + DNS falso, nada sai da máquina)
+# ══════════════════════════════════════════════════════════════
+
+def resolver_falso(host):
+    try:
+        ipaddress.ip_address(host)
+        return [host]
+    except ValueError:
+        pass
+    if host == "localhost":
+        return ["127.0.0.1", "::1"]
+    if host == "interno.example":
+        return ["10.0.0.5"]
+    if host == "misto.example":
+        return ["93.184.216.34", "192.168.1.1"]
+    if host == "naoexiste.example":
+        raise socket.gaierror("nome não resolve")
+    return ["93.184.216.34"]
+
+
+def pagina_html(titulo: str, corpo: str) -> bytes:
+    return (f"<html><head><title>{titulo}</title><script>var segredo = 'nao-extrair';</script></head><body>"
+            f"<h1>{titulo}</h1><p>{corpo}</p></body></html>").encode("utf-8")
+
+
+class _Transporte:
+    """httpx.MockTransport com rotas por URL; guarda o que foi pedido (prova que IP privado nunca é tocado)."""
+
+    def __init__(self, rotas):
+        self.rotas, self.pedidos = rotas, []
+        self.mock = httpx.MockTransport(self._responder)
+
+    def _responder(self, request):
+        url = str(request.url)
+        self.pedidos.append(url)
+        rota = self.rotas.get(url)
+        if rota is None:
+            return httpx.Response(404, text="não achei")
+        return rota(request) if callable(rota) else rota
+
+
+class TestWeb(Base):
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(lib_web, "resolver", resolver_falso)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def usar_transporte(self, rotas) -> _Transporte:
+        t = _Transporte(rotas)
+        p = mock.patch.object(lib_web, "_transporte_http", t.mock)
+        p.start()
+        self.addCleanup(p.stop)
+        return t
+
+    def test_buscar_web(self):
+        achados = [{"title": "Python 3.14", "url": "https://docs.python.org/3.14/", "snippet": "O que há de novo"},
+                   {"title": "", "url": "https://exemplo.org/py", "snippet": ""}]
+        with mock.patch.object(lf, "searxng_search", return_value=achados) as busca:
+            r = lf.executar("buscar_web", {"consulta": "python 3.14", "n": 99})
+        busca.assert_called_once_with("python 3.14", categories="general", max_results=10)
+        self.assertIn("2 resultado(s) para 'python 3.14'", r)
+        self.assertIn("[1] Python 3.14\nhttps://docs.python.org/3.14/\nO que há de novo", r)
+        self.assertIn("[2] https://exemplo.org/py\nhttps://exemplo.org/py", r)   # sem título: a URL
+        self.assertIn("ler_pagina(url)", r)
+        with mock.patch.object(lf, "searxng_search", return_value=[]):
+            self.assertIn("Nenhum resultado na web", lf.executar("buscar_web", {"consulta": "x"}))
+
+    def test_buscar_web_vai_ao_searxng_local(self):
+        pedidos = []
+
+        def searxng(request):
+            pedidos.append(request.url)
+            return httpx.Response(200, json={"results": [
+                {"title": "Resultado", "url": "https://a.example/", "content": "trecho <b>com</b> tag"},
+                {"title": "Sem URL", "url": ""}]})
+
+        cliente = httpx.Client
+        with mock.patch.dict(os.environ, {"SEARXNG_URL": "http://127.0.0.1:8899"}), \
+                mock.patch.object(lib_alfred.httpx, "Client",
+                                  lambda **kw: cliente(transport=httpx.MockTransport(searxng), **kw)):
+            r = lf.executar("buscar_web", {"consulta": "rust async"})
+        self.assertEqual((pedidos[0].host, pedidos[0].port, pedidos[0].path), ("127.0.0.1", 8899, "/search"))
+        self.assertEqual(pedidos[0].params["q"], "rust async")
+        self.assertEqual(pedidos[0].params["categories"], "general")
+        self.assertIn("1 resultado(s)", r)
+        self.assertIn("trecho com tag", r)
+
+    def test_ler_pagina(self):
+        self.usar_transporte({"https://docs.example/guia": httpx.Response(
+            200, headers={"content-type": "text/html; charset=utf-8"},
+            content=pagina_html("Guia do Tokio", "Tokio é um runtime assíncrono para Rust."))})
+        r = lf.executar("ler_pagina", {"url": " https://docs.example/guia "})
+        self.assertTrue(r.startswith("Página: https://docs.example/guia\n\n"), r)
+        self.assertIn("Tokio é um runtime assíncrono para Rust.", r)
+        self.assertNotIn("nao-extrair", r)
+        self.assertNotIn("<p>", r)
+
+    def test_ler_pagina_texto_puro_e_sem_texto(self):
+        self.usar_transporte({
+            "https://a.example/leia.txt": httpx.Response(200, headers={"content-type": "text/plain; charset=latin-1"},
+                                                         content="Olá, café".encode("latin-1")),
+            "https://a.example/app": httpx.Response(200, headers={"content-type": "text/html"},
+                                                    content=b"<html><body><div id=app></div></body></html>"),
+        })
+        self.assertIn("Olá, café", lf.executar("ler_pagina", {"url": "https://a.example/leia.txt"}))
+        self.assertIn("não tem texto legível", lf.executar("ler_pagina", {"url": "https://a.example/app"}))
+
+    def test_url_privada_nunca_e_pedida(self):
+        t = self.usar_transporte({})
+        for url in ("http://127.0.0.1:7073/painel", "http://localhost:11434/api/tags", "http://192.168.0.10/",
+                    "http://[::1]:8001/", "http://169.254.169.254/latest/meta-data", "http://100.64.0.1/",
+                    "http://[::ffff:127.0.0.1]/", "http://interno.example/", "http://misto.example/",
+                    "http://naoexiste.example/", "file:///etc/passwd", "ftp://arquivos.example/x", "https:///sem-host"):
+            r = lf.executar("ler_pagina", {"url": url})
+            self.assertTrue(r.startswith("[erro] ler_pagina: URL recusada"), (url, r))
+        self.assertEqual(t.pedidos, [])
+
+    def test_redirect_para_loopback_e_barrado(self):
+        t = self.usar_transporte({
+            "https://redir.example/": httpx.Response(302, headers={"location": "http://127.0.0.1:7073/painel"}),
+            "http://127.0.0.1:7073/painel": httpx.Response(200, headers={"content-type": "text/html"},
+                                                           content=pagina_html("Painel", "segredo do painel")),
+        })
+        r = lf.executar("ler_pagina", {"url": "https://redir.example/"})
+        self.assertIn("[erro] ler_pagina: URL recusada", r)
+        self.assertIn("127.0.0.1:7073", r)
+        self.assertNotIn("segredo", r)
+        self.assertEqual(t.pedidos, ["https://redir.example/"])
+
+    def test_redirect_publico_e_seguido(self):
+        t = self.usar_transporte({
+            "https://a.example/velho": httpx.Response(301, headers={"location": "/novo"}),
+            "https://a.example/novo": httpx.Response(200, headers={"content-type": "text/html"},
+                                                     content=pagina_html("Novo", "Página nova sobre Rust async.")),
+        })
+        r = lf.executar("ler_pagina", {"url": "https://a.example/velho"})
+        self.assertIn("Página: https://a.example/novo", r)
+        self.assertIn("Página nova sobre Rust async.", r)
+        self.assertEqual(t.pedidos, ["https://a.example/velho", "https://a.example/novo"])
+        self.usar_transporte({"https://loop.example/": httpx.Response(302, headers={"location": "/"})})
+        self.assertIn("redirects demais", lf.executar("ler_pagina", {"url": "https://loop.example/"}))
+
+    def test_pagina_grande_e_truncada_sem_ler_tudo(self):
+        enviados = [0]
+
+        def sem_fim():
+            yield b"<html><body>"
+            while True:
+                enviados[0] += 1
+                if enviados[0] > 2_000:            # ~15 MB: se chegou aqui, o limite não funcionou
+                    raise AssertionError("leu a página inteira")
+                yield b"<p>" + b"Texto longo sobre Tokio. " * 300 + b"</p>"
+
+        self.usar_transporte({"https://grande.example/": lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, content=sem_fim())})
+        r = lf.executar("ler_pagina", {"url": "https://grande.example/"})
+        self.assertIn(f"página grande: só os primeiros {lib_web.MAX_BYTES} bytes foram lidos", r)
+        self.assertIn("Texto longo sobre Tokio.", r)
+        self.assertIn("… (cortado: mais", r)
+        self.assertLess(len(r), lf.PAGINA_MAX + 300)
+        self.assertLess(enviados[0] * 7_507, lib_web.MAX_BYTES + 2 * 7_510)   # parou logo depois do limite
+
+    def test_timeout(self):
+        def lento(request):
+            raise httpx.ReadTimeout("servidor lento", request=request)
+
+        self.usar_transporte({"https://lento.example/": lento})
+        r = lf.executar("ler_pagina", {"url": "https://lento.example/"})
+        self.assertTrue(r.startswith("[erro] ler_pagina: falha ao baixar https://lento.example/"), r)
+        self.assertIn("ReadTimeout", r)
+
+    def test_servidor_que_pinga_aos_poucos_estoura_o_teto_total(self):
+        def gotejando():                          # ~3 s no total: sem o teto, o teste falha em vez de travar
+            yield b"<html><body>"
+            for _ in range(60):
+                time.sleep(0.05)
+                yield b"<p>um pouco</p>"
+
+        self.usar_transporte({"https://gota.example/": lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, content=gotejando())})
+        inicio = time.monotonic()
+        with mock.patch.object(lib_web, "baixar", functools.partial(lib_web.baixar, timeout=0.3)):
+            r = lf.executar("ler_pagina", {"url": "https://gota.example/"})
+        self.assertIn("passou de 0.3 s", r)
+        self.assertLess(time.monotonic() - inicio, 2)
+
+    def test_pdf_e_erro_http_viram_erro_curto(self):
+        self.usar_transporte({
+            "https://pdf.example/x.pdf": httpx.Response(200, headers={"content-type": "application/pdf"},
+                                                        content=b"%PDF-1.7"),
+            "https://erro.example/": httpx.Response(500, text="erro"),
+        })
+        self.assertIn("tipo 'application/pdf' ignorado", lf.executar("ler_pagina", {"url": "https://pdf.example/x.pdf"}))
+        self.assertIn("HTTP 500", lf.executar("ler_pagina", {"url": "https://erro.example/"}))
 
 
 if __name__ == "__main__":
