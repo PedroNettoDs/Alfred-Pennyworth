@@ -1,0 +1,18 @@
+[Unit]
+Description=Alfred Laya — decisões tipadas locais (laya-serve :PORT_LAYA, padrão 7073)
+After=network-online.target
+# Unit de USUÁRIO, como as do inbox: roda com o mesmo usuário que antes ia em User= (sem sudo).
+# run.sh carrega o .env da raiz e escolhe a porta (PORT_LAYA).
+
+[Service]
+Type=simple
+WorkingDirectory=@ALFRED_DIR@/services/laya
+ExecStart="@ALFRED_DIR@/services/laya/run.sh"
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/.

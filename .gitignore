@@ -40,3 +40,6 @@ Thumbs.db
 
 # ── Pacote gerado da extensão do Thunderbird ──────────────────
 *.xpi
+
+# Laya: e-mails rotulados (dados pessoais) e checkpoints treinados
+services/laya/treino/dados/

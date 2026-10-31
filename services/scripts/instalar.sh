@@ -31,8 +31,8 @@ ENV_EXEMPLO="$RAIZ/.env.example"
 UNITS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 FLAG_DESLIGADO="$RAIZ/logs/alfred_desligado"
 CONTAINERS=(open-webui searxng chromadb evolution-postgres evolution-api)
-SERVICOS_PY=(shell-executor researcher inbox briefing)
-UNITS_SERVICO=(alfred-inbox-api.service alfred-executor.service alfred-researcher.service)
+SERVICOS_PY=(shell-executor researcher inbox briefing laya)
+UNITS_SERVICO=(alfred-inbox-api.service alfred-executor.service alfred-researcher.service alfred-laya.service)
 OBRIGATORIAS=(SHELL_EXECUTOR_TOKEN WEBUI_SECRET_KEY VAULT_ALFRED VAULT_PEDRO OLLAMA_BASE_URL MODEL_CHAT MODEL_EMBED
               EVOLUTION_API_KEY EVOLUTION_POSTGRES_PASSWORD N8N_ENCRYPTION_KEY)
 
