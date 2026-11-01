@@ -901,16 +901,26 @@ def _criar_do_item(item: dict, enviar: Optional[bool]) -> dict:
     return res
 
 
+def _conversa_ocupada() -> bool:
+    """Turno da Conversa com o Alfred (conversa.py) na fila ou rodando neste processo: a GPU é do chat."""
+    conversa = sys.modules.get("conversa")
+    return bool(conversa and conversa.ocupado())
+
+
 @_serializado
 def processar_fila(todos: bool = False, enviar: Optional[bool] = None) -> list[dict]:
     """
     Itens com prazo vencido (todos=True: a fila inteira) → pendência + áudio + avisos, com as opções que o
     webhook pediu (enviar=False sobrepõe: nunca chama a Evolution). O item só sai da fila depois da pendência
     gravada; se der erro, tenta de novo na próxima volta (até 3 vezes). No fim, disparar_lembretes().
+    Com turno da Conversa em andamento, o próximo item espera a volta seguinte (não é descartado).
     """
     agora = core._now()
     resultados = []
     for item in [i for i in _load_fila() if todos or (core._parse_dt(i.get("prazo")) or agora) <= agora]:
+        if _conversa_ocupada():
+            log("[whatsapp] fila: conversa com o Alfred em andamento — o próximo item espera")
+            break
         sai = True
         try:
             resultados.append(_criar_do_item(item, enviar))

@@ -242,6 +242,15 @@ pesquisa:
   modelo_sintese: "qwen3.6:35b-a3b"   # vazio = MODEL_CHAT
   relevancia_minima: 0.5              # cosseno subpergunta × (título + trecho) para baixar a página (0 = baixa tudo)
 
+# ── Conversa com o Alfred — services/inbox/conversa.py (aba Conversa do Painel) ──
+# Tool calling nativo (lib_ferramentas), bloco "Agora", memória e histórico. Medições e a troca de modelo
+# na RTX 3060: services/inbox/about.md → "Conversa com o Alfred".
+conversa:
+  modelo: ""                    # vazio = MODEL_CHAT
+  modelo_ferramentas: ""        # vazio = o mesmo. Ex.: "gemma4:e4b" decide as ferramentas e o modelo acima escreve
+                                # a resposta final (sem tools) — na 3060 os dois não cabem juntos: troca a cada turno
+  num_ctx: 16384                # o gemma4:12b ocupa ~8,4 GB de VRAM com 4k ou 32k: o contexto não pesa aqui
+
 # ── Defaults globais ──────────────────────────────────────────
 defaults:
   vault_alfred_subfolders:
