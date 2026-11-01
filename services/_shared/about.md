@@ -82,7 +82,7 @@ Divide o mbox pelo separador real do Thunderbird (`From - <data>`), evitando os 
 `cluster_items()`, `rank_clusters()`, `build_clustered_news_text()` — extraídos do `tech-briefing.py` para serem usados também pelo inbox. Comportamento idêntico ao original; `pesos_fontes` virou parâmetro.
 
 ### `lib_db.py`
-SQLite + FTS5 em `VAULT_ALFRED/.alfred/alfred.db` (`ALFRED_DB` troca): `indexar_cofre()` / `buscar_notas()` (índice derivado dos `.md`), `registrar_wa()` / `historico_contato()` / `buscar_wa()` / `podar_wa()` (histórico do WhatsApp) e `cache_get()` / `cache_put()` (cache de classificação do LLM). Nenhuma função levanta: sem banco, devolve vazio/None e o chamador segue pelo caminho antigo. Detalhes e regras do cache em [`inbox/about.md`](../inbox/about.md#busca-e-histórico--sqlite-fts5-_sharedlib_dbpy).
+SQLite + FTS5 em `VAULT_ALFRED/.alfred/alfred.db` (`ALFRED_DB` troca): `indexar_cofre()` / `buscar_notas()` (índice derivado dos `.md`), `registrar_wa()` / `historico_contato()` / `buscar_wa()` / `contatos_wa()` / `podar_wa()` (histórico do WhatsApp; `contatos_wa(nome)` acha as conversas individuais pelo nome sem acento/caixa ou pelos dígitos do número — nome idêntico ganha) e `cache_get()` / `cache_put()` (cache de classificação do LLM). Nenhuma função levanta: sem banco, devolve vazio/None e o chamador segue pelo caminho antigo. Detalhes e regras do cache em [`inbox/about.md`](../inbox/about.md#busca-e-histórico--sqlite-fts5-_sharedlib_dbpy).
 
 ### `lib_rag.py`
 RAG local sobre os dois cofres (`VAULT_ALFRED` → `alfred`, `VAULT_PEDRO` → `pedro`) — substitui a Knowledge Base do Open WebUI. Sem LangChain; nada sai da máquina.
@@ -99,7 +99,7 @@ RAG local sobre os dois cofres (`VAULT_ALFRED` → `alfred`, `VAULT_PEDRO` → `
 - **Estado:** tabela `rag_vetores` (cofre, caminho, mtime, sha1, nº de pedaços, id da coleção) no mesmo `alfred.db` do `lib_db`. Coleção recriada (volume do ChromaDB zerado) tem outro id → tudo é reembedado.
 - **Sem ChromaDB ou sem Ollama:** a busca cai só no FTS5 e a indexação atualiza só o FTS5 (`"offline": true`); nada levanta. Três notas seguidas sem embedding/gravação interrompem a rodada sem apagar nada do índice — a próxima retoma.
 - **Quem indexa:** `alfred-rag.timer` (5 min após o login e a cada 30 min; parado em modo jogo, entra no `alfred-switch.sh`) e o researcher logo depois de gravar uma pesquisa (`indexar_local()`, em thread). Primeira indexação dos dois cofres: 888 notas, 1.520 pedaços, ~43 s com `bge-m3` na GPU.
-- **Quem busca:** a ferramenta `buscar_cofre` (`_shared/lib_ferramentas.py`) e a aba Conversa do Painel — a ligar.
+- **Quem busca:** a ferramenta `buscar_cofre` (`_shared/lib_ferramentas.py`, ligada em 31/10/2026) e, por ela, a aba Conversa do Painel.
 - **CLI** (Python de um venv do Alfred; lê o `.env`):
   `services/scripts/chromadb-indexer.py indexar [--cofre alfred|pedro] [--tudo]` e `buscar "consulta" [--cofre] [--pasta] [--limite]`.
   Testes: `inbox/tests/test_rag.py` (offline: ChromaDB em memória, embeddings falsos, cofres temporários).
@@ -122,6 +122,21 @@ foram indexados com `bge-m3` real numa coleção em memória no lugar do ChromaD
 - `Prometheus.md` e `HashCorp Vault.md` existem mas estão vazias (0 bytes): nenhuma das buscas as acha.
 - Limiar: distância dos acertos 0,26–0,48; perguntas sem relação com os cofres (receita de bolo, futebol) ficaram em
   0,53+ → `DISTANCIA_MAX = 0,5`. Amostra pequena — recalibrar se trocar de modelo.
+
+### `lib_web.py`
+Baixar uma página da web sem virar porta de entrada para a rede local (SSRF). Saiu do modo profundo do researcher
+(31/10/2026) para a ferramenta `ler_pagina` usar as mesmas defesas; o researcher importa daqui, com o mesmo
+comportamento (os 30 testes de `researcher/tests/test_profundo.py` passam sem mudança).
+
+| Função | O que faz |
+|--------|-----------|
+| `url_publica(url, dns=None)` | `True` só para `http`/`https` cujo host resolve APENAS para IPs públicos (`is_global`, IPv4 mapeado em IPv6 incluído): nada de localhost, rede local, link-local (169.254.169.254), CGNAT |
+| `baixar(url, timeout=15, max_bytes=2_000_000, max_redirects=3, tipos=…, dns=None, transporte=None)` | `{url (a final), tipo, charset, corpo, truncada}`. Redirects seguidos à mão, cada destino revalidado por `url_publica`; lê no máximo `max_bytes` (o resto é descartado, `truncada=True`); desiste depois de `timeout` segundos **no total** (um servidor que pinga um byte por vez não escapa); só HTML e texto puro. Recusa ou falha → `ErroPagina` com o motivo em uma linha |
+| `decodificar(corpo, charset)` | bytes → texto com o charset do cabeçalho (desconhecido → utf-8), sem levantar |
+
+- Não extrai texto: o researcher usa BeautifulSoup, `ler_pagina` usa `lib_mail.html_to_text` (só biblioteca padrão — o venv do inbox não tem bs4).
+- Resta a janela entre a resolução e a conexão do httpx (DNS rebinding) — risco aceito para um assistente de um usuário só.
+- Testes trocam `resolver` (DNS) e `_transporte_http` (`httpx.MockTransport`).
 
 ### `lib_memoria.py`
 Memória automática: fatos duráveis sobre Pedro e seus contatos ("é vegetariano", "é diretor de TI da Unimed Bauru"), extraídos pelo LLM local, guardados e devolvidos como contexto para os prompts. Ideia trazida do Odysseus (só o comportamento; o código é próprio).
@@ -155,9 +170,9 @@ Registro de ferramentas do Alfred para tool calling nativo do Ollama (`/api/chat
 | `@ferramenta(nome, descricao, perigosa=False, timeout=60)` | Registra uma função comum. O JSON Schema dos parâmetros sai da assinatura (`str`, `int`, `float`, `bool`, `Optional[...]`, `Literal[...]` → `enum`, valores padrão → fora de `required` e "(padrão: …)" no fim da descrição) e das linhas `:param x:` da docstring. Tipo não suportado ou nome repetido falham já na importação |
 | `esquemas()` | Lista `[{"type": "function", "function": {name, description, parameters}}]` pronta para o campo `tools` (cópia: mexer nela não muda o registro) |
 | `executar(nome, argumentos)` | Converte os argumentos do modelo para os tipos da assinatura (`"5"` → 5, `"true"` → True, `null`/ausente → padrão, chave desconhecida ignorada, `enum` conferido; aceita dict ou texto JSON), roda a função numa thread com o `timeout` do registro e devolve o texto para a mensagem `role: "tool"`, cortado em `MAX_SAIDA` (12 000) caracteres. **Nunca levanta:** argumento inválido, exceção e timeout viram uma linha `[erro] …`. Timeout abandona a thread (não dá para matá-la); numa ferramenta perigosa o texto avisa que a ação pode ter terminado depois |
-| `perigosa(nome)` | `True` para `executar_comando`, `responder_pendencia`, `responder_limpeza`, `salvar_nota` e `completar_tarefa`. A aprovação **não** é feita aqui: o chat mostra "Executar? [Sim] [Não]" e só então chama `executar()` |
+| `perigosa(nome)` | `True` para `executar_comando`, `responder_pendencia`, `responder_limpeza`, `salvar_nota`, `completar_tarefa` e `criar_compromisso`. A aprovação **não** é feita aqui: o chat mostra "Executar? [Sim] [Não]" e só então chama `executar()` |
 
-**Ferramentas (27):**
+**Ferramentas (35):**
 
 | Origem (`tools/`) | Ferramentas | Como |
 |---|---|---|
@@ -170,12 +185,20 @@ Registro de ferramentas do Alfred para tool calling nativo do Ollama (`/api/chat
 | `alfred_tasks` | `adicionar_tarefa`, `listar_tarefas`, `completar_tarefa` ⚠, `tarefas_vencidas` | O mesmo `VAULT_ALFRED/tasks.yml` do "vou" e da agenda: cria por `core._add_task` (ganhou `priority`), marca dentro de `core.trava_arquivo` com gravação atômica. `tasks.yml` ilegível → erro, nada é gravado por cima |
 | `alfred_memory` | `lembrar(texto, sujeito)`, `buscar_memoria(consulta)`, `listar_memoria(sujeito)` | `lib_memoria.extrair` / `contexto` / `listar` — o `memory.yml` chave-valor fica para trás (não há "esquecer": a `lib_memoria` não apaga fato avulso; a auditoria faz a faxina) |
 | `alfred_vault_reader` + `alfred_vault_writer` | `buscar_cofre(consulta, cofre="todos")`, `ler_nota(caminho, cofre="pedro")`, `listar_cofre`, `salvar_nota` ⚠ | As duas `search_vault` viraram `buscar_cofre`. Caminhos resolvidos dentro do cofre (absoluto, `..` ou symlink para fora → erro); `salvar_nota` nunca sobrescreve |
+| nova (agenda) | `ver_agenda(dias=7)`, `criar_compromisso(texto)` ⚠ | `inbox/agenda.py`: `listar()` sem desfeitos/cancelados, de hoje até `dias` à frente, com status (a caminho do calendário / no calendário / erro). `criar_compromisso` = o mesmo caminho do `POST /agenda` da API: `detectar_compromisso(texto, para_mim=True)` (Ollama) → `adicionar(..., origem={"canal": "conversa"})` → notificação com [Desfazer]; idempotente (mesmo título no mesmo dia não duplica) |
+| nova (WhatsApp) | `buscar_mensagens(consulta, contato="", limite=10)`, `conversa_com(contato, n=20)` | `lib_db.buscar_wa` / `historico_contato`. `contato` aceita nome (parte dele, sem acento/caixa), número ou JID, resolvido por `lib_db.contatos_wa`; mais de uma conversa → a ferramenta lista as opções em vez de chutar |
+| nova (e-mail) | `emails_recentes(dias=2, categoria="")`, `ler_email(message_id)` | Só leitura: `core.coletar` (Thunderbird, inbox padrão) + categoria de `logs/inbox_categorias.json` (`limpeza.carregar_registro`). Lista até 40 (data, remetente, assunto, categoria, não lido, message_id); `ler_email` procura nos últimos 30 dias e devolve cabeçalho + texto limpo (HTML já convertido pelo `lib_mail`, URLs longas → `[link]`), cortado em 6 000 caracteres |
+| nova (web) | `buscar_web(consulta, n=5)`, `ler_pagina(url)` | `lib_alfred.searxng_search(categories="general")` no SearXNG local (`SEARXNG_URL`): título, URL, trecho. `ler_pagina` = `lib_web.baixar` (defesas do researcher) + `lib_mail.html_to_text`, texto cortado em 8 000 caracteres; URL privada, redirect para loopback, tipo não texto, HTTP ≠ 200 e tempo esgotado viram `[erro] ler_pagina: …` |
 
-- **Busca:** `buscar_cofre` passa por `_buscar(query, cofre, limite) -> [{cofre, caminho, titulo, trecho, score}]`, hoje `lib_db.buscar_notas` (FTS5). A busca híbrida de `lib_rag.py` entra trocando só essa função, com a mesma saída.
+- **Busca nos cofres:** `buscar_cofre` passa por `_buscar(query, cofre, limite)` = `lib_rag.buscar` (FTS5 + ChromaDB, RRF; sem ChromaDB ou Ollama, só FTS5). Saída com citação numerada no formato do `lib_rag.contexto`: `[n] caminho (cofre X)` + trecho (cortado em 600 caracteres — o pedaço vetorial tem até 1 200).
 - **Serviços:** sempre `127.0.0.1` — Shell Executor em `PORT_SHELL_EXECUTOR` (7071), Researcher em `PORT_RESEARCHER` (7072) —, com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN`. Nada de `172.17.0.1`.
-- **Importação:** `core`, `whatsapp` e `limpeza` (de `services/inbox/`) só são importados quando uma ferramenta precisa; `esquemas()` não carrega o pipeline do inbox.
-- Testes: `inbox/tests/test_ferramentas.py` (offline: vault temporário, índice FTS5 de verdade, HTTP / subprocess / WhatsApp / limpeza / `lib_memoria` mockados).
-- Os 27 esquemas custam ~3 200 tokens de prompt no `gemma4:e4b`. Teste real (31/10/2026): "quais pendências tenho?" → `listar_pendencias` com argumentos válidos.
+- **Importação:** `core`, `agenda`, `whatsapp` e `limpeza` (de `services/inbox/`) só são importados quando uma ferramenta precisa; `esquemas()` não carrega o pipeline do inbox.
+- Testes: `inbox/tests/test_ferramentas.py` (56, offline: vault temporário, `agenda.yml`, índice FTS5 e histórico do WhatsApp de verdade; HTTP — Shell Executor, Researcher, SearXNG, páginas via `httpx.MockTransport` e DNS falso —, Ollama da agenda, `core.coletar`, subprocess, WhatsApp, limpeza, vetores do `lib_rag` e `lib_memoria` mockados).
+- Os 27 esquemas custavam ~3 200 tokens de prompt no `gemma4:e4b`; os 35 somam 17 254 caracteres de JSON (não medido em tokens). Teste real (31/10/2026): "quais pendências tenho?" → `listar_pendencias` com argumentos válidos.
+- **Teste real das novas (31/10/2026, serviços no ar, pela `executar()`):**
+  - `buscar_web("Python 3.14 novidades", n=3)` → 3 resultados do SearXNG local (8889) em 1,2 s: docs.python.org (pt-br) e Reddit, com título, URL e trecho.
+  - `buscar_cofre("redes de computadores")` → `lib_rag.buscar` com o ChromaDB real (8001, coleção `cofres-bge-m3`) em 2,9 s na primeira chamada: os 5 primeiros com `origem` `ambos` (notas da Fatec, CCNA, TCC), saída com `[n] caminho (cofre pedro)`. Para "o que é entropia" o vetor não achou nada abaixo de `DISTANCIA_MAX` e sobrou um acerto fraco do FTS5 (OR em "o que") num briefing — limite do `lib_rag`, não da ferramenta.
+  - `ler_pagina` na página do docs.python.org que o SearXNG devolveu: 0,4 s, texto cortado em 8 000 caracteres. `http://127.0.0.1:7073/vivo` e `http://localhost:8889/` → `[erro] ler_pagina: URL recusada (não é http/https público)`.
 
 ### `lib_tts.py`
 `generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open; com `bloquear=True` passa ao próximo player se um sair com erro).
@@ -246,6 +269,7 @@ from _shared.lib_whatsapp import enviar_texto, enviar_audio, baixar_midia
 from _shared.lib_memoria import extrair, contexto, auditar
 from _shared.lib_ferramentas import esquemas, executar, perigosa
 from _shared import lib_rag   # lib_rag.buscar(), lib_rag.contexto()
+from _shared import lib_web   # lib_web.baixar(), lib_web.url_publica()
 ```
 
 ## Variáveis de ambiente relevantes
@@ -268,5 +292,5 @@ from _shared import lib_rag   # lib_rag.buscar(), lib_rag.contexto()
 | `WHATSAPP_DRY_RUN` | `false` | `true` = simula os envios mesmo com a URL configurada |
 | `MEMORIA_DB` | `""` | Banco da memória automática (vazio = `db` da seção `memoria:` → `VAULT_ALFRED/memoria/memoria.db`) |
 | `VAULT_PEDRO` | `""` | Cofre do Pedro (`ler_nota(..., cofre="pedro")` em `lib_ferramentas`; indexado por `core.indexar_cofres`) |
-| `PORT_SHELL_EXECUTOR` / `PORT_RESEARCHER` | `7071` / `7072` | Portas em `127.0.0.1` que `lib_ferramentas` chama |
+| `PORT_SHELL_EXECUTOR` / `PORT_RESEARCHER` | `7071` / `7072` | Portas em `127.0.0.1` que `lib_ferramentas` chama (o SearXNG de `buscar_web` vem de `SEARXNG_URL`) |
 | `SHELL_EXECUTOR_TOKEN` | `""` | Bearer do Shell Executor e do Researcher (`lib_ferramentas`) |

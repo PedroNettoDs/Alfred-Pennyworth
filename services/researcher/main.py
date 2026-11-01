@@ -16,12 +16,10 @@ notas curtas por fonte (modelo leve) → relatório com citações [n] (modelo m
 
 import copy
 import hashlib
-import ipaddress
 import json
 import math
 import os
 import re
-import socket
 import sys
 import tempfile
 import threading
@@ -30,7 +28,6 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin, urlsplit
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -51,6 +48,7 @@ from _shared.lib_alfred import (
 from _shared.perfis import get_perfil, load as carregar_perfis
 import _shared.lib_chromadb as chroma
 import _shared.lib_rag as rag
+import _shared.lib_web as web
 
 app = FastAPI(title="Alfred Researcher", version="3.2.0")
 
@@ -481,29 +479,9 @@ def _candidatos(job: dict, subpergunta: str, max_results: int, vistos: set[str])
 
 
 # ── 3. Leitura das fontes ─────────────────────────────────────
-def _resolver(host: str) -> list[str]:
-    return list({info[4][0] for info in socket.getaddrinfo(host, None)})
-
-
-def _url_publica(url: str) -> bool:
-    """Só http/https para host que resolve APENAS para IPs públicos — nada de localhost, rede local,
-    link-local (169.254.169.254), CGNAT. O researcher roda no host, ao lado de Ollama, painel e APIs sem senha:
-    uma página (ou um redirect dela) não pode fazê-lo buscar http://127.0.0.1:7073/...
-    Resta a janela entre esta resolução e a conexão do httpx (DNS rebinding); para um assistente de um usuário
-    só, que lê o que o SearXNG devolveu, o risco foi aceito."""
-    partes = urlsplit(url)
-    if partes.scheme not in ("http", "https") or not partes.hostname:
-        return False
-    try:
-        ips = _resolver(partes.hostname)
-    except (OSError, UnicodeError):
-        return False
-    try:
-        enderecos = [ipaddress.ip_address(ip.split("%", 1)[0]) for ip in ips]
-    except ValueError:
-        return False
-    enderecos = [getattr(ip, "ipv4_mapped", None) or ip for ip in enderecos]
-    return bool(enderecos) and all(ip.is_global for ip in enderecos)
+# As defesas (só http/https para IP público, redirects revalidados, teto de bytes e de tempo) ficam em
+# _shared/lib_web.py — a ferramenta ler_pagina usa as mesmas.
+_resolver = web.resolver   # os testes trocam por um DNS falso
 
 
 def _extrair_texto(corpo: bytes, tipo: str, charset: Optional[str]) -> str:
@@ -526,47 +504,19 @@ def _extrair_texto(corpo: bytes, tipo: str, charset: Optional[str]) -> str:
 
 
 def _baixar_pagina(url: str) -> Optional[str]:
-    """Baixa a página e devolve o texto extraído (None se não deu).
-
-    Redirects seguidos à mão, cada destino revalidado por _url_publica; lê no máximo PAGINA_MAX_BYTES (página
-    maior é truncada) e desiste depois de PAGINA_TIMEOUT segundos no total — o timeout do httpx vale por
-    operação, e um servidor que pinga um byte por vez nunca o estouraria. Só HTML e texto puro."""
-    limite = time.monotonic() + PAGINA_TIMEOUT
+    """Baixa a página (web.baixar: URL e cada redirect revalidados, no máximo PAGINA_MAX_BYTES lidos, desiste
+    depois de PAGINA_TIMEOUT segundos no total, só HTML e texto puro) e devolve o texto extraído (None se não deu)."""
     try:
-        with httpx.Client(timeout=PAGINA_TIMEOUT, follow_redirects=False, transport=_transporte_http,
-                          headers={"User-Agent": USER_AGENT}) as client:
-            for _ in range(PAGINA_MAX_REDIRECTS + 1):
-                if not _url_publica(url):
-                    log(f"[researcher] URL recusada (não é http/https público): {url}")
-                    return None
-                with client.stream("GET", url) as resp:
-                    if resp.is_redirect and resp.headers.get("location"):
-                        url = urljoin(url, resp.headers["location"])
-                        continue
-                    if resp.status_code != 200:
-                        log(f"[researcher] HTTP {resp.status_code} em {url}")
-                        return None
-                    tipo = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-                    if tipo not in TIPOS_TEXTO:
-                        log(f"[researcher] tipo {tipo!r} ignorado em {url}")
-                        return None
-                    corpo = bytearray()
-                    for pedaco in resp.iter_bytes():
-                        corpo.extend(pedaco)
-                        if len(corpo) >= PAGINA_MAX_BYTES:
-                            log(f"[researcher] página grande, lidos só {PAGINA_MAX_BYTES} bytes: {url}")
-                            del corpo[PAGINA_MAX_BYTES:]
-                            break
-                        if time.monotonic() > limite:
-                            log(f"[researcher] {url} passou de {PAGINA_TIMEOUT} s — desistindo")
-                            return None
-                    texto = _extrair_texto(bytes(corpo), tipo, resp.charset_encoding)
-                    return texto if len(texto) >= PAGINA_TEXTO_MIN else None
-            log(f"[researcher] redirects demais: {url}")
-            return None
-    except httpx.HTTPError as e:
-        log(f"[researcher] falha ao baixar {url}: {e!r}")
+        pagina = web.baixar(url, timeout=PAGINA_TIMEOUT, max_bytes=PAGINA_MAX_BYTES,
+                            max_redirects=PAGINA_MAX_REDIRECTS, tipos=TIPOS_TEXTO, user_agent=USER_AGENT,
+                            dns=_resolver, transporte=_transporte_http)
+    except web.ErroPagina as e:
+        log(f"[researcher] {e}")
         return None
+    if pagina["truncada"]:
+        log(f"[researcher] página grande, lidos só {PAGINA_MAX_BYTES} bytes: {pagina['url']}")
+    texto = _extrair_texto(pagina["corpo"], pagina["tipo"], pagina["charset"])
+    return texto if len(texto) >= PAGINA_TEXTO_MIN else None
 
 
 SCHEMA_NOTAS = {

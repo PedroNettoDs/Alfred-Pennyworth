@@ -163,7 +163,8 @@ só o corpo muda. Sem embedding (Ollama fora), deixa passar: o filtro economiza 
 O limiar depende do `MODEL_EMBED`; os números de `contagem` (resultados × relevantes) ajudam a calibrar.
 
 **Leitura das páginas** — o researcher roda no host, ao lado de Ollama, painel e APIs sem senha, então a página
-nunca escolhe para onde ele vai:
+nunca escolhe para onde ele vai. As defesas ficam em `_shared/lib_web.py` (`baixar`, `url_publica`), as mesmas da
+ferramenta `ler_pagina` da conversa; os limites abaixo são as constantes `PAGINA_*` do `main.py`:
 
 - só `http`/`https`, e o host precisa resolver **apenas** para IPs públicos (nada de `localhost`, rede local,
   `169.254.169.254`, CGNAT, IPv6 local ou IPv4 mapeado em IPv6);

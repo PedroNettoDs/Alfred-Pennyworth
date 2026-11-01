@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -282,6 +283,45 @@ def buscar_wa(query: str, jid: Optional[str] = None, limite: int = 10) -> list[d
     except sqlite3.Error as e:
         log(f"[db] buscar_wa falhou: {e}")
         return []
+
+
+def _dobrar(texto: str) -> str:
+    """Minúsculas sem acento: "João" e "joao" casam."""
+    return "".join(c for c in unicodedata.normalize("NFKD", (texto or "").lower()) if not unicodedata.combining(c))
+
+
+def contatos_wa(nome: str, limite: int = 10) -> list[dict]:
+    """
+    Conversas individuais (sem grupos) com `nome` no nome do contato (sem acento nem caixa) ou com os dígitos de
+    `nome` (4+) no JID: [{remote_jid, contato, mensagens, ultima}], da conversa mais recente para a mais antiga.
+    `contato` é o nome mais recente. Se algum nome for idêntico a `nome`, só as conversas com esse nome.
+    """
+    alvo = _dobrar(nome).strip()
+    digitos = re.sub(r"\D", "", nome or "")
+    con = _conectar() if alvo else None
+    if not con:
+        return []
+    try:
+        with closing(con):
+            rows = con.execute(
+                "SELECT remote_jid, contato, COUNT(*) AS n, MAX(ts) AS ultima FROM wa_msgs "
+                "WHERE grupo = 0 AND from_me = 0 GROUP BY remote_jid, contato").fetchall()
+    except sqlite3.Error as e:
+        log(f"[db] contatos_wa falhou: {e}")
+        return []
+    conversas: dict[str, dict] = {}
+    for r in rows:
+        c = conversas.setdefault(r["remote_jid"], {"remote_jid": r["remote_jid"], "contato": "", "nomes": set(),
+                                                   "mensagens": 0, "ultima": ""})
+        c["nomes"].add(_dobrar(r["contato"]).strip())
+        c["mensagens"] += r["n"]
+        if str(r["ultima"] or "") >= c["ultima"]:
+            c["contato"], c["ultima"] = r["contato"] or r["remote_jid"], str(r["ultima"] or "")
+    achados = [c for c in conversas.values()
+               if any(alvo in n for n in c["nomes"]) or (len(digitos) >= 4 and digitos in c["remote_jid"])]
+    exatos = [c for c in achados if alvo in c["nomes"]]
+    return [{k: v for k, v in c.items() if k != "nomes"}
+            for c in sorted(exatos or achados, key=lambda c: c["ultima"], reverse=True)[:limite]]
 
 
 def podar_wa(dias: float) -> int:
