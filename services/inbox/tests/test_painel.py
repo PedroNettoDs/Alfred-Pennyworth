@@ -754,7 +754,64 @@ class TestLimpeza(Base):
         self.assertEqual((l["status"], l["nota"]), ("recusado", "ainda não"))
         self.assertEqual(self.acao(cli, "/painel/api/limpeza/nao-existe/aprovar", {}, csrf=token).status_code, 404)
         html = self.guardar(cli.get("/painel/parcial/limpeza")).text
-        self.assertNotIn('class="lote__form"', html)    # nenhum lote aguardando → sem botões
+        self.assertNotIn("/aprovar", html)    # nenhum lote aguardando → sem Aprovar/Recusar
+        self.assertEqual(html.count('class="lote__form"'), 1)    # só o aprovado tem Limpar; o recusado, nada
+        self.assertIn(f'data-acao="/painel/api/limpeza/{lote["id"]}/limpar"', html)
+
+    def test_limpar(self):
+        lote = self.propor(2)
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/limpeza")).text
+        for trecho in ('id="dialogo-limpar"', ">Aprovar e limpar</button>",
+                       f'data-acao="/painel/api/limpeza/{lote["id"]}/limpar"',
+                       'data-dialogo-mensagem="Mover os 2 e-mails para a Lixeira da conta? A extensão do Thunderbird '
+                       'executa de verdade na próxima passada.'):
+            self.assertIn(trecho, html)
+        token = self.csrf(cli)
+        url = f"/painel/api/limpeza/{lote['id']}/limpar"
+        with mock.patch.object(limpeza, "avaliar", lambda m, *a, **k: ("promocao há 85 dias", "")):
+            # aguardando: "Aprovar e limpar" aprova e pede a execução de verdade num clique
+            r = self.acao(cli, url, {"nota": "some com isso"}, csrf=token)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["mensagem"], "Limpeza pedida: 2 e-mails irão para a Lixeira na próxima "
+                                                   "passada da extensão do Thunderbird.")
+            l = limpeza.obter_lote(lote["id"])
+            self.assertEqual((l["status"], l["limpar"], l["nota"]), ("aprovado", True, "some com isso"))
+            html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+            self.assertIn("Limpeza pedida em", html)
+            self.assertNotIn('class="lote__form"', html)    # já pedido: sem botão até a extensão relatar
+
+            fila = limpeza.fila_execucao()
+            self.assertTrue(fila[0]["executar"])
+            r = self.acao(cli, url, {}, csrf=token)    # a extensão pegou o lote
+            self.assertEqual((r.status_code, r.json()["erro"]),
+                             (409, "A extensão do Thunderbird está executando este lote agora. Aguarde o resultado."))
+            limpeza.registrar_resultado(lote["id"], [
+                {"message_id": "promo-0@loja.com", "status": "movido", "detalhe": "→ /Deleted"},
+                {"message_id": "promo-1@loja.com", "status": "nao_encontrado",
+                 "detalhe": "não encontrada nas contas permitidas"}])
+            html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+            for trecho in ("Parcial", ": 1 movido para a Lixeira, 1 não encontrado no Thunderbird.",
+                           '<th scope="col">Resultado</th>', "(não encontrada nas contas permitidas)",
+                           'data-dialogo-mensagem="Mover o e-mail para a Lixeira da conta?'):
+                self.assertIn(trecho, html)
+
+            # Limpar de novo num parcial: só o que falta mover
+            r = self.acao(cli, url, {}, csrf=token)
+            self.assertEqual(r.json()["mensagem"], "Limpeza pedida: 1 e-mail irá para a Lixeira na próxima "
+                                                   "passada da extensão do Thunderbird.")
+            self.assertEqual([i["message_id"] for i in limpeza.fila_execucao()[0]["itens"]], ["promo-1@loja.com"])
+            limpeza.registrar_resultado(lote["id"], [{"message_id": "promo-1@loja.com", "status": "simulado"}])
+        # pediu Limpar e só simulou: extensão desatualizada (1 movido antes + 1 simulado agora = parcial)
+        self.assertEqual(limpeza.obter_lote(lote["id"])["status"], "parcial")
+        self.assertIn("ela está desatualizada", self.guardar(cli.get("/painel/parcial/limpeza")).text)
+
+        outro = self.propor(1)
+        limpeza.recusar(outro["id"])
+        r = self.acao(cli, f"/painel/api/limpeza/{outro['id']}/limpar", {}, csrf=token)
+        self.assertEqual((r.status_code, r.json()["erro"]), (409, "Este lote já foi resolvido (recusado)."))
+        self.assertEqual(self.acao(cli, "/painel/api/limpeza/nao-existe/limpar", {}, csrf=token).status_code, 404)
+        self.assertEqual(self.acao(cli, url, {}, csrf=False).status_code, 403)
 
     def test_vazia(self):
         html = self.guardar(self.entrar().get("/painel/limpeza")).text

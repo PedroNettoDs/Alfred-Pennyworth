@@ -308,6 +308,9 @@ Vazia: `m.vazio("A agenda está vazia.", "agenda")`.
 {% call m.dialogo("dialogo-limpeza", "Aprovar a limpeza?", "Mover para a Lixeira", "perigo") %}
   <p data-preencher="mensagem"></p>
 {% endcall %}
+{% call m.dialogo("dialogo-limpar", "Limpar agora?", "Mover para a Lixeira", "perigo") %}
+  <p data-preencher="mensagem"></p>
+{% endcall %}
 ```
 Lote:
 ```jinja
@@ -326,8 +329,15 @@ Lote:
       {{ m.botao("Aprovar", "primario", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/aprovar",
           "data-confirmar": "dialogo-limpeza", "data-apos-sucesso": "encerrar",
           "data-dialogo-mensagem": "Os " ~ l.total ~ " e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente."}) }}
+      {{ m.botao("Aprovar e limpar", "perigo", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/limpar",
+          "data-confirmar": "dialogo-limpar", "data-apos-sucesso": "encerrar", "data-dialogo-mensagem": msg_limpar}) }}
       {{ m.botao("Recusar", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/recusar", "data-apos-sucesso": "encerrar"}) }}
     </div>
+    {{ m.resultado() }}
+  </form>
+  {% elif l.pode_limpar and not l.limpar_pedido %}
+  <form class="lote__form" data-acao="" data-acoes>
+    <div class="acoes">{{ m.botao("Limpar", "perigo", nome_icone="limpeza", attrs={… mesmo data-acao/limpar e dialogo-limpar …}) }}</div>
     {{ m.resultado() }}
   </form>
   {% endif %}

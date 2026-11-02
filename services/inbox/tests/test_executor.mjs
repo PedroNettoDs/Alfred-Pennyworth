@@ -62,6 +62,23 @@ test("execução real move só para a Lixeira, nunca delete", async () => {
   assert.equal(chamadas.delete.length, 0);
 });
 
+test("lote com executar=true (botão Limpar do Painel) move mesmo com executarDeVerdade desligado", async () => {
+  const { messenger, chamadas } = caixa();
+  const cfg = { contasPermitidas: ["acc1"], modoTeste: false, executarDeVerdade: false };
+  const r = porId(await executarLote(messenger, { ...lote, executar: true }, cfg));
+  assert.equal(r["a@x"], "movido");
+  assert.equal(r["c@x"], "movido");
+  assert.equal(r["b@x"], "recusado");   // estrela continua protegendo
+  assert.deepEqual(chamadas.move, [{ ids: [1, 3], pasta: "acc1://Deleted" }]);
+  assert.equal(chamadas.delete.length, 0);
+  // só true liga a execução; o modo teste continua valendo para o lote do Limpar
+  const r2 = porId(await executarLote(caixa().messenger, { ...lote, executar: "sim" }, cfg));
+  assert.equal(r2["a@x"], "simulado");
+  const r3 = porId(await executarLote(caixa().messenger, { ...lote, executar: true }, { ...cfg, modoTeste: true }));
+  assert.equal(r3["a@x"], "movido");
+  assert.equal(r3["c@x"], "nao_encontrado");
+});
+
 test("sem contas permitidas nada acontece; ação desconhecida é recusada", async () => {
   const { messenger, chamadas } = caixa();
   const r1 = await executarLote(messenger, lote, { contasPermitidas: [], executarDeVerdade: true });

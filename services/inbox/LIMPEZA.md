@@ -26,13 +26,37 @@ run.sh limpeza propor          cria o lote "aguardando" em VAULT_ALFRED/pendenci
                                + pendencias/<id>.md ("Posso apagar estes N e-mails?") + notify-send
 run.sh limpeza aprovar <id>    confirmação explícita → revalida cada item → status "aprovado"
           (ou POST /limpeza/<id>/aprovar, ou a tool responder_limpeza no Open WebUI)
+Painel → Limpar                confirmação "Mover N e-mails para a Lixeira?" → limpeza.limpar(id):
+          (ou "Aprovar e limpar")  revalida o que falta mover → "aprovado" + limpar: true
 extensão (a cada 10 min)       GET /limpeza/fila → move cada mensagem p/ Lixeira → POST /limpeza/<id>/resultado
+                               (só move de verdade se "Executar de verdade" estiver ligado nela OU o lote
+                               vier com executar: true, isto é, Pedro clicou em Limpar; senão, simula)
 ```
 
 Estados do lote: `aguardando` → `aprovado` → `em_execucao` → `concluido` | `simulado` | `parcial` | `falhou`.
 Também existem `recusado` e `expirado` (sem resposta em `expirar_lote_dias`). Se um lote fica
 `em_execucao` por mais de 1h, ele volta para a fila. A extensão é idempotente: o que já está na
-Lixeira vira `nao_encontrado`.
+Lixeira vira `nao_encontrado`. Um lote só fica `concluido` quando todos os itens foram `movido`; tudo
+`simulado` dá `simulado`; qualquer mistura com ao menos um movido/simulado dá `parcial`.
+
+### Botão "Limpar" (Painel → Limpeza)
+
+Aprovar só autoriza: com "Executar de verdade" desligado nas opções da extensão (o padrão), a passada
+seguinte apenas **simula** e o lote fica `simulado`/`parcial`. Para mover de verdade, Pedro clica em
+**Limpar** no cartão do lote (`aprovado`, `simulado`, `parcial` ou `falhou`) ou em **Aprovar e limpar** num
+lote `aguardando`. Os dois pedem confirmação ("Mover os N e-mails para a Lixeira da conta?") e chamam
+`limpeza.limpar(id)`, que:
+
+- aprova antes, se o lote está `aguardando` (mesma revalidação de `aprovar`);
+- revalida de novo os itens que ainda não foram `movido` (quem perdeu a elegibilidade sai do lote);
+- marca `limpar: true` e `limpar_pedido_em` e devolve o lote à fila como `aprovado`.
+
+A fila manda `executar: true` para esses lotes, só com os itens ainda não movidos. A extensão move só
+esse lote de verdade, mesmo com "Executar de verdade" desligado. O **modo teste** e as demais travas
+(contas marcadas, estrela, remetente/assunto, Lixeira da própria conta) continuam valendo. O resultado
+(movidos, não encontrados, recusados, erros) aparece no cartão, com o detalhe por e-mail na tabela. Um
+lote `parcial` pode ser limpo de novo; os itens já movidos ficam como estão. Se o Painel avisar que a
+extensão "só simulou" um lote mandado limpar, a extensão carregada no Thunderbird é anterior a esta versão.
 
 ### Quem entra
 
@@ -78,6 +102,9 @@ limpeza:
 | GET | `/limpeza/fila` | uso da extensão |
 | POST | `/limpeza/{id}/resultado` `{itens:[{message_id,status,detalhe}]}` | uso da extensão |
 
+O botão **Limpar** existe só no Painel (`POST /painel/api/limpeza/{id}/limpar`, sessão + CSRF); não há rota
+Bearer nem tool do Open WebUI para ele.
+
 Tool do Open WebUI (`tools/alfred_pendencias.py`): `listar_limpezas()` e `responder_limpeza(id, "aprovar"|"recusar")`.
 
 ## Instalar a extensão (`thunderbird-ext/`)
@@ -96,7 +123,24 @@ Tool do Open WebUI (`tools/alfred_pendencias.py`): `listar_limpezas()` e `respon
    - URL do Alfred (`http://127.0.0.1:7073`) e token (`SHELL_EXECUTOR_TOKEN` do `.env`);
    - marque **só** as contas em que ela pode mexer (vazio = nada é executado);
    - **Modo teste** vem ligado: ela só toca mensagens em pastas cujo caminho contém `Alfred-Teste`;
-   - **Executar de verdade** vem desligado: ela só relata `simulado` ao Alfred.
+   - **Executar de verdade** vem desligado: ela só relata `simulado` ao Alfred, exceto nos lotes em que
+     você clicar em **Limpar** no Painel.
+
+### Recarregar a extensão depois de atualizar (ex.: versão 1.1.0, botão Limpar)
+
+Carga temporária some sempre que o Thunderbird fecha. Em 02/11/2026 a extensão não estava instalada (não
+consta no `extensions.json` do perfil), e a última chamada a `/limpeza/fila` foi em 20/10. Por isso o lote
+aprovado em 31/10 nunca saiu de `aprovado`.
+
+1. Thunderbird → Ferramentas → Ferramentas de desenvolvedor → *Depurar complementos*.
+2. Se "Alfred — limpeza da caixa" aparece, clique em **Recarregar**. Senão, use *Carregar complemento
+   temporário* e escolha `services/inbox/thunderbird-ext/manifest.json`. Para não repetir a cada abertura,
+   instale o `.xpi` (passo 2 acima).
+3. Abra as opções da extensão e confira a **URL do Alfred**: `http://127.0.0.1:7073`. Desde a troca de
+   portas (31/10) a 7072 é o researcher. A versão 1.1.0 troca sozinha uma URL salva com `:7072`; as
+   anteriores recebiam 404 em `/limpeza/fila`.
+4. Confira as contas marcadas e o modo teste. O modo teste continua valendo mesmo para o Limpar.
+5. Clique em **Verificar agora** e veja o resultado no Painel → Limpeza.
 
 ### Teste seguro antes da caixa real
 
@@ -130,3 +174,9 @@ e que só move mensagens para a pasta com `specialUse: trash`.
   Os testes cobrem a lógica com um `messenger` simulado.
 - O caso de uso é Message-ID por conta. A extensão procura em todas as contas marcadas e recusa
   Message-IDs ambíguos.
+- **Fantasmas do mbox offline.** Os candidatos vêm do mbox offline do Thunderbird (`ImapMail/.../INBOX`).
+  Uma mensagem que já saiu da INBOX no servidor (apagada no celular ou no Outlook web) some do índice
+  `INBOX.msf`. Os bytes dela, porém, ficam no mbox até a pasta ser compactada, então ela ainda vira
+  candidata. A extensão então relata `nao_encontrado` ("não encontrada nas contas permitidas"), o que está
+  correto: a mensagem não está mais na caixa. Nos lotes de 20/10, 31 dos 38 itens eram esse caso (nenhum
+  dos 31 consta do `INBOX.msf`; os 7 encontrados constam). No lote de 31/10, só 9 dos 49 constam do índice.

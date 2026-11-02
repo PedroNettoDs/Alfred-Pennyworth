@@ -230,6 +230,58 @@ class TestFluxoAprovacao(BaseLimpeza):
         res = limpeza.registrar_resultado(lote["id"], [{"message_id": i["message_id"], "status": "simulado"}
                                                         for i in fila[0]["itens"]])
         self.assertEqual(res["status"], "simulado")
+        self.assertFalse(fila[0]["executar"], "só aprovar não manda executar de verdade")
+
+    def test_limpar_executa_de_verdade_so_o_que_falta(self):
+        lote = limpeza.propor(notificar=False)
+        lid = lote["id"]
+        limpeza.aprovar(lid)
+        fila = limpeza.fila_execucao()
+        limpeza.registrar_resultado(lid, [{"message_id": i["message_id"], "status": "simulado"} for i in fila[0]["itens"]])
+
+        # botão Limpar num lote simulado: volta à fila com executar=true
+        r = limpeza.limpar(lid)
+        self.assertEqual((r["status"], r["limpar"], r["a_mover"], r["removidos_agora"]), ("aprovado", True, 4, 0))
+        fila = limpeza.fila_execucao()
+        self.assertTrue(fila[0]["executar"])
+        mids = [i["message_id"] for i in fila[0]["itens"]]
+        self.assertEqual(len(mids), 4)
+        res = limpeza.registrar_resultado(lid, [{"message_id": mids[0], "status": "movido"},
+                                                {"message_id": mids[1], "status": "recusado", "detalhe": "estrela"},
+                                                {"message_id": mids[2], "status": "movido"},
+                                                {"message_id": mids[3], "status": "movido"}])
+        self.assertEqual((res["status"], res["contagem"]), ("parcial", {"movido": 3, "recusado": 1}))
+
+        # Limpar de novo: só o recusado vai para a fila; os movidos continuam movidos
+        self.assertEqual(limpeza.limpar(lid)["a_mover"], 1)
+        fila = limpeza.fila_execucao()
+        self.assertEqual([i["message_id"] for i in fila[0]["itens"]], [mids[1]])
+        with self.assertRaises(ValueError):   # em execução pela extensão
+            limpeza.limpar(lid)
+        res = limpeza.registrar_resultado(lid, [{"message_id": mids[1], "status": "movido"}])
+        self.assertEqual((res["status"], res["contagem"]), ("concluido", {"movido": 4}))
+        self.assertNotIn("resultado_detalhe", next(i for i in res["itens"] if i["message_id"] == mids[1]))
+        with self.assertRaises(ValueError):   # concluído: nada mais a limpar
+            limpeza.limpar(lid)
+
+    def test_limpar_lote_aguardando_aprova_e_revalida(self):
+        recusado = limpeza.recusar(limpeza.propor(notificar=False)["id"])
+        with self.assertRaises(ValueError):
+            limpeza.limpar(recusado["id"])
+        with self.assertRaises(KeyError):
+            limpeza.limpar("limpeza-nao-existe")
+
+        lote = limpeza.propor(notificar=False)
+        data = core._load_pend()
+        data["pendencias"].append({"id": "p3", "tipo": "contato", "status": "aguardando", "titulo": "z",
+                                   "email": {"message_id": "trans-velha@banco.com"}})
+        core._save_pend(data)
+        r = limpeza.limpar(lote["id"], "limpa tudo")
+        self.assertEqual((r["status"], r["limpar"], r["nota"], r["a_mover"], r["removidos_agora"]),
+                         ("aprovado", True, "limpa tudo", 3, 1))
+        self.assertTrue(r["aprovado_em"])
+        self.assertEqual(r["removidos_na_aprovacao"][0]["message_id"], "trans-velha@banco.com")
+        self.assertTrue(limpeza.fila_execucao()[0]["executar"])
 
     def test_cli(self):
         import importlib.util

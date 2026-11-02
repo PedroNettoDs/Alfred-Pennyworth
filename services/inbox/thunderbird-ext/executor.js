@@ -8,7 +8,9 @@
  *   - modo teste: só mensagens em pastas cujo caminho contém `pastaTeste` (ex.: "Alfred-Teste");
  *   - a mensagem encontrada precisa bater Message-ID E remetente E assunto com o item do lote;
  *   - mensagens com estrela (flagged) ou já na Lixeira são recusadas;
- *   - com `executarDeVerdade` = false (padrão) nada é movido: o resultado volta como "simulado".
+ *   - com `executarDeVerdade` = false (padrão) nada é movido: o resultado volta como "simulado" —
+ *     salvo o lote que Pedro mandou limpar no Painel (botão "Limpar" → `lote.executar === true`);
+ *     o modo teste e as demais regras continuam valendo para ele.
  */
 "use strict";
 
@@ -62,6 +64,7 @@ async function executarLote(messenger, lote, cfg) {
   if (lote.acao !== "mover_para_lixeira") {
     return (lote.itens || []).map((i) => ({ message_id: i.message_id, status: "recusado", detalhe: `ação desconhecida: ${lote.acao}` }));
   }
+  const deVerdade = !!cfg.executarDeVerdade || lote.executar === true;
   const porLixeira = new Map(); // folderId da lixeira → {pasta, ids:[], mids:[]}
 
   for (const item of lote.itens || []) {
@@ -112,7 +115,7 @@ async function executarLote(messenger, lote, cfg) {
   }
 
   for (const { pasta, ids, mids } of porLixeira.values()) {
-    if (!cfg.executarDeVerdade) {
+    if (!deVerdade) {
       mids.forEach((mid) => resultados.push({ message_id: mid, status: "simulado", detalhe: `iria para ${pasta.path}` }));
       continue;
     }
