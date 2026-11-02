@@ -282,6 +282,17 @@ def ollama_generate_json(
 
 
 # ── 5. ollama_embed ───────────────────────────────────────────
+def _opcoes_embed() -> dict:
+    """
+    options do /api/embeddings. OLLAMA_EMBED_NUM_GPU (padrão 0 = CPU): com o gemma4:12b na GPU de 12 GB,
+    o scheduler do Ollama estima o bge-m3 inteiro (1,1 GiB), não acha espaço e descarrega o modelo de
+    chat — a próxima resposta paga a recarga. Na CPU: ~0,04 s por consulta, ~0,7 s por pedaço de
+    1200 caracteres, vetores iguais aos da GPU (cosseno 0,99999). Vazio = Ollama decide (GPU).
+    """
+    raw = os.getenv("OLLAMA_EMBED_NUM_GPU", "0").strip()
+    return {"num_gpu": int(raw)} if raw.isdigit() else {}
+
+
 def ollama_embed(
     text: str,
     model: Optional[str] = None,
@@ -299,7 +310,7 @@ def ollama_embed(
         with httpx.Client(timeout=60) as client:
             resp = client.post(
                 f"{base_url}/api/embeddings",
-                json={"model": model, "prompt": text},
+                json={"model": model, "prompt": text, "options": _opcoes_embed()},
             )
             if resp.status_code == 200:
                 return resp.json().get("embedding", [])
@@ -332,6 +343,7 @@ def ollama_embed_batch(
     model    = model    or os.getenv("MODEL_EMBED",    DEFAULT_MODEL_EMBED)
     base_url = base_url or os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
 
+    opcoes = _opcoes_embed()
     results: list[list[float]] = []
     try:
         with httpx.Client(timeout=60) as client:
@@ -342,7 +354,7 @@ def ollama_embed_batch(
                 try:
                     resp = client.post(
                         f"{base_url}/api/embeddings",
-                        json={"model": model, "prompt": text},
+                        json={"model": model, "prompt": text, "options": opcoes},
                     )
                     if resp.status_code == 200:
                         results.append(resp.json().get("embedding", []))

@@ -1,6 +1,7 @@
 """
 Testes de robustez: logs sem segredos (lib_alfred.sanitizar), gravação atômica (lib_alfred.gravar_atomico, que
-core.gravar_atomico reaproveita) e backup → restore (services/scripts/backup.py).
+core.gravar_atomico reaproveita), embeddings na CPU (lib_alfred._opcoes_embed) e backup → restore
+(services/scripts/backup.py).
 
     cd services/inbox
     venv/bin/python -m unittest tests.test_robustez -v
@@ -161,6 +162,52 @@ class TestGravarAtomico(unittest.TestCase):
             with self.assertRaises(OSError):
                 core.save_seen({"c@d": "2026-10-31T11:00:00"}, seen)
         self.assertEqual(json.loads(seen.read_text(encoding="utf-8")), {"a@b": "2026-10-31T10:00:00"})
+
+
+# ══════════════════════════════════════════════════════════════
+#  embeddings na CPU (o modelo de chat não sai da GPU)
+# ══════════════════════════════════════════════════════════════
+
+class _ClienteFalso:
+    def __init__(self, enviados):
+        self.enviados = enviados
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def post(self, url, json):
+        self.enviados.append(json)
+        return mock.Mock(status_code=200, json=lambda: {"embedding": [0.1, 0.2]})
+
+
+class TestEmbedNaCPU(unittest.TestCase):
+
+    def _opcoes(self, env: dict, lote: bool = False) -> list:
+        enviados = []
+        with mock.patch.dict(os.environ, env), \
+             mock.patch.object(lib_alfred.httpx, "Client", lambda **k: _ClienteFalso(enviados)):
+            if lote:
+                self.assertEqual(lib_alfred.ollama_embed_batch(["a", "", "b"]), [[0.1, 0.2], [], [0.1, 0.2]])
+            else:
+                self.assertEqual(lib_alfred.ollama_embed("a"), [0.1, 0.2])
+        return [e["options"] for e in enviados]
+
+    def test_padrao_e_cpu(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("OLLAMA_EMBED_NUM_GPU", None)
+            self.assertEqual(self._opcoes({}), [{"num_gpu": 0}])
+
+    def test_lote_usa_a_mesma_opcao(self):
+        self.assertEqual(self._opcoes({"OLLAMA_EMBED_NUM_GPU": "0"}, lote=True), [{"num_gpu": 0}] * 2)
+
+    def test_vazio_deixa_o_ollama_decidir(self):
+        self.assertEqual(self._opcoes({"OLLAMA_EMBED_NUM_GPU": ""}), [{}])
+
+    def test_numero_de_camadas(self):
+        self.assertEqual(self._opcoes({"OLLAMA_EMBED_NUM_GPU": "99"}), [{"num_gpu": 99}])
 
 
 # ══════════════════════════════════════════════════════════════

@@ -142,6 +142,8 @@ Fases 1 e 2 podem rodar em paralelo (arquivos diferentes). A 3 é a única que m
 - **Contexto x VRAM:** `gemma4:12b` (~8 GB) + `bge-m3` + Laya na mesma RTX 3060 de 12 GB; `num_ctx`
   maior come VRAM de KV cache. Medir na Fase 1; se apertar, `gemma4:e4b` para voltas de ferramenta
   e o 12b só na resposta final.
+  *Medido (01/11):* o 12b com 16k cabe; o Laya e o `bge-m3` foram para a CPU para o 12b não sair da GPU
+  (ver `services/inbox/about.md`, "Medição na RTX 3060").
 - **Modelo pequeno com 27 ferramentas:** escolhe mal quando há muitas. Mitigação imediata: agrupar
   por domínio e expor só os grupos que a pergunta menciona (heurística), Laya na Fase 5.
 - **Privacidade:** tudo local; a busca web passa pelo SearXNG da máquina. Ainda assim, o histórico

@@ -15,7 +15,8 @@ curl -s localhost:7074/health
 ```
 
 Só escuta em 127.0.0.1. Variáveis (todas opcionais, no `.env` da raiz): `PORT_LAYA`, `LAYA_MODELS`
-(padrão `multilingual`, 322M, ~1,3 GB de VRAM), `LAYA_DEVICE` (auto: CUDA se houver),
+(padrão `multilingual`, 322M), `LAYA_DEVICE` (padrão `cpu` no `run.sh`; `cuda` ocupa ~1,4 GB de VRAM),
+`LAYA_THREADS` (padrão 6 = núcleos físicos),
 `LAYA_CONFIANCA_MINIMA` (padrão 0.7), `LAYA_DESLIGADO=true` (força o caminho LLM).
 
 ## Uso
@@ -32,6 +33,9 @@ segue pelo LLM. Testes: `cd services/inbox && venv/bin/python -m unittest tests.
 ## Validação (31/10/2026, RTX 3060)
 
 - Latência: ~30 ms por pergunta na GPU (a 1ª chamada leva ~450 ms).
+- CPU (01/11/2026, Ryzen 5 4500, 6 threads): ~0,09 s por mensagem curta e ~0,8 s por e-mail de
+  2,7 mil caracteres (4 threads: ~1,0 s). Mesmas respostas da GPU. É o padrão desde então: com o
+  Laya na GPU, gemma4:12b (16k) e bge-m3 não cabiam juntos e cada busca no RAG tirava o 12b da VRAM.
 - `choice` acertou 3/3 mensagens em PT-BR (convite de reunião → personal/work, promoção → marketing,
   boleto → finance), com instruções e rótulos em inglês.
 - `noul` **não é confiável** em PT-BR: "promoção 50% off" deu 0.92 para "convida para evento", e

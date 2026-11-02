@@ -50,7 +50,7 @@ Funções utilitárias base usadas por todos os serviços:
 | `gravar_atomico(caminho, conteudo)` | Grava texto (UTF-8) ou bytes sem nunca deixar o arquivo pela metade: temporário oculto e único no mesmo diretório (`.<nome>.<aleatório>.tmp`), fsync, `os.replace` e fsync do diretório. Falhou no meio → o arquivo antigo fica intacto e o temporário some. Mantém as permissões do arquivo trocado. Não substitui a trava (`core.trava_arquivo`) em "ler → mudar → gravar" concorrente. É o mesmo objeto que `core.gravar_atomico` |
 | `slugify(text)` | Texto → slug seguro para nome de arquivo |
 | `ollama_generate(prompt, model, timeout, fmt, think, options, system, images)` | Chama `/api/generate` do Ollama. `images` = mídias em base64 — imagem **ou áudio** (WAV/MP3) em modelos com capacidade `audio`, como o gemma4 |
-| `ollama_embed(text, model)` | Gera embedding via `/api/embeddings` |
+| `ollama_embed(text, model)` | Gera embedding via `/api/embeddings`, na CPU por padrão (`options.num_gpu` de `OLLAMA_EMBED_NUM_GPU`, padrão 0; vazio = Ollama decide): na GPU o `bge-m3` tirava o modelo de chat da VRAM |
 | `ollama_embed_batch(texts, model)` | Embeddings em lote, reutiliza um único client HTTP |
 | `searxng_search(query, categories, max_results)` | Busca no SearXNG, retorna `[{title, url, snippet, source}]` |
 | `vault_write(vault_path, folder, filename, content, frontmatter)` | Escreve arquivo no vault Obsidian com frontmatter YAML (por `gravar_atomico`) |
@@ -98,7 +98,7 @@ RAG local sobre os dois cofres (`VAULT_ALFRED` → `alfred`, `VAULT_PEDRO` → `
 - **Vetores:** coleção `cofres-<MODEL_EMBED>` (`bge-m3` → `cofres-bge-m3`), metadados `cofre`, `caminho`, `titulo`, `secao`, `pedaco`. Trocar o modelo = coleção nova, reindexada sozinha na rodada seguinte.
 - **Estado:** tabela `rag_vetores` (cofre, caminho, mtime, sha1, nº de pedaços, id da coleção) no mesmo `alfred.db` do `lib_db`. Coleção recriada (volume do ChromaDB zerado) tem outro id → tudo é reembedado.
 - **Sem ChromaDB ou sem Ollama:** a busca cai só no FTS5 e a indexação atualiza só o FTS5 (`"offline": true`); nada levanta. Três notas seguidas sem embedding/gravação interrompem a rodada sem apagar nada do índice — a próxima retoma.
-- **Quem indexa:** `alfred-rag.timer` (5 min após o login e a cada 30 min; parado em modo jogo, entra no `alfred-switch.sh`) e o researcher logo depois de gravar uma pesquisa (`indexar_local()`, em thread). Primeira indexação dos dois cofres: 888 notas, 1.520 pedaços, ~43 s com `bge-m3` na GPU.
+- **Quem indexa:** `alfred-rag.timer` (5 min após o login e a cada 30 min; parado em modo jogo, entra no `alfred-switch.sh`) e o researcher logo depois de gravar uma pesquisa (`indexar_local()`, em thread). Primeira indexação dos dois cofres: 888 notas, 1.520 pedaços, ~43 s com `bge-m3` na GPU. Com os embeddings na CPU (padrão desde 01/11/2026) um pedaço de 1200 caracteres leva ~0,7 s: a rodada do timer só reindexa notas alteradas; uma reindexação completa fica bem mais lenta (`OLLAMA_EMBED_NUM_GPU=` vazio no `.env` volta para a GPU).
 - **Quem busca:** a ferramenta `buscar_cofre` (`_shared/lib_ferramentas.py`, ligada em 31/10/2026) e, por ela, a aba Conversa do Painel.
 - **CLI** (Python de um venv do Alfred; lê o `.env`):
   `services/scripts/chromadb-indexer.py indexar [--cofre alfred|pedro] [--tudo]` e `buscar "consulta" [--cofre] [--pasta] [--limite]`.

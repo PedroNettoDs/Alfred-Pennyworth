@@ -813,6 +813,10 @@ O que isso quer dizer:
   da GPU e o turno seguinte paga ~15 s para recarregar: RAG automático, memória com fatos (hoje a memória está vazia
   e não chama o `bge-m3`) e o `buscar_cofre` quando passar a usar o `lib_rag` (Fase 2). Saídas: tirar o Laya da GPU
   (1,4 GB) ou rodar o `bge-m3` na CPU — fica como próximo passo, não foi mexido aqui.
+  **Resolvido em 01/11/2026, com as duas:** o Laya foi para a CPU (`services/laya/run.sh`), mas só isso não bastou: o
+  scheduler do Ollama 0.34.4 estima o `bge-m3` inteiro (1,1 GiB) e guarda 457 MiB de reserva, então ainda descarregava
+  o 12b. Agora todo embedding sai com `options.num_gpu = 0` (`lib_alfred._opcoes_embed`, `OLLAMA_EMBED_NUM_GPU`): o 12b
+  fica na GPU, a consulta leva ~0,04 s e um pedaço de 1200 caracteres ~0,7 s.
 - **`num_ctx` diferente é outro runner:** o Ollama recarrega o 12b quando a chamada seguinte pede outro contexto
   (~10 s). O `ollama ps` mostrou o 12b em 8192 vindo de `/api/generate` de outro cliente. Como 16384 não custa VRAM,
   o certo é igualar: `OLLAMA_NUM_CTX=16384` no `.env` (decisão de Pedro; o `.env` não foi alterado).

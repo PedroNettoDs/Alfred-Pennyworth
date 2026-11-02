@@ -26,6 +26,10 @@ export LAYA_PRELOAD="${LAYA_PRELOAD:-1}"
 export LAYA_MODELS="${LAYA_MODELS:-multilingual}"
 export LAYA_DEFAULT_MODEL="${LAYA_DEFAULT_MODEL:-multilingual}"
 export LAYA_MAX_LOADED="${LAYA_MAX_LOADED:-1}"
+# CPU por padrão: a GPU de 12 GB fica para o Ollama (gemma4:12b + bge-m3 não cabem com o Laya ao lado).
+# LAYA_THREADS ≤ núcleos físicos (6 no Ryzen 5 4500); passar disso piora muito (ver docstring de laya.serve).
+export LAYA_DEVICE="${LAYA_DEVICE:-cpu}"
+export LAYA_THREADS="${LAYA_THREADS:-6}"
 # Pesos baixados uma vez do Hugging Face (~/.cache/huggingface); depois roda offline.
 # Sem isto o Router consulta o Hub a cada recarga do checkpoint (~17 s por requisição).
 if ls "${HF_HOME:-$HOME/.cache/huggingface}"/hub/models--convaiinnovations--laya* >/dev/null 2>&1; then
