@@ -490,6 +490,7 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
         f"perfil: {briefing_cfg['perfil']}",
         "type: briefing",
         f"sources: {n_citadas}",
+        "Blogspot: none",                 # services/inbox/BLOG.md: a extensão posta e troca por "postado <data>"
         f"tags: [briefing, {briefing_name}]",
         "---",
         "",
@@ -644,6 +645,7 @@ def _run_adhoc(tema: str):
         "mode: adhoc",
         f'tema: "{tema}"',
         f"sources: {len(unique)}",
+        "Blogspot: none",
         "tags: [briefing, adhoc]",
         "---",
         "",

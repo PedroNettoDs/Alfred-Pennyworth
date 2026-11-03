@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Alfred — blog</title>
+<style>body{font:14px system-ui;margin:12px;max-width:560px} label{display:block;margin:8px 0} input[type=text],input[type=password],select{width:100%} .aviso{color:#b00} pre{white-space:pre-wrap;background:#f4f4f4;padding:6px}</style>
+</head>
+<body>
+  <h3>Alfred — blog</h3>
+  <p>Envia ao Blogger (endereço do BLOGGER_EMAIL no .env do Alfred) os briefings, o jornal e o podcast com
+    <code>Blogspot: none</code>. Depois de enviado, o Alfred troca a propriedade por <code>postado &lt;data&gt;</code>.</p>
+  <label>URL do Alfred <input type="text" id="urlAlfred"></label>
+  <label>Token (SHELL_EXECUTOR_TOKEN) <input type="password" id="token"></label>
+  <label>Enviar com a identidade <select id="identidade"><option value="">(padrão do Thunderbird)</option></select></label>
+  <label><input type="checkbox" id="anexarAudio"> Anexar o .mp3 ao e-mail</label>
+  <label class="aviso"><input type="checkbox" id="enviarDeVerdade"> Enviar de verdade (desmarcado = só lista o que iria para o blog;
+    marcado = publica na hora, o post fica público)</label>
+  <label>Verificar a cada (min) <input type="number" id="intervaloMin" min="1" style="width:70px"></label>
+  <button id="salvar">Salvar</button> <button id="agora">Verificar agora</button>
+  <pre id="saida"></pre>
+  <script src="options.js"></script>
+</body>
+</html>

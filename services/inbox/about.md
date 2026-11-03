@@ -6,6 +6,8 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 
 **Painel do Alfred:** interface web local servida pela própria API (`http://127.0.0.1:7073/painel`, só desta máquina, login com o `SHELL_EXECUTOR_TOKEN`) para ver as pendências, revisar a resposta que o Alfred propõe e autorizar, editar ou recusar — além de agenda, lotes de limpeza e estado do sistema. Ver [Painel do Alfred](#painel-do-alfred).
 
+**Blog:** jornal, podcast e os briefings de `services/briefing` nascem com `Blogspot: none` no frontmatter. A extensão "Alfred — blog" do Thunderbird posta cada um no Blogspot por e-mail (`GET /blog/fila`), e o Alfred troca a propriedade por `postado <data>`. Ver [BLOG.md](BLOG.md).
+
 ## Como rodar
 
 ```bash

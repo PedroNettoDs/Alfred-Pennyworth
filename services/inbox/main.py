@@ -28,6 +28,7 @@ GET  /whatsapp/buscar?q=&jid=&limite=            → busca FTS5 no histórico da
 POST /indexar                                    → reindexa os cofres (FTS5) e poda o histórico além de historico_dias
 GET  /busca?q=&cofre=&pasta=&limite=             → busca FTS5 nas notas dos cofres
 GET/POST /agenda, /agenda/fila, /agenda/{id}/resultado, /agenda/{id}/desfazer, /agenda/alfred.ics (ver bloco Agenda)
+GET  /blog/fila, /blog/{pasta}/{arquivo}/audio, POST /blog/{pasta}/{arquivo}/resultado → extensão "Alfred — blog" (BLOG.md)
 GET  /painel                                     → Painel do Alfred (painel.py; só 127.0.0.1, login com o token)
 
 Com `atraso_minutos` > 0 (perfis.yml → whatsapp:) o webhook só enfileira (acao=agendada + prazo); uma thread
@@ -598,6 +599,41 @@ def agenda_ics(request: Request):
     if host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="feed .ics só para 127.0.0.1")
     return Response(content=agenda.feed_ics(), media_type="text/calendar; charset=utf-8")
+
+
+# ══════════════════════════════════════════════════════════════
+#  Blog — briefings/jornal/podcast → Blogspot por e-mail (blog.py, extensão thunderbird-ext-blog)
+# ══════════════════════════════════════════════════════════════
+import blog  # noqa: E402
+
+
+class BlogResultadoRequest(BaseModel):
+    ok: bool
+    erro: Optional[str] = ""
+
+
+@app.get("/blog/fila")
+def blog_fila(authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    return blog.fila()
+
+
+@app.get("/blog/{pasta}/{arquivo}/audio")
+def blog_audio(pasta: str, arquivo: str, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    try:
+        return FileResponse(blog.audio(pasta, arquivo), media_type="audio/mpeg")
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
+
+
+@app.post("/blog/{pasta}/{arquivo}/resultado")
+def blog_resultado(pasta: str, arquivo: str, req: BlogResultadoRequest, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    try:
+        return blog.registrar_resultado(pasta, arquivo, req.ok, req.erro or "")
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_msg_erro(e))
 
 
 # Painel do Alfred (interface web local de aprovações) — rotas em painel.py (fora se faltar o jinja2)

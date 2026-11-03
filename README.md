@@ -863,6 +863,22 @@ Classificação dos e-mails do Thunderbird, jornal diário das newsletters e fil
 
 ---
 
+### Poder 1c — Briefings no Blogspot
+
+Briefings, jornal diário e podcast nascem com `Blogspot: none` no frontmatter. A extensão **Alfred — blog** do Thunderbird envia cada um por e-mail para o endereço de "Postar usando e-mail" do Blogger (`BLOGGER_EMAIL` no `.env`), com o `.mp3` anexado, e o Alfred troca a propriedade por `Blogspot: postado <data>`.
+
+**Status:** 🟡 Implementado (03/11/2026) e testado offline. A extensão ainda não rodou num Thunderbird real — ver [BLOG.md](services/inbox/BLOG.md).
+
+**Próximo passo — áudio dentro do post:** o Blogger por e-mail só aceita texto e imagens, então o `.mp3` anexado não vira player. Hospedar os `.mp3` numa plataforma online e pôr no HTML do post um player (`<audio controls src=…>` ou o embed da plataforma). Candidatas a avaliar:
+- **Internet Archive (archive.org):** gratuito, upload por API S3 (chave da conta), link direto do `.mp3` e player embutível.
+- **Google Drive:** mesma conta Google do Blogger, embed por `iframe` de preview, upload pela API do Drive (OAuth).
+- **GitHub Releases/Pages:** link direto do `.mp3` para `<audio>`, upload pelo `gh`; limites de tamanho e de uso.
+- **Plataforma de podcast** (Spotify for Creators, Podbean…): player e feed RSS, mas a maioria não tem API pública de upload.
+
+O fluxo seria: `blog.py` sobe o `.mp3` antes de montar a fila, guarda a URL no frontmatter (ex.: `audio_url:`) e põe o player no HTML. Antes, conferir se o Blogger mantém `<audio>`/`iframe` num post que chega por e-mail.
+
+---
+
 ### Poder 2 — Scanner de Licitações
 
 Scraper de portais públicos de licitação (ComprasNet, Portal de Compras SP) que indexa editais no ChromaDB e identifica licitações com perfil compatível com critérios configuráveis via RAG.

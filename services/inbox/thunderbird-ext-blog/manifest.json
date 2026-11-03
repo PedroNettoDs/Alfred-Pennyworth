@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Alfred — blog",
+  "description": "Posta no Blogspot, pelo e-mail do Thunderbird, os briefings, o jornal e o podcast que o Alfred marcou com Blogspot: none.",
+  "version": "1.0.0",
+  "author": "Alfred-Pennyworth",
+  "browser_specific_settings": {
+    "gecko": { "id": "blog@alfred-pennyworth.local", "strict_min_version": "128.0" }
+  },
+  "permissions": ["accountsRead", "compose", "compose.send", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "scripts": ["executor.js", "background.js"] },
+  "options_ui": { "page": "options.html", "open_in_tab": false }
+}

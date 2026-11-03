@@ -503,7 +503,7 @@ def gerar_semanal(semana: Optional[str] = None, inbox_name: Optional[str] = None
           f"inbox: {nome}", f"edicoes: {len(edicoes)}", f"noticias: {len(itens)}", f"temas: {len(temas)}",
           f"emails: {len(emails)}", f"palavras: {palavras}",
           f"duracao_min: {dur / 60:.1f}" if audio_ok else "duracao_min: 0", f"gerado_em: {agora}",
-          f"tags: [podcast, {sufixo}]", "---", "",
+          "Blogspot: none", f"tags: [podcast, {sufixo}]", "---", "",
           f"# {titulo}", "",
           f"> Resumo do Alfred · {semana_humana} ({periodo}) · {len(temas)} temas de {len(itens)} notícias"
           f" em {len(edicoes)} edição(ões) do jornal" + (f" · {dur / 60:.0f} min" if audio_ok else ""), ""]

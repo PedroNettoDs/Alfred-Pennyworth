@@ -107,7 +107,8 @@ Hora e nome do briefing no nome do arquivo (desde 26/10/2026; antes era `AAAA-MM
 vespertino do mesmo dia, ou o mesmo tema ad-hoc pedido duas vezes, não se sobrescrevem. O prefixo `AAAA-MM-DD_`
 continua — é o que o podcast do inbox (`semanal.py`) usa para achar os briefings do período.
 
-O `.md` tem frontmatter YAML (`title`, `date`, `time`, `briefing`, `perfil`, `sources`) seguido do corpo gerado pelo LLM e uma seção "## Fontes citadas" (ad-hoc: "## Fontes coletadas") com os links.
+O `.md` tem frontmatter YAML (`title`, `date`, `time`, `briefing`, `perfil`, `sources`, `Blogspot: none`, que a
+extensão "Alfred — blog" troca por `postado <data>` ao postar no Blogspot: [BLOG.md](../inbox/BLOG.md)) seguido do corpo gerado pelo LLM e uma seção "## Fontes citadas" (ad-hoc: "## Fontes coletadas") com os links.
 
 ## Dependências
 

@@ -613,6 +613,7 @@ def gerar_jornal(itens: list[dict], emails_noticia: list[dict], cfg: dict, inbox
         f"inbox: {inbox_name}",
         f"newsletters: {len(emails_noticia)}",
         f"noticias: {len(unique)}",
+        "Blogspot: none",                    # BLOG.md: postado pela extensão "Alfred — blog"
         f"tags: [jornal, {inbox_name}]",
         "---",
         "",
