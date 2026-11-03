@@ -78,7 +78,8 @@ def config(inbox_name: Optional[str] = None) -> tuple[str, dict, dict]:
     if invalidas:
         log(f"[limpeza] categorias não permitidas ignoradas: {invalidas} (só {', '.join(LIMPAVEIS)})")
     lc["categorias"] = [c for c in cats if c in LIMPAVEIS]
-    lc["dias_minimos"] = max(1, int(lc.get("dias_minimos") or DEFAULTS["dias_minimos"]))
+    dias = lc.get("dias_minimos")
+    lc["dias_minimos"] = max(0, int(DEFAULTS["dias_minimos"] if dias is None else dias))   # 0 = qualquer idade
     lc["pastas"] = lc.get("pastas") or cfg.get("pastas") or ["INBOX"]
     return nome, cfg, lc
 

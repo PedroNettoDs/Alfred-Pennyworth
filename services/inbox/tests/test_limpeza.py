@@ -130,6 +130,10 @@ class BaseLimpeza(unittest.TestCase):
         self.reg_patch = mock.patch.object(limpeza, "REGISTRO_FILE", TMP / "inbox_categorias.json")
         self.reg_patch.start()
         self.notify = mock.patch.object(core, "_notify").start()
+        # a fixture conta com a regra de 30 dias, não com o valor em uso no perfis.yml
+        nome, cfg = core.carregar_cfg()
+        cfg = {**cfg, "limpeza": {**(cfg.get("limpeza") or {}), "dias_minimos": 30}}
+        mock.patch.object(core, "carregar_cfg", return_value=(nome, cfg)).start()
         montar_ambiente()
 
     def tearDown(self):
@@ -162,6 +166,15 @@ class TestCandidatos(BaseLimpeza):
         with mock.patch.object(limpeza, "config", return_value=("pedro_hotmail", cfg, lc)):
             mids = {i["message_id"] for i in limpeza.candidatos()["candidatos"]}
         self.assertIn("promo-nova@loja.com", mids)
+
+    def test_dias_minimos_zero_libera_qualquer_idade(self):
+        nome, cfg = core.carregar_cfg()
+        cfg = {**cfg, "limpeza": {**(cfg.get("limpeza") or {}), "dias_minimos": 0}}
+        with mock.patch.object(core, "carregar_cfg", return_value=(nome, cfg)):
+            self.assertEqual(limpeza.config()[2]["dias_minimos"], 0)
+            mids = {i["message_id"] for i in limpeza.candidatos()["candidatos"]}
+        self.assertIn("promo-nova@loja.com", mids)
+        self.assertNotIn("pessoal@x.com", mids)
 
     def test_categorias_proibidas_na_config_sao_descartadas(self):
         nome, cfg = core.carregar_cfg()

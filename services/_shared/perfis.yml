@@ -170,7 +170,7 @@ inbox:
     # do Thunderbird, que MOVE para a Lixeira. contato/evento/pessoal e pendências aguardando nunca entram.
     limpeza:
       ativo: true
-      dias_minimos: 30            # promocao/transacional/ignorado mais antigos que isso viram candidatos
+      dias_minimos: 0             # promocao/transacional/ignorado mais antigos que isso viram candidatos (0 = qualquer idade)
       categorias: [promocao, transacional, ignorado]
       usar_manifestos: true       # e-mails já usados num episódio (VAULT_NOTICIAS/podcast/manifestos)
       max_por_lote: 200

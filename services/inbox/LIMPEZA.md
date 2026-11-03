@@ -62,7 +62,8 @@ extensão "só simulou" um lote mandado limpar, a extensão carregada no Thunder
 
 - (a) e-mails listados num **manifesto do podcast** cujo episódio foi de fato gerado
   (`episodio_md` ou `episodio_mp3` preenchido);
-- (b) categorias `promocao`, `transacional` ou `ignorado` mais antigas que `dias_minimos`.
+- (b) categorias `promocao`, `transacional` ou `ignorado` mais antigas que `dias_minimos` (0 = qualquer idade;
+  é o valor em uso desde 03/11/2026).
   Um e-mail sem categoria registrada só entra se o remetente estiver em `remetentes_ignorar`.
 
 ### Quem nunca entra, mesmo listado no manifesto
@@ -83,7 +84,7 @@ depois da proposta sai do lote (`removidos_na_aprovacao`).
 ```yaml
 limpeza:
   ativo: true
-  dias_minimos: 30
+  dias_minimos: 0        # 0 = qualquer idade; sem a chave, o padrão do código é 30
   categorias: [promocao, transacional, ignorado]
   usar_manifestos: true
   max_por_lote: 200
