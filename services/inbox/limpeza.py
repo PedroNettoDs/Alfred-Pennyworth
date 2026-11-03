@@ -163,7 +163,10 @@ def carregar_manifestos() -> dict:
 # ══════════════════════════════════════════════════════════════
 
 def _ler_caixa(cfg: dict, lc: dict) -> list[dict]:
-    """Lê as pastas da inbox no mbox offline do Thunderbird (só leitura)."""
+    """
+    Lê as pastas da inbox no mbox offline do Thunderbird (só leitura). Cada mensagem vem com "no_indice":
+    False = fantasma do mbox (saiu da pasta no servidor, mas os bytes continuam até a compactação).
+    """
     if (cfg.get("backend") or "thunderbird").lower() != "thunderbird":
         log("[limpeza] só o backend thunderbird é suportado (a execução é pela extensão)")
         return []
@@ -172,7 +175,7 @@ def _ler_caixa(cfg: dict, lc: dict) -> list[dict]:
         log("[limpeza] perfil do Thunderbird não encontrado")
         return []
     return fetch_messages(list_accounts(profile), pastas=lc["pastas"], conta=cfg.get("conta", "") or "",
-                          max_total=100_000)
+                          max_total=100_000, checar_indice=True)
 
 
 def _ids_protegidos_por_pendencia() -> set[str]:
@@ -245,7 +248,9 @@ def candidatos(inbox_name: Optional[str] = None, incluir_mantidos: bool = False)
         if m["message_id"] in vistos:
             continue
         vistos.add(m["message_id"])
-        if m["message_id"] in em_lote:
+        if m.get("no_indice") is False:   # a extensão não acharia: relataria nao_encontrado
+            motivo, razao = None, "fora do índice do Thunderbird"
+        elif m["message_id"] in em_lote:
             motivo, razao = None, "já está num lote aberto"
         else:
             motivo, razao = avaliar(m, cfg, lc, registro, manifestos, protegidos, agora)
