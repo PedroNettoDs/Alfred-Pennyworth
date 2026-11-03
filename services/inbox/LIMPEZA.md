@@ -75,8 +75,8 @@ extensão "só simulou" um lote mandado limpar, a extensão carregada no Thunder
 - Na extensão: mensagens com estrela, Message-ID ambíguo, remetente ou assunto diferentes do lote,
   contas não marcadas, mensagens que já estão na Lixeira e contas sem Lixeira identificável.
 
-A aprovação **revalida** o lote. Um item que ganhou pendência ou mudou de categoria depois da proposta
-sai do lote (`removidos_na_aprovacao`).
+A aprovação **revalida** o lote. Um item que ganhou pendência, mudou de categoria ou saiu do índice `.msf`
+depois da proposta sai do lote (`removidos_na_aprovacao`).
 
 ### Configuração (`perfis.yml → inbox.<nome>.limpeza`)
 
@@ -193,8 +193,10 @@ e que só move mensagens para a pasta com `specialUse: trash`.
     ilegível.
   - Mensagem sem Message-ID (id `gen-…`) não é conferida: o Thunderbird a indexa com outro id.
   - Só a limpeza liga o filtro. Os outros leitores do mbox (ciclo do inbox, semanal) leem como antes.
-  - A revalidação de Aprovar/Limpar não relê o índice. Um lote criado antes do filtro (ex.: o de 31/10)
-    ainda leva os fantasmas, e a extensão relata `nao_encontrado` para eles.
+  - A revalidação de Aprovar/Limpar relê o índice (`limpeza._indices`). Um item que saiu da INBOX depois
+    da proposta, ou um fantasma de lote criado antes do filtro, sai do lote (`removidos_na_aprovacao`,
+    "fora do índice do Thunderbird") e não vai para a extensão. Em 03/11 (só leitura) isso deixaria 7 dos
+    38 itens em cada lote de 20/10 e 9 dos 49 no de 31/10. Sem índice legível, a revalidação não filtra.
   - Números de 03/11: 628 mensagens no mbox, 540 Message-IDs distintos, 259 no índice (igual ao `numMsgs`
     do `.msf`), 281 fantasmas. Os candidatos caíram de 8 para 3. Antes do filtro: nos lotes de 20/10, 31
     dos 38 itens eram fantasmas; no de 31/10, só 9 dos 49 constam do índice.

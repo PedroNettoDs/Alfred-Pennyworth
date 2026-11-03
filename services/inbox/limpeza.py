@@ -40,7 +40,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import log  # noqa: E402
-from _shared.lib_mail import fetch_messages, find_thunderbird_profile, list_accounts  # noqa: E402
+from _shared.lib_mail import (fetch_messages, find_thunderbird_profile, ids_no_indice, list_accounts,  # noqa: E402
+                              resolve_folder)
 
 import core  # noqa: E402
 
@@ -406,14 +407,46 @@ def propor(inbox_name: Optional[str] = None, notificar: bool = True) -> Optional
     return lote
 
 
+def _indices(itens: list[dict]) -> dict:
+    """
+    (conta, pasta) dos itens → Message-IDs no .msf da pasta. Contas com o mesmo hostname somam os índices.
+    None = sem índice legível (perfil, conta, pasta ou .msf faltando): a revalidação não filtra por ele.
+    """
+    profile = find_thunderbird_profile()
+    contas = list_accounts(profile) if profile else []
+    out: dict = {}
+    for i in itens:
+        chave = (i.get("conta", ""), i.get("pasta", ""))
+        if chave in out:
+            continue
+        ids: Optional[set] = set()
+        pastas = [resolve_folder(a, chave[1]) for a in contas if a.get("hostname") == chave[0]]
+        for p in pastas or [None]:
+            parcial = ids_no_indice(p) if p else None
+            if parcial is None:
+                ids = None
+                break
+            ids |= parcial
+        out[chave] = ids
+    return out
+
+
 def _revalidar(itens: list[dict], inbox: Optional[str]) -> tuple[list[dict], list[dict]]:
-    """(mantidos, removidos): reaplica avaliar() aos itens (pendência nova, categoria que mudou, manifesto removido)."""
+    """
+    (mantidos, removidos): reaplica avaliar() aos itens (pendência nova, categoria que mudou, manifesto
+    removido) e tira quem saiu do índice .msf desde a proposta (apagado no celular/webmail).
+    """
     _nome, cfg, lc = config(inbox)
     registro, manifestos = carregar_registro(), carregar_manifestos()
     protegidos = _ids_protegidos_por_pendencia()
+    indices = _indices(itens)
     agora = _now()
     mantidos, removidos = [], []
     for i in itens:
+        ids = indices[(i.get("conta", ""), i.get("pasta", ""))]
+        if ids is not None and not i["message_id"].startswith("gen-") and i["message_id"] not in ids:
+            removidos.append({**i, "removido_por": "fora do índice do Thunderbird"})
+            continue
         m = {"message_id": i["message_id"], "from_addr": i["from"],
              "from_domain": i["from"].split("@")[-1] if "@" in i["from"] else "",
              "date": core._parse_dt(i["date"])}

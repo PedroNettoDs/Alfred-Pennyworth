@@ -364,6 +364,27 @@ class TestFluxoAprovacao(BaseLimpeza):
         self.assertEqual(r["removidos_na_aprovacao"][0]["message_id"], "trans-velha@banco.com")
         self.assertTrue(limpeza.fila_execucao()[0]["executar"])
 
+    def test_revalidacao_tira_quem_saiu_do_indice(self):
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        msf.write_bytes(_msf([e[0] for e in EMAILS]))   # na proposta o fantasma ainda estava na INBOX
+        lote = limpeza.propor(notificar=False)
+        self.assertIn(FANTASMA, {i["message_id"] for i in lote["itens"]})
+        msf.write_bytes(_msf([e[0] for e in EMAILS if e[0] != FANTASMA]))   # depois, apagado no celular
+        r = limpeza.limpar(lote["id"])
+        self.assertEqual((r["a_mover"], r["removidos_agora"]), (4, 1))
+        self.assertEqual([(x["message_id"], x["removido_por"]) for x in r["removidos_na_aprovacao"]],
+                         [(FANTASMA, "fora do índice do Thunderbird")])
+        self.assertNotIn(FANTASMA, {i["message_id"] for i in limpeza.fila_execucao()[0]["itens"]})
+
+    def test_revalidacao_sem_indice_nao_tira_ninguem(self):
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        msf.write_bytes(_msf([e[0] for e in EMAILS]))
+        lote = limpeza.propor(notificar=False)
+        msf.unlink()
+        r = limpeza.aprovar(lote["id"])
+        self.assertEqual(r["total"], 5)
+        self.assertNotIn("removidos_na_aprovacao", r)
+
     def test_cli(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("inbox_assistant", INBOX / "inbox-assistant.py")
