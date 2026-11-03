@@ -5,7 +5,7 @@ Painel do Alfred — interface web local de aprovações, servida pela própria 
 
 Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza e Sistema (só leitura). As ações chamam as
 MESMAS funções do CLI/notificação/API — whatsapp.responder_texto, whatsapp.agendar_pendencia,
-core.responder, agenda.desfazer, limpeza.aprovar/recusar —; nada aqui grava YAML.
+core.responder, agenda.desfazer, limpeza.aprovar/recusar/limpar —; nada aqui grava YAML.
 
 Segurança (toda rota /painel/*, inclusive login e estáticos):
   - só 127.0.0.1/::1 (a API escuta em 0.0.0.0 por causa do Docker: containers chegam como 172.17.x.x)
@@ -613,6 +613,27 @@ def _motivo_lote(lote: dict) -> str:
     return ", ".join(f"{n} {k}" for k, n in sorted(por.items(), key=lambda x: -x[1]))
 
 
+# resultado de cada item relatado pela extensão (limpeza.registrar_resultado) → (singular, plural)
+ROTULO_RESULTADO = {
+    "movido": ("movido para a Lixeira", "movidos para a Lixeira"),
+    "simulado": ("simulado", "simulados"),
+    "nao_encontrado": ("não encontrado no Thunderbird", "não encontrados no Thunderbird"),
+    "recusado": ("recusado pela extensão", "recusados pela extensão"),
+    "erro": ("com erro", "com erro"),
+    "sem_resposta": ("sem resposta", "sem resposta"),
+}
+
+
+def _resultado_lote(contagem: dict) -> str:
+    """{"movido": 9, "nao_encontrado": 40} → "9 movidos para a Lixeira, 40 não encontrados no Thunderbird"."""
+    partes = []
+    for st, (um, varios) in ROTULO_RESULTADO.items():
+        n = int((contagem or {}).get(st) or 0)
+        if n:
+            partes.append(f"{n} {um if n == 1 else varios}")
+    return ", ".join(partes)
+
+
 def _limpeza() -> tuple[list[dict], Optional[str]]:
     try:
         lotes = limpeza.listar_lotes()
@@ -620,13 +641,28 @@ def _limpeza() -> tuple[list[dict], Optional[str]]:
         return [], f"Não foi possível ler os lotes de limpeza: {e}"
     out = []
     for l in lotes:
+        st = l.get("status")
+        executado = st in ("concluido", "simulado", "parcial", "falhou")
+        itens = l.get("itens") or []
         out.append({
-            "id": l.get("id"), "status": l.get("status"), "inbox": l.get("inbox"), "total": l.get("total") or 0,
+            "id": l.get("id"), "status": st, "inbox": l.get("inbox"), "total": l.get("total") or 0,
             "criado": fmt_data(l.get("criado_em")), "expira": fmt_data(l.get("expira_em")),
             "motivo": _motivo_lote(l), "nota": l.get("nota"), "_ts": _ts(l.get("criado_em")),
+            "pode_limpar": st in limpeza.STATUS_LIMPAR,
+            "a_mover": sum(1 for i in itens if i.get("resultado") != "movido"),
+            # Limpar pedido e a extensão ainda não relatou
+            "limpar_pedido": fmt_data(l.get("limpar_pedido_em")) if l.get("limpar") and st in ("aprovado", "em_execucao")
+                             else None,
+            # pediu Limpar e mesmo assim simulou: a extensão instalada é anterior ao botão
+            "extensao_antiga": bool(l.get("limpar")) and executado and bool((l.get("contagem") or {}).get("simulado")),
+            "resultado": _resultado_lote(l.get("contagem")) if executado else "",
+            "executado": fmt_data(l.get("executado_em")) if executado else "",
             "itens": [{"de": i.get("from_name") or i.get("from"), "email": i.get("from"),
-                       "assunto": i.get("subject") or "(sem assunto)", "data": fmt_data(i.get("date"))}
-                      for i in l.get("itens") or []],
+                       "assunto": i.get("subject") or "(sem assunto)", "data": fmt_data(i.get("date")),
+                       "resultado": ROTULO_RESULTADO.get(i.get("resultado"), (i.get("resultado") or "",))[0]
+                                    if executado else "",
+                       "resultado_detalhe": i.get("resultado_detalhe") or ""}
+                      for i in itens],
         })
     # aguardando primeiro, depois os mais novos
     out.sort(key=lambda l: (l["status"] != "aguardando", -l["_ts"]))
@@ -1209,25 +1245,28 @@ async def acao_desfazer(request: Request, aid: str):
     return JSONResponse({"ok": True, "mensagem": msg, "status": r.get("status")})
 
 
-async def _acao_lote(request: Request, lid: str, aprovar: bool):
+async def _acao_lote(request: Request, lid: str, acao: str):
     if recusa := _checar_post(request):
         return recusa
     nota = str((await _corpo_json(request)).get("nota") or "")
 
     def _fazer():
-        with core.trava_arquivo(limpeza.lotes_file()):   # mesma trava de limpeza.aprovar/recusar (reentrante)
+        with core.trava_arquivo(limpeza.lotes_file()):   # mesma trava de limpeza.aprovar/recusar/limpar (reentrante)
             lote = limpeza.obter_lote(lid)
             if not lote:
                 return _erro(404, "Lote de limpeza não encontrado.")
             st = lote.get("status")
-            if st != "aguardando":
+            if st == "em_execucao":
+                return _erro(409, "A extensão do Thunderbird está executando este lote agora. Aguarde o resultado.",
+                             status=st)
+            if st not in (limpeza.STATUS_LIMPAR if acao == "limpar" else ("aguardando",)):
                 return _erro(409, f"Este lote já foi resolvido ({ROTULO_STATUS.get(st, st)}).", status=st)
             try:
-                return (limpeza.aprovar if aprovar else limpeza.recusar)(lid, nota)
+                return {"aprovar": limpeza.aprovar, "recusar": limpeza.recusar, "limpar": limpeza.limpar}[acao](lid, nota)
             except ValueError as e:
                 return _erro(400, str(e))
             except KeyError as e:   # ex.: a inbox do lote não existe mais no perfis.yml
-                return _erro(400, str(e).strip("'\"") + (" — recuse o lote." if aprovar else ""))
+                return _erro(400, str(e).strip("'\"") + ("" if acao == "recusar" else " — recuse o lote."))
 
     try:
         r = await run_in_threadpool(_fazer)
@@ -1235,23 +1274,34 @@ async def _acao_lote(request: Request, lid: str, aprovar: bool):
         return _erro(500, str(e))
     if isinstance(r, Response):
         return r
-    if aprovar:
+    if acao == "limpar":
+        n = r.get("a_mover")
+        msg = (f"Limpeza pedida: {n} e-mail{'' if n == 1 else 's'} {'irá' if n == 1 else 'irão'} para a Lixeira "
+               f"na próxima passada da extensão do Thunderbird.")
+        fora = r.get("removidos_agora") or 0
+    elif acao == "aprovar":
         n = r.get("total")
-        msg = (f"Lote aprovado: {n} e-mail{'' if n == 1 else 's'} {'irá' if n == 1 else 'irão'} para a Lixeira "
-               f"quando a extensão do Thunderbird passar.")
+        msg = (f"Lote aprovado ({n} e-mail{'' if n == 1 else 's'}). Na próxima passada a extensão do Thunderbird "
+               f"o executa, ou só simula se \"Executar de verdade\" estiver desligado nela. Para mover para a "
+               f"Lixeira de verdade, use Limpar.")
         fora = len(r.get("removidos_na_aprovacao") or [])
-        if fora:
-            msg += f" {fora} {'saiu' if fora == 1 else 'saíram'} do lote na revalidação."
     else:
-        msg = "Lote recusado. Nenhum e-mail será movido."
+        msg, fora = "Lote recusado. Nenhum e-mail será movido.", 0
+    if fora:
+        msg += f" {fora} {'saiu' if fora == 1 else 'saíram'} do lote na revalidação."
     return JSONResponse({"ok": True, "mensagem": msg, "status": r.get("status"), "total": r.get("total")})
 
 
 @router.post("/api/limpeza/{lid}/aprovar")
 async def acao_aprovar(request: Request, lid: str):
-    return await _acao_lote(request, lid, True)
+    return await _acao_lote(request, lid, "aprovar")
 
 
 @router.post("/api/limpeza/{lid}/recusar")
 async def acao_recusar(request: Request, lid: str):
-    return await _acao_lote(request, lid, False)
+    return await _acao_lote(request, lid, "recusar")
+
+
+@router.post("/api/limpeza/{lid}/limpar")
+async def acao_limpar(request: Request, lid: str):
+    return await _acao_lote(request, lid, "limpar")

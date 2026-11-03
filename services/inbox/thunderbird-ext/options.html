@@ -11,7 +11,8 @@
   <fieldset><legend>Contas em que a extensão pode mexer</legend><div id="contas"></div></fieldset>
   <label><input type="checkbox" id="modoTeste"> Modo teste — só mensagens em pastas cujo caminho contém
     <input type="text" id="pastaTeste" style="width:140px"></label>
-  <label class="aviso"><input type="checkbox" id="executarDeVerdade"> Executar de verdade (desmarcado = só simula e relata ao Alfred)</label>
+  <label class="aviso"><input type="checkbox" id="executarDeVerdade"> Executar de verdade (desmarcado = só simula e relata ao Alfred,
+    exceto os lotes em que você clicar em "Limpar" no Painel do Alfred)</label>
   <label>Verificar a cada (min) <input type="number" id="intervaloMin" min="1" style="width:70px"></label>
   <button id="salvar">Salvar</button> <button id="agora">Verificar agora</button>
   <pre id="saida"></pre>

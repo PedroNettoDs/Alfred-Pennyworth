@@ -233,7 +233,7 @@ resposta, agenda ou limpeza.
 | **Detalhe e-mail** | texto explicativo do `.md` (sem frontmatter, linha de status, "Dados extraídos" e "Como responder"; markdown mínimo e seguro, links só http/https), link do evento, cartão de dados (tipo, quando, local, organizador, custo, remetente, assunto), áudio, histórico e **Vou** / **Não vou** com nota opcional |
 | **Detalhe já resolvido** | "Esta pendência já foi resolvida por <caminho>.", o resultado (status, data, resposta, envio, nota, tarefa) e nenhuma ação |
 | **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
-| **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data) recolhível; **Aprovar** e **Recusar** (nota opcional) só nos lotes aguardando |
+| **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data e, depois que a extensão passa, o resultado de cada um) recolhível; o resultado agregado da última passada (movidos para a Lixeira, não encontrados, recusados, com erro); **Aprovar**, **Aprovar e limpar** e **Recusar** (nota opcional) nos lotes aguardando; **Limpar** nos lotes aprovados, simulados, parciais ou que falharam (some enquanto a limpeza pedida espera a extensão) |
 | **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
 
 O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
@@ -253,7 +253,8 @@ Datas sempre em America/Sao_Paulo, `DD/MM/AAAA HH:MM`, e relativas nas listas ("
 | **Agendar** | `whatsapp.interpretar_quando` + `whatsapp.agendar_pendencia` (mesmo formato do botão Agenda da notificação; o campo vem com `sugestao_quando`) | tarefa em `tasks.yml` + lembrete + link do Google Agenda já preenchido; a pendência continua aguardando |
 | **Vou** / **Não vou** (e-mail) | `core.responder(id, vou\|nao_vou, nota, origem="via painel", so_se_aguardando=True)` | o mesmo efeito de `./run.sh responder <id> vou`: tarefa em `tasks.yml`, `.md` atualizado, agenda do evento |
 | **Desfazer** (agenda) | `agenda.desfazer(id)` — só para `pendente`, `no_calendario`, `em_execucao` ou `erro` | `pendente` → `cancelado`; no calendário → `desfazer` (a extensão remove na próxima passada) |
-| **Aprovar** (limpeza) | confirmação "Os N e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente." → `limpeza.aprovar(id, nota)` (com a revalidação de sempre) | `aprovado`; a extensão do Thunderbird move na próxima passada |
+| **Aprovar** (limpeza) | confirmação "Os N e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente." → `limpeza.aprovar(id, nota)` (com a revalidação de sempre) | `aprovado`; a extensão do Thunderbird executa na próxima passada, ou só simula se "Executar de verdade" estiver desligado nela |
+| **Limpar** / **Aprovar e limpar** (limpeza) | confirmação "Mover os N e-mails para a Lixeira da conta? …" → `limpeza.limpar(id, nota)`: aprova antes se o lote está aguardando e revalida os itens ainda não movidos ([LIMPEZA.md](LIMPEZA.md#botão-limpar-painel--limpeza)) | `aprovado` + `limpar: true`; a extensão move de verdade só esse lote, mesmo com "Executar de verdade" desligado; 409 enquanto ela executa o lote |
 | **Recusar** (limpeza) | `limpeza.recusar(id, nota)` | `recusado`, nenhum e-mail é movido |
 
 - **Já resolvida por outro caminho** (celular, notificação, CLI, chat): o servidor confere "ainda aguardando" antes de
@@ -293,7 +294,7 @@ recarrega a cada seta) e Enter ou **Buscar** aplicam.
 | GET `/painel`, `/painel/pendencias?aba=aguardando\|resolvidas&tipo=whatsapp\|email&q=`, `/painel/pendencias/{id}`, `/painel/agenda`, `/painel/limpeza`, `/painel/sistema` | telas (sem sessão → 303 para o login) |
 | GET `/painel/parcial/{inicio\|pendencias\|agenda\|limpeza\|sistema}`, `/painel/api/contadores`, `/painel/api/pendencias/{id}/estado` | polling (sem sessão → 401 JSON) |
 | POST `/painel/api/pendencias/{id}/responder-texto` `{texto}` · `/ignorar` · `/agendar` `{quando}` · `/responder` `{resposta, nota}` | ações das pendências |
-| POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` `{nota}` | agenda e limpeza |
+| POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` · `/limpar` `{nota}` | agenda e limpeza |
 | GET `/painel/static/painel.css`, `/painel/static/painel.js` | estáticos (lista fechada) |
 
 Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 403 CSRF/origem/rede; 404; 409 já resolvida;

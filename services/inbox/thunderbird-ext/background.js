@@ -12,7 +12,13 @@ const PADRAO = {
 };
 
 async function carregarCfg() {
-  return { ...PADRAO, ...(await messenger.storage.local.get(Object.keys(PADRAO))) };
+  const cfg = { ...PADRAO, ...(await messenger.storage.local.get(Object.keys(PADRAO))) };
+  // portas +1 (31/10/2026): o inbox saiu da 7072 (hoje é o researcher) — URL salva antes disso vira a nova
+  if (/^http:\/\/(127\.0\.0\.1|localhost):7072\/?$/.test(cfg.urlAlfred)) {
+    cfg.urlAlfred = PADRAO.urlAlfred;
+    await messenger.storage.local.set({ urlAlfred: cfg.urlAlfred });
+  }
+  return cfg;
 }
 
 function clienteHttp(cfg) {

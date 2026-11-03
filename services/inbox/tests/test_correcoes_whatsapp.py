@@ -246,8 +246,11 @@ class TestPainelLimpezaEInicio(tp.Base):
         with mock.patch.object(limpeza, "aprovar", lambda lid, nota: {"status": "aprovado", "total": 1,
                                                                       "removidos_na_aprovacao": ["x"]}):
             r = self.acao(cli, f"/painel/api/limpeza/{lote['id']}/aprovar", {})
-        self.assertEqual(r.json()["mensagem"], "Lote aprovado: 1 e-mail irá para a Lixeira quando a extensão do "
-                                               "Thunderbird passar. 1 saiu do lote na revalidação.")
+        self.assertEqual(r.json()["mensagem"], "Lote aprovado (1 e-mail). Na próxima passada a extensão do "
+                                               "Thunderbird o executa, ou só simula se \"Executar de verdade\" "
+                                               "estiver desligado nela. Para mover para a Lixeira de verdade, use "
+                                               "Limpar. 1 saiu do lote na revalidação.")
+        self.assertIn('data-dialogo-mensagem="Mover o e-mail para a Lixeira da conta?', html)
 
     def test_inicio_nao_lista_item_desfeito(self):
         amanha = core._now().replace(hour=15, minute=0, second=0, microsecond=0) + timedelta(days=1)

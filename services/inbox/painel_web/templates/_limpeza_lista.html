@@ -6,6 +6,9 @@
 {{ m.vazio("Nenhum lote de limpeza, senhor.", "limpeza") }}
 {%- else %}
 {%- for l in lotes %}
+{%- set qtd_mover = "o e-mail" if l.a_mover == 1 else "os " ~ l.a_mover ~ " e-mails" %}
+{%- set msg_limpar = "Mover " ~ qtd_mover ~ " para a Lixeira da conta? A extensão do Thunderbird executa de verdade"
+                     ~ " na próxima passada. Dá para recuperar na Lixeira; nada é apagado de forma permanente." %}
 <article class="cartao lote" aria-labelledby="lote-{{ l.id }}-titulo">
   <div class="lote__cabecalho">
     <h2 class="lote__titulo" id="lote-{{ l.id }}-titulo">{{ l.total }} e-mail{{ "s" if l.total != 1 else "" }}{% if l.inbox %} · {{ l.inbox }}{% endif %}</h2>
@@ -13,14 +16,20 @@
   </div>
   <p class="lote__meta">Proposto em {{ l.criado }}{% if l.status == "aguardando" and l.expira %} · expira em {{ l.expira }}{% endif %}{% if l.motivo %} · Motivo: {{ l.motivo }}{% endif %}</p>
   {%- if l.nota %}<p class="pequeno">Nota: {{ l.nota }}</p>{% endif %}
+  {%- if l.limpar_pedido %}<p class="pequeno">Limpeza pedida em {{ l.limpar_pedido }}: a extensão do Thunderbird move os e-mails para a Lixeira na próxima passada.</p>{% endif %}
+  {%- if l.resultado %}<p class="pequeno">Resultado{% if l.executado %} ({{ l.executado }}){% endif %}: {{ l.resultado }}.</p>{% endif %}
+  {%- if l.extensao_antiga %}
+  {{ m.aviso("aguardando", "Você pediu Limpar, mas a extensão do Thunderbird só simulou: ela está desatualizada. Recarregue-a no Thunderbird (LIMPEZA.md) e clique em Limpar de novo.") }}
+  {%- endif %}
   <details class="recolhivel" id="lote-{{ l.id }}-emails">
     <summary>{{ "Ver o e-mail" if l.itens|length == 1 else "Ver os " ~ l.itens|length ~ " e-mails" }}</summary>
     <div class="recolhivel__corpo">
       <table class="tabela">
-        <thead><tr><th scope="col">Remetente</th><th scope="col">Assunto</th><th scope="col">Data</th></tr></thead>
+        <thead><tr><th scope="col">Remetente</th><th scope="col">Assunto</th><th scope="col">Data</th>{% if l.resultado %}<th scope="col">Resultado</th>{% endif %}</tr></thead>
         <tbody>
           {%- for i in l.itens %}
-          <tr><td>{{ i.de }}{% if i.email and i.email != i.de %} <span class="suave pequeno">&lt;{{ i.email }}&gt;</span>{% endif %}</td><td>{{ i.assunto }}</td><td class="tabela__data">{{ i.data }}</td></tr>
+          <tr><td>{{ i.de }}{% if i.email and i.email != i.de %} <span class="suave pequeno">&lt;{{ i.email }}&gt;</span>{% endif %}</td><td>{{ i.assunto }}</td><td class="tabela__data">{{ i.data }}</td>
+            {%- if l.resultado %}<td>{{ i.resultado }}{% if i.resultado_detalhe %} <span class="suave pequeno">({{ i.resultado_detalhe }})</span>{% endif %}</td>{% endif %}</tr>
           {%- endfor %}
         </tbody>
       </table>
@@ -34,8 +43,20 @@
           "data-confirmar": "dialogo-limpeza", "data-apos-sucesso": "encerrar", "data-texto-ocupado": "Aprovando…",
           "data-dialogo-mensagem": ("O e-mail irá" if l.total == 1 else "Os " ~ l.total ~ " e-mails irão")
                                    ~ " para a Lixeira da conta. Nada é apagado de forma permanente."}) }}
+      {{ m.botao("Aprovar e limpar", "perigo", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/limpar",
+          "data-confirmar": "dialogo-limpar", "data-apos-sucesso": "encerrar", "data-texto-ocupado": "Pedindo a limpeza…",
+          "data-dialogo-mensagem": msg_limpar}) }}
       {{ m.botao("Recusar", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/recusar", "data-apos-sucesso": "encerrar",
           "data-texto-ocupado": "Recusando…"}) }}
+    </div>
+    {{ m.resultado() }}
+  </form>
+  {%- elif l.pode_limpar and not l.limpar_pedido %}
+  <form class="lote__form" data-acao="" data-acoes>
+    <div class="acoes">
+      {{ m.botao("Limpar", "perigo", nome_icone="limpeza", attrs={"data-acao": "/painel/api/limpeza/" ~ l.id ~ "/limpar",
+          "data-confirmar": "dialogo-limpar", "data-apos-sucesso": "encerrar", "data-texto-ocupado": "Pedindo a limpeza…",
+          "data-dialogo-mensagem": msg_limpar}) }}
     </div>
     {{ m.resultado() }}
   </form>

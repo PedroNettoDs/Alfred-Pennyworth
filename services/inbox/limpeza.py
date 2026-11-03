@@ -11,6 +11,8 @@ Fluxo:
     propor()          → grava um LOTE "aguardando" em VAULT_ALFRED/pendencias/limpeza.yml + .md
                         ("posso apagar estes N e-mails?") e avisa o usuário
     aprovar(id)       → só por confirmação explícita (CLI / API / tool); revalida cada item
+    limpar(id)        → botão "Limpar" do Painel: a extensão executa ESTE lote de verdade (mover para a
+                        Lixeira) mesmo com "Executar de verdade" desligado; lote aguardando é aprovado antes
     fila_execucao()   → a extensão busca os lotes aprovados (GET /limpeza/fila)
     registrar_resultado(id, itens) ← a extensão relata movido | simulado | nao_encontrado | recusado | erro
 
@@ -49,6 +51,7 @@ LIMPAVEIS  = ("promocao", "transacional", "ignorado")
 PROTEGIDAS = ("contato", "evento", "pessoal")
 STATUS_ITEM_OK = ("movido", "simulado")
 STATUS_LOTE_FINAIS = ("concluido", "simulado", "parcial", "falhou", "recusado", "expirado")
+STATUS_LIMPAR = ("aguardando", "aprovado", "simulado", "parcial", "falhou")   # onde o "Limpar" do Painel vale
 
 DEFAULTS = {
     "ativo": True,
@@ -398,6 +401,25 @@ def propor(inbox_name: Optional[str] = None, notificar: bool = True) -> Optional
     return lote
 
 
+def _revalidar(itens: list[dict], inbox: Optional[str]) -> tuple[list[dict], list[dict]]:
+    """(mantidos, removidos): reaplica avaliar() aos itens (pendência nova, categoria que mudou, manifesto removido)."""
+    _nome, cfg, lc = config(inbox)
+    registro, manifestos = carregar_registro(), carregar_manifestos()
+    protegidos = _ids_protegidos_por_pendencia()
+    agora = _now()
+    mantidos, removidos = [], []
+    for i in itens:
+        m = {"message_id": i["message_id"], "from_addr": i["from"],
+             "from_domain": i["from"].split("@")[-1] if "@" in i["from"] else "",
+             "date": core._parse_dt(i["date"])}
+        motivo, razao = avaliar(m, cfg, lc, registro, manifestos, protegidos, agora)
+        if motivo:
+            mantidos.append(i)
+        else:
+            removidos.append({**i, "removido_por": razao})
+    return mantidos, removidos
+
+
 def aprovar(lid: str, nota: str = "") -> dict:
     """
     Confirmação explícita. Revalida cada item (pendência nova, categoria que mudou, manifesto removido)
@@ -413,22 +435,10 @@ def aprovar(lid: str, nota: str = "") -> dict:
             _save_lotes(data)
             raise ValueError(f"{lid} expirou — gere um novo com `run.sh limpeza propor`")
 
-        _nome, cfg, lc = config(lote.get("inbox"))
-        registro, manifestos = carregar_registro(), carregar_manifestos()
-        protegidos = _ids_protegidos_por_pendencia()
-        agora = _now()
-        mantidos, removidos = [], []
-        for i in lote["itens"]:
-            m = {"message_id": i["message_id"], "from_addr": i["from"],
-                 "from_domain": i["from"].split("@")[-1] if "@" in i["from"] else "",
-                 "date": core._parse_dt(i["date"])}
-            motivo, razao = avaliar(m, cfg, lc, registro, manifestos, protegidos, agora)
-            if motivo:
-                mantidos.append(i)
-            else:
-                removidos.append({**i, "removido_por": razao})
+        mantidos, removidos = _revalidar(lote["itens"], lote.get("inbox"))
         if not mantidos:
             raise ValueError(f"{lid}: nenhum item continua elegível na revalidação")
+        agora = _now()
         lote.update({"status": "aprovado", "aprovado_em": agora.isoformat(timespec="minutes"),
                      "nota": nota.strip() or None, "itens": mantidos, "total": len(mantidos)})
         if removidos:
@@ -453,6 +463,38 @@ def recusar(lid: str, nota: str = "") -> dict:
         return lote
 
 
+def limpar(lid: str, nota: str = "") -> dict:
+    """
+    Botão "Limpar" do Painel (confirmação explícita): manda a extensão executar ESTE lote de verdade,
+    movendo para a Lixeira, mesmo com "Executar de verdade" desligado nas opções dela (`limpar: true`
+    → `executar` na fila). Lote aguardando é aprovado antes; aprovado/simulado/parcial/falhou volta à
+    fila só com os itens ainda não movidos, revalidados de novo.
+    """
+    with _trava():
+        anterior = obter_lote(lid) or {}
+        if anterior.get("status") == "aguardando":
+            aprovar(lid, nota)   # mesma revalidação e as mesmas regras da aprovação
+        data = _load_lotes()
+        lote = _pegar(data, lid)
+        if lote.get("status") not in STATUS_LIMPAR:
+            raise ValueError(f"{lid} está '{lote.get('status')}' — não dá para limpar")
+        mantidos, removidos = _revalidar([i for i in lote["itens"] if i.get("resultado") != "movido"],
+                                         lote.get("inbox"))
+        if not mantidos:
+            raise ValueError(f"{lid}: nenhum item a mover continua elegível na revalidação")
+        if removidos:
+            fora = {r["message_id"] for r in removidos}
+            lote["itens"] = [i for i in lote["itens"] if i["message_id"] not in fora]
+            lote["removidos_na_aprovacao"] = (lote.get("removidos_na_aprovacao") or []) + removidos
+        lote.update({"status": "aprovado", "limpar": True, "limpar_pedido_em": _now().isoformat(timespec="minutes"),
+                     "total": len(lote["itens"])})
+        _save_lotes(data)
+        _escrever_md(lote)
+        fora_agora = len(lote.get("removidos_na_aprovacao") or []) - len(anterior.get("removidos_na_aprovacao") or [])
+        log(f"[limpeza] {lid} LIMPAR pedido ({len(mantidos)} a mover; {fora_agora} removidos na revalidação)")
+        return {**lote, "a_mover": len(mantidos), "removidos_agora": fora_agora}
+
+
 # ══════════════════════════════════════════════════════════════
 #  Execução (lado da extensão do Thunderbird)
 # ══════════════════════════════════════════════════════════════
@@ -468,9 +510,10 @@ def fila_execucao() -> list[dict]:
             if l.get("status") == "aprovado" or travado:
                 l["status"] = "em_execucao"
                 l["execucao_iniciada_em"] = agora.isoformat(timespec="minutes")
-                out.append({"id": l["id"], "acao": "mover_para_lixeira",
+                # executar: Pedro mandou limpar pelo Painel → a extensão move de verdade (limpar())
+                out.append({"id": l["id"], "acao": "mover_para_lixeira", "executar": bool(l.get("limpar")),
                             "itens": [{k: i[k] for k in ("message_id", "from", "subject", "date", "pasta", "conta")}
-                                      for i in l["itens"]]})
+                                      for i in l["itens"] if i.get("resultado") != "movido"]})
         if out:
             _save_lotes(data)
         return out
@@ -490,15 +533,22 @@ def registrar_resultado(lid: str, itens: list[dict], executor: str = "thunderbir
                 res[mid] = {"status": str(r.get("status") or "erro"), "detalhe": str(r.get("detalhe") or "")[:300]}
         contagem: dict = {}
         for i in lote["itens"]:
-            r = res.get(i["message_id"], {"status": "sem_resposta", "detalhe": ""})
+            r = res.get(i["message_id"])
+            if r is None and i.get("resultado") == "movido":   # movido numa passada anterior (fora desta fila)
+                r = {"status": "movido", "detalhe": i.get("resultado_detalhe", "")}
+            r = r or {"status": "sem_resposta", "detalhe": ""}
             i["resultado"] = r["status"]
             if r["detalhe"]:
                 i["resultado_detalhe"] = r["detalhe"]
+            else:
+                i.pop("resultado_detalhe", None)   # detalhe de uma passada anterior não vale mais
             contagem[r["status"]] = contagem.get(r["status"], 0) + 1
         ok = sum(contagem.get(s, 0) for s in STATUS_ITEM_OK)
-        if ok == len(lote["itens"]):
-            status = "simulado" if contagem.get("simulado") == ok else "concluido"
-        else:
+        if contagem.get("movido") == len(lote["itens"]):
+            status = "concluido"
+        elif contagem.get("simulado") == len(lote["itens"]):
+            status = "simulado"
+        else:   # inclui movidos de uma passada anterior + simulados agora (Limpar com extensão antiga)
             status = "parcial" if ok else "falhou"
         lote.update({"status": status, "executado_em": _now().isoformat(timespec="minutes"),
                      "executor": executor, "contagem": contagem})
