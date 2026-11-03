@@ -70,12 +70,13 @@ extensão "só simulou" um lote mandado limpar, a extensão carregada no Thunder
 - categorias `contato`, `evento` e `pessoal` (a config não consegue liberar essas: categorias fora de
   promocao/transacional/ignorado são descartadas);
 - e-mails ligados a uma pendência `aguardando` (`pendencias.yml → email.message_id`);
-- e-mails sem Message-ID ou já presentes num lote aberto.
+- e-mails sem Message-ID ou já presentes num lote aberto;
+- e-mails fora do índice `.msf` da pasta (fantasmas do mbox offline, ver "Limites conhecidos").
 - Na extensão: mensagens com estrela, Message-ID ambíguo, remetente ou assunto diferentes do lote,
   contas não marcadas, mensagens que já estão na Lixeira e contas sem Lixeira identificável.
 
-A aprovação **revalida** o lote. Um item que ganhou pendência ou mudou de categoria depois da proposta
-sai do lote (`removidos_na_aprovacao`).
+A aprovação **revalida** o lote. Um item que ganhou pendência, mudou de categoria ou saiu do índice `.msf`
+depois da proposta sai do lote (`removidos_na_aprovacao`).
 
 ### Configuração (`perfis.yml → inbox.<nome>.limpeza`)
 
@@ -161,8 +162,9 @@ venv/bin/python -m unittest discover -s tests -t .   # inclui tests/test_limpeza
 node --test tests/test_executor.mjs                    # executor da extensão com messenger simulado
 ```
 
-`test_limpeza.py` monta um perfil do Thunderbird sintético (prefs.js + mbox), um vault, manifestos e um
-registro temporários. O teste percorre o fluxo inteiro pela API: proposta → revalidação na aprovação →
+`test_limpeza.py` monta um perfil do Thunderbird sintético (prefs.js + mbox + `INBOX.msf` com um fantasma),
+um vault, manifestos e um registro temporários. Também cobre o `.msf` ausente/ilegível e um Mork com
+escapes, quebras de linha e grupos de transação. O teste percorre o fluxo inteiro pela API: proposta → revalidação na aprovação →
 fila → resultado da extensão. O teste em node garante que o executor nunca chama `messages.delete`
 e que só move mensagens para a pasta com `specialUse: trash`.
 
@@ -176,7 +178,25 @@ e que só move mensagens para a pasta com `specialUse: trash`.
   Message-IDs ambíguos.
 - **Fantasmas do mbox offline.** Os candidatos vêm do mbox offline do Thunderbird (`ImapMail/.../INBOX`).
   Uma mensagem que já saiu da INBOX no servidor (apagada no celular ou no Outlook web) some do índice
-  `INBOX.msf`. Os bytes dela, porém, ficam no mbox até a pasta ser compactada, então ela ainda vira
-  candidata. A extensão então relata `nao_encontrado` ("não encontrada nas contas permitidas"), o que está
-  correto: a mensagem não está mais na caixa. Nos lotes de 20/10, 31 dos 38 itens eram esse caso (nenhum
-  dos 31 consta do `INBOX.msf`; os 7 encontrados constam). No lote de 31/10, só 9 dos 49 constam do índice.
+  `INBOX.msf`. Os bytes dela, porém, ficam no mbox até a pasta ser compactada, e o `X-Mozilla-Status` não
+  marca expunged. Antes ela virava candidata e a extensão relatava `nao_encontrado`. Agora `candidatos()`
+  confere o índice (`fetch_messages(..., checar_indice=True)` → `lib_mail.ids_no_indice`) e deixa essas
+  mensagens na caixa com a razão "fora do índice do Thunderbird". Elas não entram mais em lotes novos.
+  - O índice é lido por um leitor Mork mínimo (`lib_mail._Mork`). Ele trata dicionários, linhas, a tabela
+    de mensagens, linha cortada da tabela (`-id`), linha reescrita (`[-id`), os escapes `\)`, `\\`, `\$`,
+    o byte `$xx` e a continuação `\` + quebra de linha. Grupo de transação abortado não vale. Grupo sem fim
+    (o Thunderbird gravando naquele instante) também não.
+  - Buscar o Message-ID como substring nos bytes do `.msf` não serve. Em 03/11 essa busca perdia 54 das 259
+    mensagens do índice, todas porque o Mork quebra valores longos em duas linhas.
+  - Sem `.msf`, ou com `.msf` ilegível ou sem tabela de mensagens, a pasta é lida como antes (sem filtro) e
+    o log avisa (`[mail] índice … não encontrado` / `ilegível`). Construção Mork fora do esperado conta como
+    ilegível.
+  - Mensagem sem Message-ID (id `gen-…`) não é conferida: o Thunderbird a indexa com outro id.
+  - Só a limpeza liga o filtro. Os outros leitores do mbox (ciclo do inbox, semanal) leem como antes.
+  - A revalidação de Aprovar/Limpar relê o índice (`limpeza._indices`). Um item que saiu da INBOX depois
+    da proposta, ou um fantasma de lote criado antes do filtro, sai do lote (`removidos_na_aprovacao`,
+    "fora do índice do Thunderbird") e não vai para a extensão. Em 03/11 (só leitura) isso deixaria 7 dos
+    38 itens em cada lote de 20/10 e 9 dos 49 no de 31/10. Sem índice legível, a revalidação não filtra.
+  - Números de 03/11: 628 mensagens no mbox, 540 Message-IDs distintos, 259 no índice (igual ao `numMsgs`
+    do `.msf`), 281 fantasmas. Os candidatos caíram de 8 para 3. Antes do filtro: nos lotes de 20/10, 31
+    dos 38 itens eram fantasmas; no de 31/10, só 9 dos 49 constam do índice.

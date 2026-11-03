@@ -263,6 +263,240 @@ def iter_folder_raw(path: Path, store: str = "mbox") -> Iterator[bytes]:
 
 
 # ══════════════════════════════════════════════════════════════
+#  3b. Índice da pasta (.msf, formato Mork)
+# ══════════════════════════════════════════════════════════════
+
+class _Mork:
+    """
+    Leitor mínimo do Mork (o .msf do Thunderbird): dicionários, linhas, tabelas e grupos de transação.
+    Só o necessário para saber quais linhas a tabela de mensagens ainda tem; não é um parser completo.
+    Qualquer coisa fora do esperado levanta exceção (quem chama trata como índice ilegível).
+    """
+    TIPO_MSGS = "ns:msg:db:table:kind:msgs"
+
+    def __init__(self, texto: str):
+        # "@$$" não aparece dentro de valores (o Mork escapa "$" como \$ ou $24): dá para tratar os grupos
+        # no texto. Grupo abortado (@$$}~~}@) não vale; um grupo sem fim é o Thunderbird gravando agora.
+        texto = re.sub(r"@\$\$\{[0-9A-Fa-f]+\{@(?:(?!@\$\$).)*@\$\$\}~~\}@", "", texto, flags=re.S)
+        ini = texto.rfind("@$${")
+        if ini >= 0 and "@$$}" not in texto[ini:]:
+            texto = texto[:ini]
+        self.t = re.sub(r"@\$\$[{}][0-9A-Fa-f]+[{}]@", " ", texto)
+        self.i = 0
+        self.colunas: dict[str, str] = {}             # id → nome da coluna
+        self.atomos: dict[str, str] = {}              # id → valor
+        self.linhas: dict[tuple, dict] = {}           # (escopo, id) → {coluna: valor}
+        self.tabelas: dict[tuple, dict] = {}          # (escopo, id) → {"tipo", "linhas": {(escopo, id)}}
+
+    def _ws(self):
+        """Pula espaços e comentários // (só fora de valores)."""
+        t = self.t
+        while self.i < len(t):
+            if t[self.i] in " \t\r\n":
+                self.i += 1
+            elif t.startswith("//", self.i):
+                fim = t.find("\n", self.i)
+                self.i = len(t) if fim < 0 else fim + 1
+            else:
+                break
+
+    def _esperar(self, c: str):
+        if self.t[self.i] != c:
+            raise ValueError(f"Mork: esperava '{c}' na posição {self.i}, veio '{self.t[self.i]}'")
+        self.i += 1
+
+    def _token(self) -> str:
+        ini = self.i
+        while self.t[self.i] not in " \t\r\n()[]{}<>:=^":
+            self.i += 1
+        if self.i == ini:
+            raise ValueError(f"Mork: id vazio na posição {ini}")
+        return self.t[ini:self.i]
+
+    def _nome(self) -> str:
+        """'^id' → nome no dicionário de colunas; sem '^' → nome literal."""
+        if self.t[self.i] == "^":
+            self.i += 1
+            tok = self._token()
+            return self.colunas.get(tok, tok)
+        return self._token()
+
+    def _valor(self) -> str:
+        """
+        Valor literal até o ')' (sem consumi-lo). "\\" escapa o caractere seguinte (")", "\\", "$");
+        "\\" + quebra de linha continua o valor na linha de baixo; "$xx" é um byte em hex. Bytes → UTF-8.
+        """
+        t, out = self.t, bytearray()
+        while t[self.i] != ")":
+            c = t[self.i]
+            self.i += 1
+            if c == "\\":
+                c = t[self.i]
+                self.i += 1
+                if c in "\r\n":
+                    if c == "\r" and t[self.i] == "\n":
+                        self.i += 1
+                    continue
+            elif c == "$":
+                out.append(int(t[self.i:self.i + 2], 16))
+                self.i += 2
+                continue
+            out += c.encode("latin-1")
+        return out.decode("utf-8", "replace")
+
+    def _celula(self) -> tuple[str, Optional[str]]:
+        """'(coluna=valor)' ou '(coluna^átomo)' → (nome da coluna, valor)."""
+        self._esperar("(")
+        self._ws()
+        col = self._nome()
+        self._ws()
+        if self.t[self.i] == "=":
+            self.i += 1
+            val: Optional[str] = self._valor()
+        else:
+            self._esperar("^")
+            ref = self._token()
+            if self.t[self.i] == ":":   # metadados de tabela: (k^96:c) aponta para o dicionário de colunas
+                self.i += 1
+                val = (self.colunas if self._token() == "c" else self.atomos).get(ref)
+            else:
+                val = self.atomos.get(ref)
+        self._ws()
+        self._esperar(")")
+        return col, val
+
+    def _dicionario(self):
+        """'< <(a=c)> (id=valor) … >': átomos, ou colunas se o metadado for (a=c)."""
+        self._esperar("<")
+        destino = self.atomos
+        while True:
+            self._ws()
+            c = self.t[self.i]
+            if c == ">":
+                self.i += 1
+                return
+            if c == "<":
+                self.i += 1
+                self._ws()
+                while self.t[self.i] == "(":
+                    if self._celula() == ("a", "c"):
+                        destino = self.colunas
+                    self._ws()
+                self._esperar(">")
+            else:
+                k, v = self._celula()
+                destino[k] = v
+
+    def _id(self, escopo: Optional[str]) -> tuple:
+        """'id' ou 'id:escopo' → (escopo, id); sem escopo vale o da tabela."""
+        rid = self._token()
+        if self.t[self.i] == ":":
+            self.i += 1
+            escopo = self._nome()
+        return escopo, rid
+
+    def _linha(self, escopo: Optional[str]) -> tuple:
+        """'[id:escopo (células)]'; '[-id …]' troca todas as células da linha. Devolve a chave."""
+        self._esperar("[")
+        self._ws()
+        trocar = self.t[self.i] == "-"
+        if trocar:
+            self.i += 1
+        chave = self._id(escopo)
+        celulas = self.linhas.setdefault(chave, {})
+        if trocar:
+            celulas.clear()
+        while True:
+            self._ws()
+            if self.t[self.i] == "]":
+                self.i += 1
+                return chave
+            col, val = self._celula()
+            celulas[col] = val
+
+    def _tabela(self):
+        """'{id:escopo {metadados} linhas}'; '-linha' tira a linha da tabela; '{-id' esvazia antes."""
+        self._esperar("{")
+        self._ws()
+        esvaziar = self.t[self.i] == "-"
+        if esvaziar:
+            self.i += 1
+        chave = self._id(None)
+        tab = self.tabelas.setdefault(chave, {"tipo": None, "linhas": set()})
+        if esvaziar:
+            tab["linhas"].clear()
+        escopo = chave[0]
+        while True:
+            self._ws()
+            c = self.t[self.i]
+            if c == "}":
+                self.i += 1
+                return
+            if c == "{":   # metadados: (k^96:c) é o tipo; o resto (linha de metadados etc.) não importa
+                self.i += 1
+                while True:
+                    self._ws()
+                    if self.t[self.i] == "}":
+                        self.i += 1
+                        break
+                    if self.t[self.i] == "(":
+                        k, v = self._celula()
+                        if k == "k":
+                            tab["tipo"] = v
+                    else:
+                        self._id(escopo)
+            elif c == "-":
+                self.i += 1
+                self._ws()
+                tab["linhas"].discard(self._linha(escopo) if self.t[self.i] == "[" else self._id(escopo))
+            elif c == "[":
+                tab["linhas"].add(self._linha(escopo))
+            else:
+                tab["linhas"].add(self._id(escopo))
+
+    def message_ids(self) -> Optional[set[str]]:
+        """Message-IDs das linhas da tabela de mensagens. None se o arquivo não tem essa tabela."""
+        while True:
+            self._ws()
+            if self.i >= len(self.t):
+                break
+            c = self.t[self.i]
+            if c == "<":
+                self._dicionario()
+            elif c == "{":
+                self._tabela()
+            elif c == "[":
+                self._linha(None)
+            else:
+                raise ValueError(f"Mork: '{c}' inesperado na posição {self.i}")
+        tabs = [t for t in self.tabelas.values() if t["tipo"] == self.TIPO_MSGS]
+        if not tabs:
+            return None
+        return {mid for t in tabs for chave in t["linhas"]
+                if (mid := (self.linhas.get(chave) or {}).get("message-id"))}
+
+
+def ids_no_indice(path: Path) -> Optional[set[str]]:
+    """
+    Message-IDs (sem <>) que o índice .msf da pasta ainda lista, ou seja, o que o Thunderbird mostra.
+    Mensagem que saiu da pasta no servidor (apagada no celular, no webmail) some do índice, mas os bytes
+    dela ficam no mbox até a pasta ser compactada. None (e log) se o .msf não existe ou está ilegível.
+    """
+    msf = path.with_name(path.name + ".msf")
+    if not msf.is_file():
+        log(f"[mail] índice {msf} não encontrado — pasta lida sem conferir o índice")
+        return None
+    try:
+        ids = _Mork(msf.read_bytes().decode("latin-1")).message_ids()
+    except Exception as e:
+        log(f"[mail] índice {msf} ilegível ({type(e).__name__}: {e}) — pasta lida sem conferir o índice")
+        return None
+    if ids is None:
+        log(f"[mail] índice {msf} sem tabela de mensagens — pasta lida sem conferir o índice")
+    return ids
+
+
+# ══════════════════════════════════════════════════════════════
 #  4. Parsing de uma mensagem → dict normalizado
 # ══════════════════════════════════════════════════════════════
 
@@ -666,6 +900,7 @@ def fetch_messages(
     conta: str = "",
     max_total: int = 500,
     incluir_lidos: bool = True,
+    checar_indice: bool = False,
 ) -> list[dict]:
     """
     Lê as pastas das contas e devolve mensagens normalizadas, mais recentes primeiro.
@@ -676,6 +911,10 @@ def fetch_messages(
     :param conta:         filtra por hostname ou name da conta (substring, case-insensitive)
     :param max_total:     limite de segurança
     :param incluir_lidos: False → só mensagens não lidas
+    :param checar_indice: True → cada mensagem ganha "no_indice": o Message-ID consta do .msf da pasta?
+                          False = fantasma do mbox offline (já saiu da pasta no servidor). None quando o
+                          .msf não existe/está ilegível ou a mensagem não tem Message-ID ("gen-…").
+                          Nada é descartado aqui: quem chama decide (ver ids_no_indice).
     """
     pastas = pastas or ["INBOX"]
     if desde is not None and desde.tzinfo is None:
@@ -695,6 +934,7 @@ def fetch_messages(
                 log(f"[mail] Pasta '{pasta}' não encontrada em {acc.get('hostname')} ({acc.get('directory')})")
                 continue
             n_lidas = n_ok = 0
+            indice = ids_no_indice(path) if checar_indice else None
             for raw in iter_folder_raw(path, acc.get("store", "mbox")):
                 n_lidas += 1
                 if not raw.strip():
@@ -712,6 +952,9 @@ def fetch_messages(
                     continue
                 if not incluir_lidos and m["read"]:
                     continue
+                if checar_indice:
+                    m["no_indice"] = (None if indice is None or m["message_id"].startswith("gen-")
+                                      else m["message_id"] in indice)
                 out.append(m)
                 n_ok += 1
             log(f"[mail] {acc.get('hostname')}/{pasta}: {n_ok} mensagens selecionadas de {n_lidas}")

@@ -4,7 +4,7 @@ Testes da limpeza pós-podcast (limpeza.py + endpoints /limpeza/* + executor da 
     cd services/inbox
     venv/bin/python -m unittest tests.test_limpeza -v
 
-Ambiente 100% sintético: perfil do Thunderbird falso (prefs.js + mbox) num diretório temporário,
+Ambiente 100% sintético: perfil do Thunderbird falso (prefs.js + mbox + INBOX.msf) num diretório temporário,
 vault, manifestos e registro de categorias temporários. Nenhuma caixa real é lida ou alterada.
 O executor da extensão (thunderbird-ext/executor.js) roda no node com um `messenger` simulado.
 """
@@ -46,8 +46,11 @@ def _data(dias: int) -> datetime:
     return AGORA - timedelta(days=dias)
 
 
+FANTASMA = "fantasma@loja.com"   # saiu da INBOX no servidor: os bytes ficam no mbox, mas não está no INBOX.msf
+
 # (message_id, remetente, assunto, dias atrás, categoria registrada ou None)
 EMAILS = [
+    (FANTASMA,                 "ofertas@loja.com",        "Promo apagada no celular", 60, "promocao"),
     ("promo-velha@loja.com",   "ofertas@loja.com",        "50% OFF só hoje",          60, "promocao"),
     ("promo-nova@loja.com",    "ofertas@loja.com",        "Frete grátis",              3, "promocao"),
     ("trans-velha@banco.com",  "naoresponda@banco.com",   "Seu extrato chegou",       45, "transacional"),
@@ -75,6 +78,16 @@ def _mbox(emails) -> bytes:
     return "".join(partes).encode("utf-8")
 
 
+def _msf(mids) -> bytes:
+    """INBOX.msf mínimo (Mork): a tabela de mensagens com a coluna message-id."""
+    atomos = "".join(f"({n:X}={mid})" for n, mid in enumerate(mids, 0x100))
+    linhas = "".join(f"\n  [{n:X}(^83^{n:X})]" for n in range(0x100, 0x100 + len(mids)))
+    return ('// <!-- <mdb:mork:z v="1.4"/> -->\n'
+            "< <(a=c)> // (f=iso-8859-1)\n"
+            "  (80=ns:msg:db:row:scope:msgs:all)(83=message-id)(96=ns:msg:db:table:kind:msgs)>\n"
+            f"<{atomos}>\n{{1:^80 {{(k^96:c)(s=9)}}{linhas}}}\n").encode("latin-1")
+
+
 def montar_ambiente():
     if TMP.exists():
         for sub in ("vault", "noticias", "tb-profile"):
@@ -87,6 +100,7 @@ def montar_ambiente():
         'user_pref("mail.server.server1.name", "pedro@hotmail.com");\n'
         f'user_pref("mail.server.server1.directory", "{conta}");\n', encoding="utf-8")
     (conta / "INBOX").write_bytes(_mbox(EMAILS))
+    (conta / "INBOX.msf").write_bytes(_msf([e[0] for e in EMAILS if e[0] != FANTASMA]))
     (TMP / "vault" / "pendencias").mkdir(parents=True)
 
     man = TMP / "noticias" / "podcast" / "manifestos"
@@ -159,6 +173,73 @@ class TestCandidatos(BaseLimpeza):
     def test_registrar_classificacoes(self):
         limpeza.registrar_classificacoes([{"message_id": "novo@x", "categoria": "promocao", "from": "a@b"}])
         self.assertEqual(limpeza.carregar_registro()["novo@x"]["categoria"], "promocao")
+
+    def test_fantasma_do_mbox_fica_na_caixa(self):
+        c = limpeza.candidatos(incluir_mantidos=True)
+        self.assertNotIn(FANTASMA, {i["message_id"] for i in c["candidatos"]})
+        self.assertEqual(c["mantidos"]["fora do índice do Thunderbird"], 1)
+
+    def test_sem_msf_legivel_le_como_antes_e_avisa(self):
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        for caso, aviso in (("ilegível", "ilegível"), ("ausente", "não encontrado")):
+            with self.subTest(caso):
+                if caso == "ausente":
+                    msf.unlink()
+                else:
+                    msf.write_bytes(b"isto nao e Mork")
+                with mock.patch("_shared.lib_mail.log") as log:
+                    c = limpeza.candidatos(incluir_mantidos=True)
+                self.assertIn(FANTASMA, {i["message_id"] for i in c["candidatos"]})
+                self.assertNotIn("fora do índice do Thunderbird", c["mantidos"])
+                self.assertTrue(any("INBOX.msf" in str(a) and aviso in str(a) for a in log.call_args_list))
+
+
+# Mork como o Thunderbird grava: escapes \) \\ \$, byte $xx, valor quebrado com \ + fim de linha,
+# id quebrado antes do "=", "//" dentro de valor, e grupos de transação (o abortado e o sem fim não valem)
+MSF_DIFICIL = r"""// <!-- <mdb:mork:z v="1.4"/> -->
+< <(a=c)> // (f=iso-8859-1)
+  (80=ns:msg:db:row:scope:msgs:all)(81=subject)(83=message-id)
+  (96=ns:msg:db:table:kind:msgs)(97=ns:msg:db:table:kind:thread)>
+<(A1=parenteses\)e\\barra@x)(A2=dolar\$e$C3$A9@x)(A3=quebra-de-linha-muito-\
+longa@x)
+  (A4
+    =apagada@x)(A5=so-na-thread@x)>
+{1:^80 {(k^96:c)(s=9)}
+  [1(^83^A1)]
+  [2(^83^A2)]
+  [3(^83^A3)]
+  [4(^83^A4)]}
+{7:^80 {(k^97:c)(s=9)1:m } 7 }
+[7:^80(^83^A5)]
+
+@$${1{@
+{1:^80 {(k^96:c)(s=9)} -4 }
+[-4:^80]
+@$$}1}@
+
+@$${2{@
+<(B1=abortada@x)>{1:^80 {(k^96:c)(s=9)} [5(^83^B1)] -1 }
+@$$}~~}@
+
+@$${3{@
+{1:^80 {(k^96:c)(s=9)}
+  [-6(^83=literal\)@x)(^81=veja https://x.com // nao e comentario)]}
+@$$}3}@
+
+@$${4{@
+<(D1=pela-metade@x)>{1:^80 {(k^96:c)(s=9)} [8(^83^D1)]
+"""
+
+
+class TestIndiceMsf(unittest.TestCase):
+    def test_mork_escapes_grupos_e_cortes(self):
+        from _shared.lib_mail import _Mork
+        self.assertEqual(_Mork(MSF_DIFICIL).message_ids(),
+                         {"parenteses)e\\barra@x", "dolar$eé@x", "quebra-de-linha-muito-longa@x", "literal)@x"})
+
+    def test_mork_sem_tabela_de_mensagens(self):
+        from _shared.lib_mail import _Mork
+        self.assertIsNone(_Mork("< <(a=c)> (80=x)>\n{1:^80 {(k^80:c)} [1(^80=y)]}").message_ids())
 
 
 class TestFluxoAprovacao(BaseLimpeza):
@@ -282,6 +363,27 @@ class TestFluxoAprovacao(BaseLimpeza):
         self.assertTrue(r["aprovado_em"])
         self.assertEqual(r["removidos_na_aprovacao"][0]["message_id"], "trans-velha@banco.com")
         self.assertTrue(limpeza.fila_execucao()[0]["executar"])
+
+    def test_revalidacao_tira_quem_saiu_do_indice(self):
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        msf.write_bytes(_msf([e[0] for e in EMAILS]))   # na proposta o fantasma ainda estava na INBOX
+        lote = limpeza.propor(notificar=False)
+        self.assertIn(FANTASMA, {i["message_id"] for i in lote["itens"]})
+        msf.write_bytes(_msf([e[0] for e in EMAILS if e[0] != FANTASMA]))   # depois, apagado no celular
+        r = limpeza.limpar(lote["id"])
+        self.assertEqual((r["a_mover"], r["removidos_agora"]), (4, 1))
+        self.assertEqual([(x["message_id"], x["removido_por"]) for x in r["removidos_na_aprovacao"]],
+                         [(FANTASMA, "fora do índice do Thunderbird")])
+        self.assertNotIn(FANTASMA, {i["message_id"] for i in limpeza.fila_execucao()[0]["itens"]})
+
+    def test_revalidacao_sem_indice_nao_tira_ninguem(self):
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        msf.write_bytes(_msf([e[0] for e in EMAILS]))
+        lote = limpeza.propor(notificar=False)
+        msf.unlink()
+        r = limpeza.aprovar(lote["id"])
+        self.assertEqual(r["total"], 5)
+        self.assertNotIn("removidos_na_aprovacao", r)
 
     def test_cli(self):
         import importlib.util
