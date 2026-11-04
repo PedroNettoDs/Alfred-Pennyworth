@@ -1,0 +1,278 @@
+{
+ "seletor": "lexico",
+ "quando": "2026-11-03T14:39:34",
+ "resultados": [
+  {
+   "id": 1,
+   "esperado": "diagnosticar-servico",
+   "top1": "diagnosticar-servico",
+   "nota": 0.571,
+   "escolhido": "diagnosticar-servico",
+   "ms": 0.03
+  },
+  {
+   "id": 2,
+   "esperado": "diagnosticar-servico",
+   "top1": "diagnosticar-servico",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 3,
+   "esperado": "diagnosticar-servico",
+   "top1": "diagnosticar-servico",
+   "nota": 0.4,
+   "escolhido": "diagnosticar-servico",
+   "ms": 0.01
+  },
+  {
+   "id": 4,
+   "esperado": "vram-ollama",
+   "top1": "espaco-em-disco",
+   "nota": 0.143,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 5,
+   "esperado": "vram-ollama",
+   "top1": "espaco-em-disco",
+   "nota": 0.4,
+   "escolhido": "espaco-em-disco",
+   "ms": 0.01
+  },
+  {
+   "id": 6,
+   "esperado": "vram-ollama",
+   "top1": "vram-ollama",
+   "nota": 1.0,
+   "escolhido": "vram-ollama",
+   "ms": 0.01
+  },
+  {
+   "id": 7,
+   "esperado": "liberar-vram",
+   "top1": "liberar-vram",
+   "nota": 0.5,
+   "escolhido": "liberar-vram",
+   "ms": 0.01
+  },
+  {
+   "id": 8,
+   "esperado": "liberar-vram",
+   "top1": "liberar-vram",
+   "nota": 0.6,
+   "escolhido": "liberar-vram",
+   "ms": 0.01
+  },
+  {
+   "id": 9,
+   "esperado": "espaco-em-disco",
+   "top1": "espaco-em-disco",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 10,
+   "esperado": "espaco-em-disco",
+   "top1": "espaco-em-disco",
+   "nota": 0.5,
+   "escolhido": "espaco-em-disco",
+   "ms": 0.01
+  },
+  {
+   "id": 11,
+   "esperado": "containers-docker",
+   "top1": "containers-docker",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 12,
+   "esperado": "containers-docker",
+   "top1": "containers-docker",
+   "nota": 0.25,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 13,
+   "esperado": "containers-docker",
+   "top1": "containers-docker",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 14,
+   "esperado": "resumo-da-manha",
+   "top1": "resumo-da-manha",
+   "nota": 0.667,
+   "escolhido": "resumo-da-manha",
+   "ms": 0.01
+  },
+  {
+   "id": 15,
+   "esperado": "resumo-da-manha",
+   "top1": "resumo-da-manha",
+   "nota": 1.0,
+   "escolhido": "resumo-da-manha",
+   "ms": 0.01
+  },
+  {
+   "id": 16,
+   "esperado": "resumo-da-manha",
+   "top1": "resumo-da-manha",
+   "nota": 0.25,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 17,
+   "esperado": "preparar-conversa",
+   "top1": "preparar-conversa",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 18,
+   "esperado": "preparar-conversa",
+   "top1": "preparar-conversa",
+   "nota": 0.125,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 19,
+   "esperado": "pesquisa-para-o-cofre",
+   "top1": "pesquisa-para-o-cofre",
+   "nota": 0.429,
+   "escolhido": "pesquisa-para-o-cofre",
+   "ms": 0.01
+  },
+  {
+   "id": 20,
+   "esperado": "pesquisa-para-o-cofre",
+   "top1": "pesquisa-para-o-cofre",
+   "nota": 0.286,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 21,
+   "esperado": "pesquisa-para-o-cofre",
+   "top1": "pesquisa-para-o-cofre",
+   "nota": 0.2,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 22,
+   "esperado": "triagem-de-pendencias",
+   "top1": "triagem-de-pendencias",
+   "nota": 1.0,
+   "escolhido": "triagem-de-pendencias",
+   "ms": 0.01
+  },
+  {
+   "id": 23,
+   "esperado": "triagem-de-pendencias",
+   "top1": "triagem-de-pendencias",
+   "nota": 0.714,
+   "escolhido": "triagem-de-pendencias",
+   "ms": 0.01
+  },
+  {
+   "id": 24,
+   "esperado": "triagem-de-pendencias",
+   "top1": "triagem-de-pendencias",
+   "nota": 0.4,
+   "escolhido": "triagem-de-pendencias",
+   "ms": 0.01
+  },
+  {
+   "id": 25,
+   "esperado": "limpeza-da-caixa",
+   "top1": "limpeza-da-caixa",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 26,
+   "esperado": "limpeza-da-caixa",
+   "top1": "limpeza-da-caixa",
+   "nota": 0.75,
+   "escolhido": "limpeza-da-caixa",
+   "ms": 0.01
+  },
+  {
+   "id": 27,
+   "esperado": "nenhuma",
+   "top1": "resumo-da-manha",
+   "nota": 0.167,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 28,
+   "esperado": "nenhuma",
+   "top1": "resumo-da-manha",
+   "nota": 0.25,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 29,
+   "esperado": "nenhuma",
+   "top1": "containers-docker",
+   "nota": 0.0,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 30,
+   "esperado": "nenhuma",
+   "top1": "pesquisa-para-o-cofre",
+   "nota": 0.25,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 31,
+   "esperado": "nenhuma",
+   "top1": "preparar-conversa",
+   "nota": 0.2,
+   "escolhido": "nenhuma",
+   "ms": 0.01
+  },
+  {
+   "id": 32,
+   "esperado": "nenhuma",
+   "top1": "vram-ollama",
+   "nota": 0.333,
+   "escolhido": "nenhuma",
+   "ms": 0.02
+  },
+  {
+   "id": 33,
+   "esperado": "nenhuma",
+   "top1": "resumo-da-manha",
+   "nota": 0.5,
+   "escolhido": "resumo-da-manha",
+   "ms": 0.01
+  },
+  {
+   "id": 34,
+   "esperado": "nenhuma",
+   "top1": "espaco-em-disco",
+   "nota": 0.5,
+   "escolhido": "espaco-em-disco",
+   "ms": 0.01
+  }
+ ]
+}
