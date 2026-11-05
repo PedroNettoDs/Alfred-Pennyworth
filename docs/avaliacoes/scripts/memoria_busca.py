@@ -125,9 +125,13 @@ def medir(n: int, rep: int, pasta: Path, lib_memoria, faiss) -> dict:
     r["banco_mb"] = round(banco.stat().st_size / 1e6, 1)
     os.environ["MEMORIA_DB"] = str(banco)
     with mock.patch.object(lib_memoria, "ollama_embed", lambda *a, **k: q.tolist()):
+        # 1ª chamada à parte: com o cache numpy (docs/planos/memoria-busca-numpy.md) é ela que lê a matriz do banco
+        t = time.perf_counter()
         saida = lib_memoria.contexto("reunião de projeto com cliente", K)
+        r["contexto_primeira_ms"] = (time.perf_counter() - t) * 1000
         assert saida, "contexto() voltou vazio"
         r["contexto_e2e_ms"] = _mediana(lambda: lib_memoria.contexto("reunião de projeto com cliente", K), r["rep"])
+    getattr(lib_memoria, "_cache", {}).clear()       # não acumula as matrizes de todos os N na RAM
 
     def sqlite_select():
         con = sqlite3.connect(str(banco))

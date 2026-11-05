@@ -1,6 +1,8 @@
 # Plano — busca vetorial da memória com numpy em cache
 
-Origem: `docs/avaliacoes/memoria.md`, seção 4.3. **Ainda não implementado.**
+Origem: `docs/avaliacoes/memoria.md`, seção 4.3. **Implementado em 05/11/2026** na branch
+`claude/memoria-numpy-cache`, seções 1 a 4. O resultado medido está no fim. O `alfred-inbox-api` ainda
+não foi reiniciado.
 
 ## Problema
 
@@ -180,3 +182,30 @@ A FTS5 e o embedding da consulta (~0,04 s na CPU) ficam de fora da meta. O embed
 
 **Fora do escopo:** ChromaDB e FAISS para a memória; mudar o `guardar()`/`_parecido()`; a extração
 automática, que é outro plano.
+
+## Resultado (05/11/2026)
+
+`docs/avaliacoes/scripts/memoria_busca.py`, vetores aleatórios, BLAS em 1 thread, carga de CPU entre 4 e
+6. Brutos em `docs/avaliacoes/scripts/resultados/numpy-cache-2026-11-05/`.
+
+| fatos | antes (Python puro) | depois, com cache | 1ª chamada depois de uma escrita (relê a matriz) | meta |
+|---|---|---|---|---|
+| 1 mil | 56 ms | **2,2 ms** | 9 ms | < 2 ms |
+| 2 mil | 120 ms | **3,7 ms** | 31 ms | — |
+| 10 mil | 629 ms | **8,9 ms** | 84 ms | < 5 ms |
+| 100 mil | 5.896 ms | **75 ms** | 795 ms | < 30 ms |
+
+- **Ficou 25 a 80 vezes mais rápido.** As metas de 10 mil e 100 mil não foram atingidas.
+- **Onde vai o resto, com 10 mil fatos:**
+  - ~6 ms são da FTS5. No conjunto sintético, as palavras da consulta aparecem em 30% dos fatos (3 mil
+    linhas casam), e o JOIN que filtra a validade custa ~3 ms a mais que a consulta antiga.
+  - ~2,3 ms são da multiplicação numpy.
+  - Ganhos possíveis, se um dia fizer falta:
+    - tirar palavras vazias de 4 ou mais letras ("para", "como") da consulta FTS;
+    - sem `sujeitos`, voltar à FTS sem JOIN e filtrar a validade dos 50 primeiros.
+- **Depois de cada escrita, a próxima chamada relê a matriz:** 84 ms com 10 mil fatos, ainda 7 vezes
+  menos que o custo antigo de toda chamada.
+- **Testes:**
+  - `test_memoria` foi de 40 para 48 testes; a suíte do inbox inteira, 472, passa.
+  - Teste de mutação: um cache que ignora a versão faz falhar os 3 testes de invalidação.
+
