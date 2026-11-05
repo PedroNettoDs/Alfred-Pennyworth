@@ -261,6 +261,34 @@ def historico_contato(remote_jid: str, n: int = 5, excluir=(), max_chars: int = 
     return saida[-max_chars:] if len(saida) > max_chars else saida
 
 
+def mensagens_wa(remote_jid: Optional[str] = None, *, from_me: Optional[bool] = None, desde: Optional[str] = None,
+                 ate: Optional[str] = None, limite: int = 200) -> list[dict]:
+    """
+    Conversas individuais (sem grupos), em ordem cronológica: as `limite` mais recentes com ts em [desde, ate]
+    (ISO, mesmo fuso do que foi gravado). → [{message_id, remote_jid, contato, from_me, tipo, ts, texto}].
+    Usada pela varredura de promessas (inbox/promessas.py).
+    """
+    con = _conectar()
+    if not con:
+        return []
+    sql, extra = "SELECT * FROM wa_msgs WHERE grupo = 0", []
+    for cond, valor in (("remote_jid = ?", remote_jid), ("from_me = ?", None if from_me is None else int(from_me)),
+                        ("ts >= ?", desde), ("ts <= ?", ate)):
+        if valor is not None:
+            sql += f" AND {cond}"
+            extra.append(valor)
+    sql += " ORDER BY ts DESC, rowid DESC LIMIT ?"
+    try:
+        with closing(con):
+            rows = con.execute(sql, (*extra, int(limite))).fetchall()
+    except sqlite3.Error as e:
+        log(f"[db] mensagens_wa falhou: {e}")
+        return []
+    return [{"message_id": r["message_id"], "remote_jid": r["remote_jid"], "contato": r["contato"],
+             "from_me": bool(r["from_me"]), "tipo": r["tipo"], "ts": r["ts"], "texto": r["texto"]}
+            for r in reversed(rows)]
+
+
 def buscar_wa(query: str, jid: Optional[str] = None, limite: int = 10) -> list[dict]:
     """[{message_id, remote_jid, contato, from_me, ts, trecho}] por relevância; `jid` restringe a uma conversa."""
     con = _conectar()

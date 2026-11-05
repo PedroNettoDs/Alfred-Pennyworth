@@ -1669,6 +1669,15 @@ def _registrar_historico(msg: dict, texto: str, cfg: dict) -> None:
                         tipo=msg.get("tipo_msg") or "texto", ts=msg.get("timestamp"))
 
 
+def _registrar_enviada(msg: dict, cfg: dict) -> None:
+    """Mensagem de Pedro a um contato (direto do celular ou enviada pelo Alfred) → histórico, para a varredura de
+    promessas (promessas.py). O que vai para o próprio Pedro (conversa "você", resumos do Alfred) fica de fora.
+    Mídia sem legenda vira "(imagem enviada)": a verificação da promessa precisa saber que algo foi mandado."""
+    if _conversa_comigo(msg) or (numero_pedro() and msg.get("numero") == numero_pedro()):
+        return
+    _registrar_historico(msg, msg.get("texto") or f"({msg.get('tipo_msg') or 'mensagem'} enviada)", cfg)
+
+
 @_serializado
 def processar_mensagem_whatsapp(
     payload: dict,
@@ -1709,12 +1718,14 @@ def processar_mensagem_whatsapp(
         for p in core.listar_pendencias("todas"):
             wa = p.get("whatsapp") or {}
             if mid in (wa.get("pergunta_msg_id"), (wa.get("envio") or {}).get("message_id")):
+                _registrar_enviada(msg, cfg)   # resposta de Pedro enviada pelo Alfred (o resumo a Pedro fica de fora)
                 res["motivo"] = "eco de mensagem enviada pelo Alfred"
                 return res
         # envio feito por OUTRO processo (notificação no PC, CLI) cujo eco chega antes de o message_id ir
         # para pendencias.yml (T2 de responder_texto). A conversa "você" fica de fora: _nota_para_mim já
         # trata o eco dela do jeito dela.
         if not _conversa_comigo(msg) and (enviado_pelo_alfred(mid) or _envio_em_curso(msg)):
+            _registrar_enviada(msg, cfg)
             res["motivo"] = "eco de mensagem enviada pelo Alfred"
             return res
 
@@ -1793,6 +1804,7 @@ def processar_mensagem_whatsapp(
         return _sem_pendencia("mensagem de Pedro sem citação de pendência")
 
     if msg.get("from_me"):
+        _registrar_enviada(msg, cfg)
         p = _pendencia_aguardando_do_jid(msg.get("remote_jid")) if not msg.get("grupo") else None
         fechada = _fechar_manual(p["id"], msg.get("texto") or "", msg) if p else None
         if fechada:

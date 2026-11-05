@@ -526,7 +526,7 @@ def _tocar_ao_notificar() -> bool:
 
 
 def cmd_aguardar_agenda(args):
-    """Interno: notificação "anotado na agenda" com [Ok] [Desfazer]; ociosa até o clique."""
+    """Interno: notificação "incluído no calendário" com [Ok] [Desfazer]; ociosa até o clique."""
     import agenda
     item = agenda.obter(args.id)
     if not item:
@@ -707,7 +707,7 @@ def cmd_perguntar(args):
 # ── Main ──────────────────────────────────────────────────────
 
 SUBCOMANDOS = ("ciclo", "scan", "jornal", "pendencias", "perguntar", "ver", "ouvir", "responder", "responder-texto",
-               "whatsapp", "semanal", "limpeza", "agenda", "vigia", "conversa", "_aguardar-resposta",
+               "whatsapp", "semanal", "limpeza", "agenda", "promessas", "vigia", "conversa", "_aguardar-resposta",
                "_aguardar-whatsapp", "_aguardar-agenda", "_vigia-qr")
 
 
@@ -767,6 +767,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("_aguardar-whatsapp"); sp.add_argument("id")
     import agenda
     agenda.adicionar_parser(sub)
+    import promessas
+    promessas.adicionar_parser(sub)
     import vigia
     vigia.adicionar_parser(sub)
     import conversa
@@ -827,6 +829,9 @@ def main() -> int:
         return agenda.cmd_agenda(args)
     if args.cmd == "_aguardar-agenda":
         return cmd_aguardar_agenda(args)
+    if args.cmd == "promessas":
+        import promessas
+        return promessas.cmd_promessas(args)
     if args.cmd == "vigia":
         import vigia
         return vigia.cmd_vigia(args)

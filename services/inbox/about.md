@@ -26,6 +26,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
 ./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
 ./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa
+./run.sh promessas                     # o que você disse que ia fazer (abertas e atrasadas) — ver Promessas
 ```
 
 Flags do ciclo: `--inbox NOME`, `--desde HORAS`, `--reprocessar` (ignora o `inbox_seen.json`), `--max N`, `--sem-notificar`, `--json`.
@@ -76,6 +77,8 @@ VAULT_ALFRED/
                .pendencias.yml.lock · .limpeza.yml.lock   ← travas entre processos (vazias — ver abaixo)
   tasks.yml · .tasks.yml.lock                        ← "vou" cria tarefa (mesmo formato da tool alfred_tasks)
   agenda/      agenda.yml · .agenda.yml.lock         ← compromissos a caminho do calendário (ver Agenda)
+               promessas.yml · .promessas.yml.lock   ← o que você disse que ia fazer (ver Promessas)
+logs/promessas_seen.json                             ← falas suas já analisadas pela varredura de promessas
 logs/inbox_seen.json                                 ← message-ids de e-mail processados (janela 14 dias)
 logs/whatsapp_seen.json · whatsapp_enviados.jsonl    ← ids de WhatsApp processados · envios simulados (dry-run)
 logs/whatsapp_fila.json                              ← mensagens esperando atraso_minutos (texto/transcrição, sem o áudio)
@@ -125,7 +128,7 @@ pendência lia o yml, gastava LLM + TTS e gravava a lista velha + 1).
   container). As notas `.md` (jornal, pendências, lotes, podcast) continuam com `write_text`: são escritas uma vez,
   não são estado relido a cada ciclo.
 - Ordem das travas (evita deadlock): `whatsapp._LOCK` → pendências → tasks; agenda → tasks; limpeza sozinha; fila
-  sozinha. Nunca pegar pendências segurando agenda ou tasks.
+  sozinha; promessas sozinha (chama a agenda fora dela). Nunca pegar pendências segurando agenda ou tasks.
 - Criar pendência: o id é reservado dentro da trava, criando o `.md` vazio (`core._reservar_id`); LLM/TTS rodam fora e no
   fim a entrada é relida, anexada e gravada dentro da trava.
 - `whatsapp.responder_texto` é "reservar → enviar → concluir": a 1ª transação tira a pendência de `aguardando`, o envio
@@ -603,7 +606,7 @@ Um arquivo só, `VAULT_ALFRED/.alfred/alfred.db` (o Obsidian ignora a pasta com 
 | Tabela | O que guarda | Quem usa |
 |--------|--------------|----------|
 | `notas` (FTS5, derivada) | os `.md` de `VAULT_ALFRED` e `VAULT_PEDRO`, sem `.obsidian/` e pastas com ponto. Sem acento, prefixo (`pendência` acha `pendências`), bm25 com título pesando 8x | tools `alfred_vault_reader` / `alfred_vault_writer` (`search_vault`), `GET /busca`, `./run.sh buscar` |
-| `wa_msgs` + `wa_fts` | texto (ou transcrição) das mensagens de WhatsApp, inclusive as de Pedro. Pula grupo ignorado, `contatos_ignorar`, reação/figurinha | as 5 últimas da conversa vão no campo `historico` do prompt `pergunta_whatsapp.md`; `GET /whatsapp/buscar`, `./run.sh buscar --whatsapp` |
+| `wa_msgs` + `wa_fts` | texto (ou transcrição) das mensagens de WhatsApp, inclusive as de Pedro a contatos (`from_me`; só desde 04/11/2026 — antes o webhook não gravava; áudio e mídia sem legenda de Pedro ficam como "(audio enviada)"). Pula grupo ignorado, `contatos_ignorar`, reação/figurinha | as 5 últimas da conversa vão no campo `historico` do prompt `pergunta_whatsapp.md`; `GET /whatsapp/buscar`, `./run.sh buscar --whatsapp` |
 | `cache_classif` | e-mail de envio em massa classificado 3x como `promocao`/`transacional`, WhatsApp 3x como `automatico`/`spam` | `core.classificar` e `whatsapp.classificar_whatsapp` pulam o gemma4 (`origem: "cache"`) |
 
 - **Reindexação**: ao fim de cada `ciclo` (07:30 / 18:30), por `./run.sh indexar` ou `POST /indexar`. É incremental por `mtime`; apagar o `.db` reconstrói tudo (menos o histórico do WhatsApp e o cache, que recomeçam do zero). A mesma rotina poda o histórico além de `historico_dias`.
@@ -666,10 +669,11 @@ WhatsApp de um contato ("fechado: reunião quinta 14h")  ─┐
 WhatsApp para você mesmo ("me lembra de pagar o boleto sexta") ─┼─ detectar_compromisso()  prefiltro + gemma4 (JSON Schema, agenda_detectar.md)
 "vou" num convite de e-mail com data                     ─┘
         ↓ adicionar()  → VAULT_ALFRED/agenda/agenda.yml (status pendente) + tasks.yml (tarefa/lembrete)
-        ↓ notificação [Ok] [Desfazer]   (nota para você mesmo: confirmação "📅 Anotado na agenda" no WhatsApp)
+        ↓               (nota para você mesmo: confirmação "📅 Anotado na agenda" no WhatsApp)
 extensão "Alfred — agenda" no Thunderbird (a cada 2 min)
         GET /agenda/fila → cria o evento (com alarme 30 min antes) no calendário "Agenda" (Google via CalDAV
         → aparece no celular) → POST /agenda/{id}/resultado → status no_calendario
+        ↓ só então: notificação "Incluído no calendário “Agenda”" [Ok] [Desfazer]
         Desfazer → status desfazer → a extensão remove o evento → desfeito
 ```
 
@@ -701,7 +705,7 @@ O Thunderbird não tem API pública de calendário para extensões; a extensão 
 
 **Validada em 20/10/2026** num perfil descartável do Thunderbird 157 (headless, calendário local de teste)
 contra uma API de teste: listou os calendários, criou o evento com título/horário corretos, a API marcou
-`no_calendario`, e o Desfazer removeu o evento. **Ainda não instalada no perfil real** — isso depende de Pedro:
+`no_calendario`, e o Desfazer removeu o evento. Instalação:
 
 1. `cd services/inbox/thunderbird-ext-agenda && zip -r ../alfred-agenda.xpi manifest.json background.js options.html options.js experiment`
 2. Extensão não assinada: no Thunderbird, *Configurações → Geral → Editor de configuração*, `xpinstall.signatures.required = false`
@@ -711,6 +715,56 @@ contra uma API de teste: listou os calendários, criou o evento com título/hor�
    de "acesso total" (é o que toda Experiment API pede).
 4. Opções da extensão: URL `http://127.0.0.1:7073`, token = `SHELL_EXECUTOR_TOKEN` do `.env`, calendário **Agenda**.
 5. Teste: `./run.sh agenda anotar "teste do Alfred amanhã às 15h"` → em até 2 min aparece na Agenda → `./run.sh agenda desfazer <id>`.
+
+**Instalada no perfil real** (snap, `vo359mfw.default`). O intervalo nas opções deve ficar em 2 min: com 60, o
+evento leva até uma hora para entrar e a notificação "Incluído" atrasa junto.
+
+**Google via CalDAV (v1.0.1):** o `addItem()` do Thunderbird manda o PUT e depois relê o evento pelo endereço do PUT;
+o Google guarda com outro endereço, a releitura não acha e a promise nunca resolve — o evento já estava no Google,
+mas a extensão ficava parada no primeiro item novo de cada ciclo (um item por ciclo, confirmado só no ciclo seguinte,
+pelo `modifyItem`). A v1.0.1 espera 15 s; sem resposta, sincroniza o calendário e confirma pelo UID no cache (até 60 s).
+Atualizar: refaça o `.xpi` (passo 1) e instale de novo (passo 3).
+
+## Promessas — o que você disse que ia fazer → agenda (`promessas.py`)
+
+A agenda acima só pega compromisso com data nas mensagens que você **recebe**. As promessas olham o que você
+**envia** ("pode deixar, sexta te mando o orçamento"), com a conversa como contexto, e conferem depois se você cumpriu.
+
+```
+fim do ciclo do e-mail (07:30 / 18:30)  ·  ./run.sh promessas varrer
+    suas falas: WhatsApp (wa_msgs from_me) + pasta Enviados do Thunderbird (pastas_enviados)
+    contexto:   as últimas falas da conversa (as do contato também) · o trecho citado no e-mail de resposta
+        ↓ prefiltro (regex de compromisso em 1ª pessoa) → gemma4 (JSON Schema, promessas_detectar.md)
+        ↓ o "trecho" tem de sair das SUAS falas (60% das palavras), confiança ≥ confianca_minima
+        ↓ promessas.yml (aberta) + tarefa na agenda no prazo — sem data: prazo_padrao_dias (3) depois da fala
+    prazo vencido → mensagens suas ao mesmo contato depois da promessa?
+        nenhuma → atrasada (sem LLM)  ·  alguma → gemma4 (promessas_verificar.md): sim → cumprida · nao/incerto → atrasada
+        atrasada → "Atrasado: <o quê> (<quem>)" na agenda, próximo dia às 09:00
+```
+
+- Cada promessa nova chega com a notificação da agenda **[Ok] [Desfazer]** assim que está no calendário. Desfazer antes do prazo = não era promessa:
+  ela vira `descartada` e não volta como atrasada.
+- A verificação só olha o canal da promessa (WhatsApp → histórico da conversa; e-mail → e-mails enviados aos mesmos
+  destinatários). Se você cumpriu por outro caminho (pessoalmente, outro app), marque: `./run.sh promessas feita <id>`.
+- Falas já analisadas ficam em `logs/promessas_seen.json`. Se o LLM falhar, a fala não é marcada e entra no próximo ciclo.
+- O webhook do WhatsApp só grava as suas mensagens no histórico (sem GPU). A detecção roda no ciclo, fora do webhook.
+
+```bash
+./run.sh promessas                        # abertas e atrasadas (--todas inclui cumpridas/descartadas, --json)
+./run.sh promessas varrer                 # varredura + verificação agora (o mesmo que o ciclo faz)
+./run.sh promessas varrer --retroativo 14 # últimos 14 dias, inclui as respostas já gravadas nas pendências de WhatsApp
+./run.sh promessas verificar              # só confere os prazos vencidos
+./run.sh promessas feita <id>             # cumprida — tira da agenda o lembrete que ainda não aconteceu
+./run.sh promessas descartar <id>
+venv/bin/python -m unittest tests.test_promessas -v
+```
+
+Configuração em `perfis.yml → promessas:` (`ativo`, `canais`, `pastas_enviados`, `janela_horas`, `prazo_padrao_dias`,
+`confianca_minima`). `--retroativo` não manda uma notificação por item, só lista no fim.
+
+**Limitações:** áudio que você manda não é transcrito (fica "(audio enviada)", que conta como sinal na verificação).
+Grupos ficam de fora. A pasta Enviados só é lida se o Thunderbird guardar cópia offline dela. Em 04/11/2026 a mais
+recente no disco era de 20/10.
 
 ## Conversa com o Alfred — o motor (`conversa.py`)
 

@@ -5,12 +5,12 @@ Fluxo
     WhatsApp (mensagem de contato, ou Pedro escrevendo para si mesmo) / e-mail ("vou" num evento)
         ↓ detectar_compromisso()   prefiltro por regex + Ollama (JSON Schema)
         ↓ adicionar()              VAULT_ALFRED/agenda/agenda.yml  (status: pendente)
-        ↓                          notificação no PC com [Ok] [Desfazer]
     extensão "Alfred — agenda" no Thunderbird
         GET  /agenda/fila          → itens pendentes (com o VCALENDAR pronto) e itens a desfazer
         cria o evento no calendário escolhido (padrão "Agenda", o Google via CalDAV) — o Thunderbird
         sincroniza com o Google e o evento aparece também no celular
         POST /agenda/{id}/resultado → status no_calendario | erro | desfeito
+        ↓ no_calendario            notificação no PC "incluído no calendário" com [Ok] [Desfazer]
     Sem a extensão: GET /agenda/alfred.ics (só 127.0.0.1) lista os itens que ainda não foram para o
     calendário — dá para assinar no Thunderbird como agenda "Na rede" (somente leitura).
 
@@ -156,6 +156,7 @@ def adicionar(
     """
     Põe um compromisso na fila da agenda. Idempotente: mesmo título (normalizado) no mesmo dia e mesma
     origem devolve o item existente em vez de duplicar. → item (dict) com "_novo": bool.
+    A notificação [Ok] [Desfazer] sai quando a extensão confirma o evento no calendário (registrar_resultado).
     """
     cfg = _cfg()
     tipo = tipo if tipo in TIPOS else "evento"
@@ -194,6 +195,7 @@ def adicionar(
             "tentativas":    0,
             "erro":          None,
             "task_id":       None,
+            "notificar":     bool(notificar if notificar is not None else cfg["notificar"]),
         }
         if cfg["criar_tarefa"] and tipo in ("tarefa", "lembrete"):
             try:
@@ -206,8 +208,6 @@ def adicionar(
         _save(data)
     quando = _quando_legivel(item)
     log(f"[agenda] + {aid} ({tipo}) {titulo!r} — {quando}")
-    if notificar if notificar is not None else cfg["notificar"]:
-        notificar_item(item)
     return {**item, "_novo": True}
 
 
@@ -433,10 +433,15 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
             item["status"] = "erro"
             item["tentativas"] = int(item.get("tentativas") or 0) + 1
             item["erro"] = (erro or "erro desconhecido")[:300]
+        avisar = ok and acao == "criar" and item["status"] == "no_calendario" and item.get("notificar")
+        if avisar:
+            item["notificar"] = False   # uma notificação por item, mesmo se a extensão gravar de novo
         item["atualizado_em"] = now
         _save(data)
     log(f"[agenda] {aid} ← extensão: {acao} {'ok' if ok else 'ERRO ' + (erro or '')[:80]}")
-    if ok and acao == "criar":
+    if avisar:
+        notificar_item(item)
+    elif ok and acao == "criar":
         core._notify("Alfred — agenda", f"No calendário “{item.get('calendario')}”: {item['titulo']} — {_quando_legivel(item)}")
     return item
 
@@ -466,7 +471,7 @@ def notificar_item(item: dict) -> None:
     if core._tem_gui():
         core._iniciar_aguardador("_aguardar-agenda", item["id"])
     else:
-        core._notify("Alfred — anotado na agenda", f"{item['titulo']} — {_quando_legivel(item)}")
+        core._notify("Alfred — incluído na agenda", f"{item['titulo']} — {_quando_legivel(item)}")
 
 
 def texto_notificacao(item: dict) -> tuple[str, str]:
@@ -479,9 +484,12 @@ def texto_notificacao(item: dict) -> tuple[str, str]:
         de = "\nVocê anotou no WhatsApp"
     elif origem.get("canal") == "email":
         de = f"\nDo e-mail: {origem.get('assunto', '')[:60]}"
+    elif origem.get("canal") == "promessa":
+        de = (f"\nVocê prometeu a {origem.get('contato') or 'alguém'}"
+              + (" e ainda não há sinal de que fez" if origem.get("atraso") else ""))
     corpo = f"{item['titulo']}\n{_quando_legivel(item)}" + (f" · {item['local']}" if item.get("local") else "") + de
-    corpo += f"\n\nVai para o calendário “{item.get('calendario')}” do Thunderbird."
-    return f"Alfred — {tipo} anotado na agenda", corpo
+    corpo += f"\n\nIncluído no calendário “{item.get('calendario')}” do Thunderbird."
+    return f"Alfred — {tipo} na agenda", corpo
 
 
 # ══════════════════════════════════════════════════════════════

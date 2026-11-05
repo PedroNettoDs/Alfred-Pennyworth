@@ -1516,6 +1516,13 @@ def ciclo(
     import limpeza  # categorias → logs/inbox_categorias.json (base da limpeza pós-podcast)
     limpeza.registrar_classificacoes([c for c in resumo["classificacao"] if not c.get("falhou")])
 
+    if not so_jornal:   # o que Pedro disse que ia fazer (WhatsApp e e-mail enviados) → agenda; atrasadas de novo
+        try:
+            import promessas
+            resumo["promessas"] = promessas.ciclo(cfg, notificar=notificar)
+        except Exception as e:   # nunca derruba o ciclo do e-mail
+            log(f"[promessas] falhou: {e}")
+
     resumo["manutencao"] = expirar_e_lembrar(cfg)
     resumo["manutencao"]["indice"] = indexar_cofres()
     resumo["pendencias_aguardando"] = listar_pendencias("aguardando")

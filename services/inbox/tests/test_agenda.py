@@ -79,7 +79,14 @@ class TestAgendaFila(Base):
         a = agenda.adicionar("Reunião com Attano Tech", _amanha(14), local="Bauru")
         self.assertTrue(a["_novo"])
         self.assertEqual(a["status"], "pendente")
+        self.assertEqual(self.notificados, [])                  # ainda não está no calendário
+        agenda.fila_extensao()
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
         self.assertEqual(self.notificados, [("_aguardar-agenda", a["id"])])
+        titulo, corpo = agenda.texto_notificacao(agenda.obter(a["id"]))
+        self.assertIn("Incluído no calendário “Agenda”", corpo)
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")   # extensão grava de novo
+        self.assertEqual(len(self.notificados), 1)
         b = agenda.adicionar("reunião com attano tech!", _amanha(16))
         self.assertFalse(b["_novo"])
         self.assertEqual(b["id"], a["id"])
@@ -104,6 +111,20 @@ class TestAgendaFila(Base):
         self.assertEqual([(i["id"], i["acao"]) for i in fila], [(a["id"], "remover")])
         agenda.registrar_resultado(a["id"], "remover", True)
         self.assertEqual(agenda.obter(a["id"])["status"], "desfeito")
+
+    def test_sem_notificar_nao_abre_ok_desfazer(self):
+        a = agenda.adicionar("Revisão do carro", _amanha(8), notificar=False)
+        agenda.fila_extensao()
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
+        self.assertEqual(self.notificados, [])
+
+    def test_desfeito_enquanto_criava_nao_notifica(self):
+        a = agenda.adicionar("Jantar com a turma", _amanha(20))
+        agenda.fila_extensao()
+        agenda.desfazer(a["id"])
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
+        self.assertEqual(agenda.obter(a["id"])["status"], "desfazer")
+        self.assertEqual(self.notificados, [])
 
     def test_desfazer_antes_de_ir_para_o_calendario_cancela(self):
         a = agenda.adicionar("Prova de cálculo", _amanha(19), notificar=False)

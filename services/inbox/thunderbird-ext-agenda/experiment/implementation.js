@@ -6,6 +6,31 @@
 var { ExtensionCommon } = ChromeUtils.importESModule("resource://gre/modules/ExtensionCommon.sys.mjs");
 var { cal } = ChromeUtils.importESModule("resource:///modules/calendar/calUtils.sys.mjs");
 var { CalEvent } = ChromeUtils.importESModule("resource:///modules/CalEvent.sys.mjs");
+var { setTimeout } = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
+
+// No CalDAV do Google, addItem() manda o PUT e depois relê o evento pelo endereço onde o gravou; o
+// Google guarda o evento com outro endereço (o id dele), a releitura não acha nada e a promise nunca
+// resolve, embora o evento já esteja no servidor (CalDavCalendar.doAdoptItem → getUpdatedItem). Os
+// caminhos de erro do PUT respondem na hora; sem resposta em ADD_ESPERA_MS, o PUT foi aceito:
+// sincroniza o calendário e confirma pelo UID no cache, sem deixar o ciclo da extensão parado.
+const ADD_ESPERA_MS = 15000;
+const CONFIRMA_MS = 60000;
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function adicionar(calendar, item) {
+  let falha = null;
+  const feito = calendar.addItem(item).then(() => true, (e) => { falha = e; return true; });
+  const respondeu = await Promise.race([feito, esperar(ADD_ESPERA_MS).then(() => false)]);
+  if (falha) throw falha;
+  if (respondeu) return;
+  calendar.refresh();
+  for (let t = 0; t < CONFIRMA_MS; t += 2000) {
+    await esperar(2000);
+    if (falha) throw falha;
+    if (await calendar.getItem(item.id)) return;
+  }
+  throw new ExtensionCommon.ExtensionError("o servidor não confirmou o evento (tento de novo no próximo ciclo)");
+}
 
 function calendarioOuErro(id) {
   const calendar = cal.manager.getCalendarById(id);
@@ -38,7 +63,7 @@ this.alfredCalendar = class extends ExtensionCommon.ExtensionAPI {
             await calendar.modifyItem(item, existente);
             return { id: item.id, acao: "atualizado" };
           }
-          await calendar.addItem(item);
+          await adicionar(calendar, item);
           return { id: item.id, acao: "criado" };
         },
 

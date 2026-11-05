@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Alfred — agenda",
   "description": "Grava no calendário do Thunderbird (ex.: a Agenda do Google via CalDAV) os compromissos que o Alfred detectou no WhatsApp e no e-mail, e remove os que você desfez.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Alfred-Pennyworth",
   "browser_specific_settings": {
     "gecko": { "id": "agenda@alfred-pennyworth.local", "strict_min_version": "128.0" }

@@ -220,6 +220,18 @@ agenda:
   criar_tarefa: true            # tarefa/lembrete também vira item em tasks.yml
   notificar: true               # notificação no PC com [Ok] [Desfazer]
 
+# ── Promessas — o que você disse que ia fazer (inbox/promessas.py) ──
+# Roda no fim do ciclo do e-mail (07:30 / 18:30): lê o que você ENVIOU (WhatsApp e pasta Enviados),
+# com a conversa como contexto. Promessa → tarefa na agenda no prazo; prazo vencido sem sinal de que
+# foi feita → "Atrasado: …" na agenda no dia seguinte às 09:00. `run.sh promessas` lista.
+promessas:
+  ativo: true
+  canais: [whatsapp, email]
+  pastas_enviados: [Sent]       # nome da pasta no disco do Thunderbird (Outlook: Sent)
+  janela_horas: 48              # quanto para trás cada ciclo olha (o que já foi lido não é relido)
+  prazo_padrao_dias: 3          # promessa sem data ("depois te mando") vence N dias depois da mensagem
+  confianca_minima: 0.7         # abaixo disso a detecção é ignorada
+
 # ── Memória automática — fatos duráveis sobre Pedro e seus contatos ──
 # _shared/lib_memoria.py: extrai fatos (LLM local) → deduplica → SQLite FTS5 + vetores bge-m3.
 # Espelho legível em VAULT_ALFRED/memoria/<sujeito>.md (gerado; editar lá não muda a memória).
