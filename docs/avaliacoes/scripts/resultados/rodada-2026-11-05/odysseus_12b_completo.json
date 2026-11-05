@@ -1,0 +1,218 @@
+{
+ "sistema": "odysseus",
+ "modelo": "gemma4:12b",
+ "variante": "completo",
+ "rodadas": [
+  {
+   "inicio": 1793854820.707248,
+   "trechos": {
+    "c01": {
+     "fatos": [],
+     "segundos": 1.921
+    },
+    "c02": {
+     "fatos": [],
+     "segundos": 1.846
+    },
+    "c03": {
+     "fatos": [],
+     "segundos": 1.838
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.508
+    },
+    "c05": {
+     "fatos": [],
+     "segundos": 1.824
+    },
+    "c06": {
+     "fatos": [],
+     "segundos": 1.671
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 1.064
+    },
+    "c08": {
+     "fatos": [],
+     "segundos": 1.924
+    },
+    "c09": {
+     "fatos": [],
+     "segundos": 1.991
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.486
+    },
+    "c11": {
+     "fatos": [],
+     "segundos": 1.787
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.485
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.482
+    },
+    "c14": {
+     "fatos": [],
+     "segundos": 1.786
+    },
+    "c15": {
+     "fatos": [],
+     "segundos": 1.141
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.453
+    }
+   },
+   "fim": 1793854841.9228423
+  },
+  {
+   "inicio": 1793854841.9228466,
+   "trechos": {
+    "c01": {
+     "fatos": [],
+     "segundos": 1.884
+    },
+    "c02": {
+     "fatos": [],
+     "segundos": 1.846
+    },
+    "c03": {
+     "fatos": [],
+     "segundos": 1.823
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.487
+    },
+    "c05": {
+     "fatos": [],
+     "segundos": 1.762
+    },
+    "c06": {
+     "fatos": [],
+     "segundos": 1.663
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 1.077
+    },
+    "c08": {
+     "fatos": [],
+     "segundos": 1.998
+    },
+    "c09": {
+     "fatos": [],
+     "segundos": 2.009
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.49
+    },
+    "c11": {
+     "fatos": [],
+     "segundos": 1.787
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.481
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.482
+    },
+    "c14": {
+     "fatos": [],
+     "segundos": 1.797
+    },
+    "c15": {
+     "fatos": [],
+     "segundos": 1.182
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.47
+    }
+   },
+   "fim": 1793854863.1654682
+  },
+  {
+   "inicio": 1793854863.1654713,
+   "trechos": {
+    "c01": {
+     "fatos": [],
+     "segundos": 1.843
+    },
+    "c02": {
+     "fatos": [],
+     "segundos": 1.885
+    },
+    "c03": {
+     "fatos": [],
+     "segundos": 1.876
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.484
+    },
+    "c05": {
+     "fatos": [],
+     "segundos": 1.747
+    },
+    "c06": {
+     "fatos": [],
+     "segundos": 1.658
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 1.08
+    },
+    "c08": {
+     "fatos": [],
+     "segundos": 1.917
+    },
+    "c09": {
+     "fatos": [],
+     "segundos": 2.012
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.494
+    },
+    "c11": {
+     "fatos": [],
+     "segundos": 1.793
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.479
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.483
+    },
+    "c14": {
+     "fatos": [],
+     "segundos": 1.809
+    },
+    "c15": {
+     "fatos": [],
+     "segundos": 1.161
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.45
+    }
+   },
+   "fim": 1793854884.3423538
+  }
+ ],
+ "aquecimento_s": 3.08
+}

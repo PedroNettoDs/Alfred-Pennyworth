@@ -1,0 +1,16 @@
+{"t": 1793854884.7, "carga": 5.6875, "modelos": ["gemma4:12b"], "gpu_pct": 7, "vram_mib": 10693}
+{"t": 1793854886.8, "carga": 5.6875, "modelos": ["gemma4:12b"], "gpu_pct": 7, "vram_mib": 10693}
+{"t": 1793854888.8, "carga": 5.63232421875, "modelos": ["gemma4:12b"], "gpu_pct": 8, "vram_mib": 10693}
+{"t": 1793854890.8, "carga": 5.63232421875, "modelos": ["bge-m3:latest", "gemma4:12b"], "gpu_pct": 94, "vram_mib": 10693}
+{"t": 1793854892.9, "carga": 6.0625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 70, "vram_mib": 10693}
+{"t": 1793854894.9, "carga": 6.0625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 7, "vram_mib": 10693}
+{"t": 1793854896.9, "carga": 6.05712890625, "modelos": ["bge-m3:latest", "gemma4:12b"], "gpu_pct": 100, "vram_mib": 10693}
+{"t": 1793854898.9, "carga": 6.05712890625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 94, "vram_mib": 10693}
+{"t": 1793854901.0, "carga": 6.05712890625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 100, "vram_mib": 10693}
+{"t": 1793854903.0, "carga": 5.73193359375, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 99, "vram_mib": 10693}
+{"t": 1793854905.0, "carga": 5.73193359375, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 91, "vram_mib": 10693}
+{"t": 1793854907.1, "carga": 5.6728515625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 94, "vram_mib": 10693}
+{"t": 1793854909.1, "carga": 5.6728515625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 95, "vram_mib": 10693}
+{"t": 1793854911.1, "carga": 5.6728515625, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 7, "vram_mib": 10693}
+{"t": 1793854913.2, "carga": 5.37841796875, "modelos": ["gemma4:12b", "bge-m3:latest"], "gpu_pct": 94, "vram_mib": 10693}
+{"t": 1793854915.2, "carga": 5.37841796875, "modelos": ["bge-m3:latest", "gemma4:12b"], "gpu_pct": 7, "vram_mib": 10693}

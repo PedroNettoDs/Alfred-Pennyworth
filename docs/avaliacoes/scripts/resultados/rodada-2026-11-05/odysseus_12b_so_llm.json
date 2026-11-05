@@ -1,0 +1,539 @@
+{
+ "sistema": "odysseus",
+ "modelo": "gemma4:12b",
+ "variante": "so_llm",
+ "rodadas": [
+  {
+   "inicio": 1793854820.7072484,
+   "trechos": {
+    "c01": {
+     "fatos": [
+      {
+       "fato": "The user is a vegetarian.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user prefers not to have appointments before 9 AM.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.921,
+     "cru": "[\n  {\n    \"text\": \"The user is a vegetarian.\",\n    \"category\": \"preference\",\n    \"evidence\": \"parei de comer carne, agora sou vegetariano\"\n  },\n  {\n    \"text\": \"The user prefers not to have appointments before 9 AM.\",\n    \"category\": \"preference\",\n    \"evidence\": \"não marca nada comigo antes das 9h\"\n  }\n]"
+    },
+    "c02": {
+     "fatos": [
+      {
+       "fato": "The user's sister is named Camila.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's sister is getting married in March next year.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.846,
+     "cru": "[\n  {\n    \"text\": \"The user's sister is named Camila.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Minha irmã Camila\"\n  },\n  {\n    \"text\": \"The user's sister is getting married in March next year.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Minha irmã Camila vai se casar em março do ano que vem\"\n  }\n]"
+    },
+    "c03": {
+     "fatos": [
+      {
+       "fato": "The user practices jiu-jitsu.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user trains on Tuesday and Thursday nights.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.838,
+     "cru": "[\n  {\n    \"text\": \"The user practices jiu-jitsu.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Comecei a fazer jiu-jitsu\"\n  },\n  {\n    \"text\": \"The user trains on Tuesday and Thursday nights.\",\n    \"category\": \"fact\",\n    \"evidence\": \"treino terça e quinta à noite\"\n  }\n]"
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.508,
+     "cru": "[]"
+    },
+    "c05": {
+     "fatos": [
+      {
+       "fato": "The user is a data engineer at Lumen Analytics.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user works in a 100% remote position.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.824,
+     "cru": "[\n  {\n    \"text\": \"The user is a data engineer at Lumen Analytics.\",\n    \"category\": \"identity\",\n    \"evidence\": \"agora sou engenheiro de dados na Lumen Analytics\"\n  },\n  {\n    \"text\": \"The user works in a 100% remote position.\",\n    \"category\": \"fact\",\n    \"evidence\": \"100% remoto\"\n  }\n]"
+    },
+    "c06": {
+     "fatos": [
+      {
+       "fato": "The user is allergic to shrimp.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user avoids seafood.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.671,
+     "cru": "[\n  {\n    \"text\": \"The user is allergic to shrimp.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Sou alérgico a camarão\"\n  },\n  {\n    \"text\": \"The user avoids seafood.\",\n    \"category\": \"preference\",\n    \"evidence\": \"nada de frutos do mar quando for reservar restaurante\"\n  }\n]"
+    },
+    "c07": {
+     "fatos": [
+      {
+       "fato": "The user's name is Pedro.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.064,
+     "cru": "[\n  {\n    \"text\": \"The user's name is Pedro.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Bom dia, Pedro!\"\n  }\n]"
+    },
+    "c08": {
+     "fatos": [
+      {
+       "fato": "The user's name is PH.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user prefers receiving summaries via WhatsApp instead of email.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.924,
+     "cru": "[\n  {\n    \"text\": \"The user's name is PH.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Me chama de PH, todo mundo me chama assim.\"\n  },\n  {\n    \"text\": \"The user prefers receiving summaries via WhatsApp instead of email.\",\n    \"category\": \"preference\",\n    \"evidence\": \"prefiro que você me mande os resumos pelo WhatsApp, não por e-mail.\"\n  }\n]"
+    },
+    "c09": {
+     "fatos": [
+      {
+       "fato": "The user is building a homelab with two mini PCs running Proxmox.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user wants to host services at home.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.991,
+     "cru": "[\n  {\n    \"text\": \"The user is building a homelab with two mini PCs running Proxmox.\",\n    \"category\": \"project\",\n    \"evidence\": \"Tô montando um homelab com dois mini PCs rodando Proxmox\"\n  },\n  {\n    \"text\": \"The user wants to host services at home.\",\n    \"category\": \"goal\",\n    \"evidence\": \"quero hospedar meus serviços em casa\"\n  }\n]"
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.486,
+     "cru": "[]"
+    },
+    "c11": {
+     "fatos": [
+      {
+       "fato": "The user's father is named Antônio.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's father lives in Marília.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.787,
+     "cru": "[\n  {\n    \"text\": \"The user's father is named Antônio.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Meu pai, o Seu Antônio\"\n  },\n  {\n    \"text\": \"The user's father lives in Marília.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Ele mora em Marília.\"\n  }\n]"
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.485,
+     "cru": "[]"
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.482,
+     "cru": "[]"
+    },
+    "c14": {
+     "fatos": [
+      {
+       "fato": "The user's wife is named Helena.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's wife is a biology teacher.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.786,
+     "cru": "[\n  {\n    \"text\": \"The user's wife is named Helena.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Minha esposa, a Helena\"\n  },\n  {\n    \"text\": \"The user's wife is a biology teacher.\",\n    \"category\": \"fact\",\n    \"evidence\": \"ela é professora de biologia\"\n  }\n]"
+    },
+    "c15": {
+     "fatos": [
+      {
+       "fato": "The user is traveling to Lisbon for work.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.141,
+     "cru": "[\n  {\n    \"text\": \"The user is traveling to Lisbon for work.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Vou ficar lá duas semanas a trabalho\"\n  }\n]"
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.453,
+     "cru": "[]"
+    }
+   },
+   "fim": 1793854841.922845
+  },
+  {
+   "inicio": 1793854841.9228468,
+   "trechos": {
+    "c01": {
+     "fatos": [
+      {
+       "fato": "The user is a vegetarian.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user prefers not to have appointments before 9 AM.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.884,
+     "cru": "[\n  {\n    \"text\": \"The user is a vegetarian.\",\n    \"category\": \"preference\",\n    \"evidence\": \"parei de comer carne, agora sou vegetariano\"\n  },\n  {\n    \"text\": \"The user prefers not to have appointments before 9 AM.\",\n    \"category\": \"preference\",\n    \"evidence\": \"não marca nada comigo antes das 9h\"\n  }\n]"
+    },
+    "c02": {
+     "fatos": [
+      {
+       "fato": "The user's sister is named Camila.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's sister is getting married in March next year.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.846,
+     "cru": "[\n  {\n    \"text\": \"The user's sister is named Camila.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Minha irmã Camila\"\n  },\n  {\n    \"text\": \"The user's sister is getting married in March next year.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Minha irmã Camila vai se casar em março do ano que vem\"\n  }\n]"
+    },
+    "c03": {
+     "fatos": [
+      {
+       "fato": "The user practices jiu-jitsu.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user trains on Tuesday and Thursday nights.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.823,
+     "cru": "[\n  {\n    \"text\": \"The user practices jiu-jitsu.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Comecei a fazer jiu-jitsu\"\n  },\n  {\n    \"text\": \"The user trains on Tuesday and Thursday nights.\",\n    \"category\": \"fact\",\n    \"evidence\": \"treino terça e quinta à noite\"\n  }\n]"
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.487,
+     "cru": "[]"
+    },
+    "c05": {
+     "fatos": [
+      {
+       "fato": "The user is a data engineer at Lumen Analytics.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user works in a 100% remote position.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.762,
+     "cru": "[\n  {\n    \"text\": \"The user is a data engineer at Lumen Analytics.\",\n    \"category\": \"identity\",\n    \"evidence\": \"agora sou engenheiro de dados na Lumen Analytics\"\n  },\n  {\n    \"text\": \"The user works in a 100% remote position.\",\n    \"category\": \"fact\",\n    \"evidence\": \"100% remoto\"\n  }\n]"
+    },
+    "c06": {
+     "fatos": [
+      {
+       "fato": "The user is allergic to shrimp.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user avoids seafood.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.663,
+     "cru": "[\n  {\n    \"text\": \"The user is allergic to shrimp.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Sou alérgico a camarão\"\n  },\n  {\n    \"text\": \"The user avoids seafood.\",\n    \"category\": \"preference\",\n    \"evidence\": \"nada de frutos do mar\"\n  }\n]"
+    },
+    "c07": {
+     "fatos": [
+      {
+       "fato": "The user's name is Pedro.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.077,
+     "cru": "[\n  {\n    \"text\": \"The user's name is Pedro.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Bom dia, Pedro!\"\n  }\n]"
+    },
+    "c08": {
+     "fatos": [
+      {
+       "fato": "The user's name is PH.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user prefers receiving summaries via WhatsApp instead of email.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.998,
+     "cru": "[\n  {\n    \"text\": \"The user's name is PH.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Me chama de PH, todo mundo me chama assim.\"\n  },\n  {\n    \"text\": \"The user prefers receiving summaries via WhatsApp instead of email.\",\n    \"category\": \"preference\",\n    \"evidence\": \"prefiro que você me mande os resumos pelo WhatsApp, não por e-mail.\"\n  }\n]"
+    },
+    "c09": {
+     "fatos": [
+      {
+       "fato": "The user is building a homelab with two mini PCs running Proxmox.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user wants to host services at home.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 2.009,
+     "cru": "[\n  {\n    \"text\": \"The user is building a homelab with two mini PCs running Proxmox.\",\n    \"category\": \"project\",\n    \"evidence\": \"Tô montando um homelab com dois mini PCs rodando Proxmox\"\n  },\n  {\n    \"text\": \"The user wants to host services at home.\",\n    \"category\": \"goal\",\n    \"evidence\": \"quero hospedar meus serviços em casa\"\n  }\n]"
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.49,
+     "cru": "[]"
+    },
+    "c11": {
+     "fatos": [
+      {
+       "fato": "The user's father is named Antônio.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's father lives in Marília.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.787,
+     "cru": "[\n  {\n    \"text\": \"The user's father is named Antônio.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Meu pai, o Seu Antônio\"\n  },\n  {\n    \"text\": \"The user's father lives in Marília.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Ele mora em Marília.\"\n  }\n]"
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.481,
+     "cru": "[]"
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.482,
+     "cru": "[]"
+    },
+    "c14": {
+     "fatos": [
+      {
+       "fato": "The user's wife is named Helena.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's wife is a biology teacher.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.797,
+     "cru": "[\n  {\n    \"text\": \"The user's wife is named Helena.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Minha esposa, a Helena\"\n  },\n  {\n    \"text\": \"The user's wife is a biology teacher.\",\n    \"category\": \"fact\",\n    \"evidence\": \"ela é professora de biologia\"\n  }\n]"
+    },
+    "c15": {
+     "fatos": [
+      {
+       "fato": "The user is traveling to Lisbon for work.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.182,
+     "cru": "[\n  {\n    \"text\": \"The user is traveling to Lisbon for work.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Vou ficar lá duas semanas a trabalho\"\n  }\n]"
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.47,
+     "cru": "[]"
+    }
+   },
+   "fim": 1793854863.1654694
+  },
+  {
+   "inicio": 1793854863.1654718,
+   "trechos": {
+    "c01": {
+     "fatos": [
+      {
+       "fato": "The user is a vegetarian.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user prefers not to have appointments before 9 AM.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.843,
+     "cru": "[\n  {\n    \"text\": \"The user is a vegetarian.\",\n    \"category\": \"preference\",\n    \"evidence\": \"parei de comer carne, agora sou vegetariano\"\n  },\n  {\n    \"text\": \"The user prefers not to have appointments before 9 AM.\",\n    \"category\": \"preference\",\n    \"evidence\": \"não marca nada comigo antes das 9h\"\n  }\n]"
+    },
+    "c02": {
+     "fatos": [
+      {
+       "fato": "The user's sister is named Camila.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's sister is getting married in March next year.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.885,
+     "cru": "[\n  {\n    \"text\": \"The user's sister is named Camila.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Minha irmã Camila\"\n  },\n  {\n    \"text\": \"The user's sister is getting married in March next year.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Minha irmã Camila vai se casar em março do ano que vem\"\n  }\n]"
+    },
+    "c03": {
+     "fatos": [
+      {
+       "fato": "The user practices jiu-jitsu.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user trains on Tuesday and Thursday nights.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.876,
+     "cru": "[\n  {\n    \"text\": \"The user practices jiu-jitsu.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Comecei a fazer jiu-jitsu\"\n  },\n  {\n    \"text\": \"The user trains on Tuesday and Thursday nights.\",\n    \"category\": \"fact\",\n    \"evidence\": \"treino terça e quinta à noite\"\n  }\n]"
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.484,
+     "cru": "[]"
+    },
+    "c05": {
+     "fatos": [
+      {
+       "fato": "The user is a data engineer at Lumen Analytics.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user works in a 100% remote position.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.747,
+     "cru": "[\n  {\n    \"text\": \"The user is a data engineer at Lumen Analytics.\",\n    \"category\": \"identity\",\n    \"evidence\": \"agora sou engenheiro de dados na Lumen Analytics\"\n  },\n  {\n    \"text\": \"The user works in a 100% remote position.\",\n    \"category\": \"fact\",\n    \"evidence\": \"100% remoto\"\n  }\n]"
+    },
+    "c06": {
+     "fatos": [
+      {
+       "fato": "The user is allergic to shrimp.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user avoids seafood.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.658,
+     "cru": "[\n  {\n    \"text\": \"The user is allergic to shrimp.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Sou alérgico a camarão\"\n  },\n  {\n    \"text\": \"The user avoids seafood.\",\n    \"category\": \"preference\",\n    \"evidence\": \"nada de frutos do mar quando for reservar restaurante\"\n  }\n]"
+    },
+    "c07": {
+     "fatos": [
+      {
+       "fato": "The user's name is Pedro.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.08,
+     "cru": "[\n  {\n    \"text\": \"The user's name is Pedro.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Bom dia, Pedro!\"\n  }\n]"
+    },
+    "c08": {
+     "fatos": [
+      {
+       "fato": "The user's name is PH.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user prefers receiving summaries via WhatsApp instead of email.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.917,
+     "cru": "[\n  {\n    \"text\": \"The user's name is PH.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Me chama de PH, todo mundo me chama assim.\"\n  },\n  {\n    \"text\": \"The user prefers receiving summaries via WhatsApp instead of email.\",\n    \"category\": \"preference\",\n    \"evidence\": \"prefiro que você me mande os resumos pelo WhatsApp, não por e-mail.\"\n  }\n]"
+    },
+    "c09": {
+     "fatos": [
+      {
+       "fato": "The user is building a homelab with two mini PCs running Proxmox.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user wants to host services at home.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 2.012,
+     "cru": "[\n  {\n    \"text\": \"The user is building a homelab with two mini PCs running Proxmox.\",\n    \"category\": \"project\",\n    \"evidence\": \"Tô montando um homelab com dois mini PCs rodando Proxmox\"\n  },\n  {\n    \"text\": \"The user wants to host services at home.\",\n    \"category\": \"goal\",\n    \"evidence\": \"quero hospedar meus serviços em casa\"\n  }\n]"
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.494,
+     "cru": "[]"
+    },
+    "c11": {
+     "fatos": [
+      {
+       "fato": "The user's father is named Antônio.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's father lives in Marília.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.793,
+     "cru": "[\n  {\n    \"text\": \"The user's father is named Antônio.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Meu pai, o Seu Antônio\"\n  },\n  {\n    \"text\": \"The user's father lives in Marília.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Ele mora em Marília.\"\n  }\n]"
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.479,
+     "cru": "[]"
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.483,
+     "cru": "[]"
+    },
+    "c14": {
+     "fatos": [
+      {
+       "fato": "The user's wife is named Helena.",
+       "sujeito": "Pedro"
+      },
+      {
+       "fato": "The user's wife is a biology teacher.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.809,
+     "cru": "[\n  {\n    \"text\": \"The user's wife is named Helena.\",\n    \"category\": \"identity\",\n    \"evidence\": \"Minha esposa, a Helena\"\n  },\n  {\n    \"text\": \"The user's wife is a biology teacher.\",\n    \"category\": \"fact\",\n    \"evidence\": \"ela é professora de biologia\"\n  }\n]"
+    },
+    "c15": {
+     "fatos": [
+      {
+       "fato": "The user is traveling to Lisbon for work.",
+       "sujeito": "Pedro"
+      }
+     ],
+     "segundos": 1.161,
+     "cru": "[\n  {\n    \"text\": \"The user is traveling to Lisbon for work.\",\n    \"category\": \"fact\",\n    \"evidence\": \"Vou ficar lá duas semanas a trabalho\"\n  }\n]"
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.45,
+     "cru": "[]"
+    }
+   },
+   "fim": 1793854884.342355
+  }
+ ],
+ "aquecimento_s": 3.08
+}

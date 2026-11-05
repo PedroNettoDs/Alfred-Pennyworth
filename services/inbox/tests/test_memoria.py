@@ -14,11 +14,13 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
 import zlib
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -397,6 +399,90 @@ class TestContexto(Base):
     def test_sem_embedding_usa_so_fts(self):
         self.embed.side_effect = lambda *a, **k: []
         self.assertIn("AttanoTech", lib_memoria.contexto("quem é da AttanoTech?"))
+
+    def test_filtro_por_sujeito(self):
+        txt = lib_memoria.contexto("café e AttanoTech", sujeitos=["Carlos Silva"])
+        self.assertEqual(self.linhas(txt), ["- [Carlos Silva] é cliente da AttanoTech"])
+        self.assertNotIn("Carlos", lib_memoria.contexto("café e AttanoTech", sujeitos=["Pedro"]))
+        self.assertEqual(lib_memoria.contexto("café", sujeitos=["Ana"]), "")
+
+
+class TestContextoCache(Base):
+    """Matriz numpy em cache: relida só quando os gatilhos sobem estado.versao_vetores."""
+
+    def setUp(self):
+        super().setUp()
+        lib_memoria._cache.clear()
+        self.addCleanup(lib_memoria._cache.clear)
+        lib_memoria.guardar([fato("prefere café sem açúcar"), fato("mora em Bauru", tipo="identidade")], "teste")
+        self.carregar = mock.Mock(wraps=lib_memoria._carregar_matriz)
+        p = mock.patch.object(lib_memoria, "_carregar_matriz", self.carregar)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def db(self):
+        return sqlite3.connect(str(lib_memoria.db_path()))
+
+    def test_segunda_chamada_reaproveita_a_matriz(self):
+        lib_memoria.contexto("café")
+        lib_memoria.contexto("Bauru")
+        self.assertEqual(self.carregar.call_count, 1)
+
+    def test_guardar_invalida(self):
+        lib_memoria.contexto("café")
+        lib_memoria.guardar([fato("montou um homelab", tipo="projeto")])
+        self.assertIn("homelab", lib_memoria.contexto("e o homelab?"))
+        self.assertEqual(self.carregar.call_count, 2)
+
+    def test_escrita_de_outro_processo_invalida(self):
+        lib_memoria.contexto("café")
+        # Outra conexão (CLI, timer) troca o vetor do fato do café pelo do homelab: só o vetor acha, a FTS não
+        v = lib_memoria._embed("homelab", "Pedro", lib_memoria._cfg())
+        with closing(self.db()) as con, con:
+            con.execute("UPDATE fatos SET vetor=? WHERE fato LIKE '%café%'", (v.tobytes(),))
+        self.assertIn("café", lib_memoria.contexto("homelab"))
+        self.assertEqual(self.carregar.call_count, 2)
+
+    def test_auditoria_que_apaga_invalida(self):
+        lib_memoria.contexto("café")
+
+        def sem_cafe(prompt):
+            entrada = json.loads(prompt.split("FATOS:\n", 1)[1])
+            return {"fatos": [{k: f[k] for k in ("id", "fato", "tipo", "validade")}
+                              for f in entrada if "café" not in f["fato"]]}
+
+        self.llm.filas["auditar"].append(sem_cafe)
+        lib_memoria.auditar()
+        self.assertNotIn("café", lib_memoria.contexto("café em Bauru"))
+        self.assertEqual(self.carregar.call_count, 2)
+
+    def test_vence_entre_duas_chamadas_sem_reler(self):
+        lib_memoria.guardar([fato("está montando um homelab", validade="2030-01-01")])
+        self.assertIn("homelab", lib_memoria.contexto("homelab"))
+
+        class Depois(date):
+            @classmethod
+            def today(cls):
+                return date(2030, 1, 2)
+
+        with mock.patch.object(lib_memoria, "date", Depois):
+            self.assertEqual(lib_memoria.contexto("homelab"), "")
+        self.assertEqual(self.carregar.call_count, 1)
+
+    def test_vetor_de_outro_modelo_fica_fora_da_matriz(self):
+        with closing(lib_memoria._conectar()) as con:
+            self.assertEqual(len(lib_memoria._matriz(con, lib_memoria._cfg())[0]), 2)
+            self.cfg(modelo_embed="outro-modelo")
+            self.assertEqual(len(lib_memoria._matriz(con, lib_memoria._cfg())[0]), 0)
+
+    def test_banco_antigo_ganha_os_gatilhos(self):
+        with closing(self.db()) as con:
+            for g in ("fatos_versao_ai", "fatos_versao_ad", "fatos_versao_au"):
+                con.execute(f"DROP TRIGGER {g}")
+        lib_memoria._conectar().close()
+        with closing(self.db()) as con:
+            nomes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        self.assertLessEqual({"fatos_versao_ai", "fatos_versao_ad", "fatos_versao_au"}, nomes)
 
 
 class TestOllamaFora(Base):

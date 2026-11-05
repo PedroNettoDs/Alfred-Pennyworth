@@ -12,7 +12,9 @@ Fluxo (nada sai da máquina — LLM e embeddings no Ollama local):
   4. contexto(consulta, k) — bloco curto com os fatos mais relevantes (vetor + FTS5) para entrar num prompt.
 
 Armazenamento: SQLite próprio ($MEMORIA_DB, `db` da seção memoria: do perfis.yml, ou
-$VAULT_ALFRED/memoria/memoria.db) com FTS5 e o vetor normalizado (float32) como blob na mesma linha.
+$VAULT_ALFRED/memoria/memoria.db) com FTS5 e o vetor normalizado (float32) como blob na mesma linha. A busca
+vetorial do contexto() usa uma matriz numpy em cache no processo, relida quando os gatilhos sobem
+estado.versao_vetores.
 Espelho legível, um .md por sujeito, na pasta do banco — gravado de forma atômica (temporário + os.replace)
 e sobrescrito a cada mudança: editar o .md não muda a memória.
 
@@ -34,12 +36,15 @@ import re
 import sqlite3
 import sys
 import tempfile
+import threading
 from array import array
 from contextlib import closing
 from datetime import date, datetime
 from itertools import groupby
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 from _shared.lib_alfred import load_env, log, ollama_embed, ollama_generate_json, slugify
 from _shared.lib_templates import render_template
@@ -80,6 +85,17 @@ CREATE TRIGGER IF NOT EXISTS fatos_au AFTER UPDATE OF fato, sujeito ON fatos BEG
     INSERT INTO fatos_fts(rowid, fato, sujeito) VALUES (new.id, new.fato, new.sujeito);
 END;
 CREATE TABLE IF NOT EXISTS estado(chave TEXT PRIMARY KEY, valor TEXT);
+-- Versão dos vetores: sobe a cada fato que entra, sai ou muda de vetor/validade/sujeito, venha de que processo
+-- vier (chat, CLI, timer). contexto() recarrega a matriz em cache só quando ela muda.
+CREATE TRIGGER IF NOT EXISTS fatos_versao_ai AFTER INSERT ON fatos BEGIN
+    INSERT INTO estado VALUES ('versao_vetores', 1) ON CONFLICT(chave) DO UPDATE SET valor = valor + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS fatos_versao_ad AFTER DELETE ON fatos BEGIN
+    INSERT INTO estado VALUES ('versao_vetores', 1) ON CONFLICT(chave) DO UPDATE SET valor = valor + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS fatos_versao_au AFTER UPDATE OF vetor, modelo_vetor, validade, chave ON fatos BEGIN
+    INSERT INTO estado VALUES ('versao_vetores', 1) ON CONFLICT(chave) DO UPDATE SET valor = valor + 1;
+END;
 """
 
 _SCHEMA_EXTRAIR = {
@@ -580,17 +596,61 @@ def auditar() -> dict:
 #  4. Contexto para prompts
 # ══════════════════════════════════════════════════════════════
 
+_cache: dict[str, tuple] = {}     # caminho do banco → ((versao, modelo), (ids, chaves, expira, matriz))
+_cache_lock = threading.Lock()    # o inbox atende requisições em várias threads
+_NUNCA_VENCE = date.max.toordinal()
+
+
+def _expira(validade) -> int:
+    """Último dia de validade como ordinal; 'permanente' nunca vence."""
+    try:
+        return date.fromisoformat(validade).toordinal()
+    except (TypeError, ValueError):
+        return _NUNCA_VENCE
+
+
+def _carregar_matriz(con: sqlite3.Connection, cfg: dict) -> tuple:
+    """(ids, chaves, expira, matriz float32 n×d) dos fatos com vetor do modelo atual, lidos do banco."""
+    rows = con.execute("SELECT id, chave, validade, vetor FROM fatos WHERE vetor IS NOT NULL AND modelo_vetor = ?"
+                       " ORDER BY id", (cfg["modelo_embed"],)).fetchall()
+    tam = len(rows[0]["vetor"]) if rows else 0
+    rows = [r for r in rows if len(r["vetor"]) == tam]
+    matriz = np.frombuffer(b"".join(r["vetor"] for r in rows), dtype=np.float32).reshape(len(rows), tam // 4)
+    return (np.array([r["id"] for r in rows], dtype=np.int64), np.array([r["chave"] for r in rows]),
+            np.array([_expira(r["validade"]) for r in rows], dtype=np.int64), matriz)
+
+
+def _matriz(con: sqlite3.Connection, cfg: dict) -> tuple:
+    """
+    _carregar_matriz() com cache no processo: só relê o banco quando estado.versao_vetores (gatilhos) ou o
+    modelo de embedding mudam. A versão é lida antes dos vetores: uma escrita no meio força nova leitura depois,
+    nunca deixa o cache velho com a versão nova.
+    """
+    banco = str(db_path())
+    versao = (_estado(con, "versao_vetores") or "0", cfg["modelo_embed"])
+    atual = _cache.get(banco)
+    if atual and atual[0] == versao:
+        return atual[1]
+    with _cache_lock:
+        atual = _cache.get(banco)
+        if not (atual and atual[0] == versao):
+            atual = _cache[banco] = (versao, _carregar_matriz(con, cfg))
+    return atual[1]
+
+
 def _consulta_fts(texto: str) -> str:
     """Termos de 4+ letras, por prefixo, com OR — palavras curtas ("de", "que") casariam com tudo."""
     termos = dict.fromkeys(t.lower() for t in re.findall(r"\w{4,}", texto or ""))
     return " OR ".join(f'"{t}"*' for t in list(termos)[:30])
 
 
-def contexto(consulta: str, k: int = 8) -> str:
+def contexto(consulta: str, k: int = 8, sujeitos: Optional[list[str]] = None) -> str:
     """
     Bloco curto com os k fatos mais relevantes para `consulta`, pronto para entrar num prompt; "" se não
-    houver nada. Junta a busca vetorial (cosseno ≥ limiar_contexto) e a FTS5 por fusão de rankings (RRF);
-    sem Ollama, fica só a FTS5. Fatos vencidos ficam de fora.
+    houver nada. Junta a busca vetorial (cosseno ≥ limiar_contexto, numpy sobre a matriz em cache) e a FTS5
+    por fusão de rankings (RRF); sem Ollama, fica só a FTS5. Fatos vencidos ficam de fora.
+    `sujeitos` = só os fatos dessas pessoas, pelo nome completo como está guardado (ex.: rascunho para um
+    contato: [contato, "Pedro"]); None = todos.
     """
     if not (consulta or "").strip() or k <= 0:
         return ""
@@ -598,34 +658,45 @@ def contexto(consulta: str, k: int = 8) -> str:
     if not con:
         return ""
     cfg = _cfg()
+    hoje = date.today()
+    alvo = [_chave(_sujeito(s)) for s in sujeitos] if sujeitos else []
+    filtro = "(f.validade = 'permanente' OR f.validade >= ?)" + (
+        f" AND f.chave IN ({','.join('?' * len(alvo))})" if alvo else "")
+    params = (hoje.isoformat(), *alvo)
     pontos: dict[int, float] = {}
     try:
         with closing(con):
-            fatos = {r["id"]: r for r in con.execute(
-                "SELECT id, fato, sujeito, vetor, modelo_vetor FROM fatos"
-                " WHERE validade = 'permanente' OR validade >= ?", (date.today().isoformat(),))}
-            if not fatos:
+            if not con.execute(f"SELECT EXISTS(SELECT 1 FROM fatos f WHERE {filtro})", params).fetchone()[0]:
                 return ""
             q = _normalizar(ollama_embed(consulta[:2000], model=cfg["modelo_embed"]))
             if q is not None:
-                sims = sorted(((_cos(q, _vetor(r["vetor"])), fid) for fid, r in fatos.items()
-                               if r["modelo_vetor"] == cfg["modelo_embed"]), reverse=True)
-                for pos, (_, fid) in enumerate(s for s in sims if s[0] >= cfg["limiar_contexto"]):
-                    pontos[fid] = pontos.get(fid, 0.0) + 1 / (60 + pos)
+                ids, chaves, expira, matriz = _matriz(con, cfg)
+                if len(ids) and matriz.shape[1] == len(q):
+                    sims = matriz @ np.asarray(q, dtype=np.float32)
+                    ok = (expira >= hoje.toordinal()) & (sims >= cfg["limiar_contexto"])
+                    if alvo:
+                        ok &= np.isin(chaves, alvo)
+                    sel = np.flatnonzero(ok)
+                    # Maior cosseno primeiro; empate → maior id (o mesmo desempate do ranking em Python que veio antes)
+                    for pos, fid in enumerate(ids[sel[np.lexsort((-ids[sel], -sims[sel]))]].tolist()):
+                        pontos[fid] = pontos.get(fid, 0.0) + 1 / (60 + pos)
             termos = _consulta_fts(consulta)
             if termos:
-                rows = con.execute("SELECT rowid FROM fatos_fts WHERE fatos_fts MATCH ?"
-                                   " ORDER BY bm25(fatos_fts, 1.0, 2.0) LIMIT 50", (termos,)).fetchall()
-                for pos, (fid,) in enumerate(r for r in rows if r[0] in fatos):
+                rows = con.execute("SELECT f.id FROM fatos_fts JOIN fatos f ON f.id = fatos_fts.rowid"
+                                   f" WHERE fatos_fts MATCH ? AND {filtro}"
+                                   " ORDER BY bm25(fatos_fts, 1.0, 2.0) LIMIT 50", (termos, *params)).fetchall()
+                for pos, (fid,) in enumerate(rows):
                     pontos[fid] = pontos.get(fid, 0.0) + 1 / (60 + pos)
+            melhores = sorted(pontos, key=pontos.get, reverse=True)[:k]
+            if not melhores:
+                return ""
+            fatos = {r["id"]: r for r in con.execute(
+                f"SELECT id, fato, sujeito FROM fatos WHERE id IN ({','.join('?' * len(melhores))})", melhores)}
     except sqlite3.Error as e:
         log(f"[memoria] contexto falhou: {e}")
         return ""
-    melhores = sorted(pontos, key=pontos.get, reverse=True)[:k]
-    if not melhores:
-        return ""
     linhas = ["Fatos que Alfred já sabe (memória automática; podem estar desatualizados):"]
-    linhas += [f"- [{fatos[fid]['sujeito']}] {fatos[fid]['fato']}" for fid in melhores]
+    linhas += [f"- [{fatos[fid]['sujeito']}] {fatos[fid]['fato']}" for fid in melhores if fid in fatos]
     return "\n".join(linhas)
 
 

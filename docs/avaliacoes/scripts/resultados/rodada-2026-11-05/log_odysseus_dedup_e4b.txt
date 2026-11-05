@@ -1,0 +1,1 @@
+{"entrada": {"vivos": 22, "segundos": 2.86}, "auditoria": {"vivos": 22, "segundos": 10.83}}

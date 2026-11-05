@@ -1,0 +1,1094 @@
+{
+ "sistema": "alfred",
+ "modelo": "gemma4:e4b",
+ "variante": "lib_memoria.extrair",
+ "rodadas": [
+  {
+   "inicio": 1793855018.289118,
+   "trechos": {
+    "c01": {
+     "fatos": [
+      {
+       "fato": "é vegetariano",
+       "sujeito": "Pedro",
+       "tipo": "saude",
+       "validade": "permanente"
+      },
+      {
+       "fato": "não marca compromissos antes das 9h",
+       "sujeito": "Pedro",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.762,
+     "chamou_llm": true
+    },
+    "c02": {
+     "fatos": [
+      {
+       "fato": "vai se casar em março do ano que vem",
+       "sujeito": "Camila",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.525,
+     "chamou_llm": true
+    },
+    "c03": {
+     "fatos": [
+      {
+       "fato": "treina jiu-jitsu às terças e quintas à noite",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.618,
+     "chamou_llm": true
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.168,
+     "chamou_llm": true
+    },
+    "c05": {
+     "fatos": [
+      {
+       "fato": "é engenheiro de dados na Lumen Analytics",
+       "sujeito": "Pedro",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.477,
+     "chamou_llm": true
+    },
+    "c06": {
+     "fatos": [
+      {
+       "fato": "é alérgico a camarão",
+       "sujeito": "Pedro",
+       "tipo": "saude",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.412,
+     "chamou_llm": true
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 0.185,
+     "chamou_llm": true
+    },
+    "c08": {
+     "fatos": [
+      {
+       "fato": "prefere ser chamado de PH",
+       "sujeito": "Pedro",
+       "tipo": "identidade",
+       "validade": "permanente"
+      },
+      {
+       "fato": "prefere receber resumos pelo WhatsApp",
+       "sujeito": "Pedro",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.736,
+     "chamou_llm": true
+    },
+    "c09": {
+     "fatos": [
+      {
+       "fato": "está montando um homelab com dois mini PCs rodando Proxmox para hospedar serviços em casa",
+       "sujeito": "Pedro",
+       "tipo": "projeto",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.601,
+     "chamou_llm": true
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.177,
+     "chamou_llm": true
+    },
+    "c11": {
+     "fatos": [
+      {
+       "fato": "faz 70 anos",
+       "sujeito": "Seu Antônio",
+       "tipo": "outro",
+       "validade": "2026-12-12"
+      },
+      {
+       "fato": "mora em Marília",
+       "sujeito": "Seu Antônio",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.732,
+     "chamou_llm": true
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.28,
+     "chamou_llm": true
+    },
+    "c13": {
+     "fatos": [
+      {
+       "fato": "é gerente de projetos da Lumen Analytics",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.452,
+     "chamou_llm": true
+    },
+    "c14": {
+     "fatos": [
+      {
+       "fato": "odeia que coisas sejam marcadas aos domingos",
+       "sujeito": "Helena",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      },
+      {
+       "fato": "é professora de biologia",
+       "sujeito": "Helena",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.773,
+     "chamou_llm": true
+    },
+    "c15": {
+     "fatos": [
+      {
+       "fato": "vai ficar em Lisboa a trabalho por duas semanas",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-12-04"
+      }
+     ],
+     "segundos": 0.594,
+     "chamou_llm": true
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.205,
+     "chamou_llm": true
+    },
+    "w01": {
+     "fatos": [
+      {
+       "fato": "trabalha na Nexo Pagamentos",
+       "sujeito": "Rafael Moreira",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "mora em Curitiba",
+       "sujeito": "Rafael Moreira",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.952,
+     "chamou_llm": true
+    },
+    "w02": {
+     "fatos": [],
+     "segundos": 0.352,
+     "chamou_llm": true
+    },
+    "w03": {
+     "fatos": [
+      {
+       "fato": "está de licença paternidade até 2026-12-15",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-12-15"
+      },
+      {
+       "fato": "o projeto deve ser tratado com Bia",
+       "sujeito": "Pedro",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.181,
+     "chamou_llm": true
+    },
+    "w04": {
+     "fatos": [],
+     "segundos": 0.369,
+     "chamou_llm": true
+    },
+    "w05": {
+     "fatos": [
+      {
+       "fato": "prefere comunicação por texto",
+       "sujeito": "Marcos Vieira",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.699,
+     "chamou_llm": true
+    },
+    "w06": {
+     "fatos": [
+      {
+       "fato": "começa no TRT",
+       "sujeito": "Camila",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.696,
+     "chamou_llm": true
+    },
+    "w07": {
+     "fatos": [
+      {
+       "fato": "não bebe mais",
+       "sujeito": "Rafael Moreira",
+       "tipo": "saude",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.595,
+     "chamou_llm": true
+    },
+    "w08": {
+     "fatos": [
+      {
+       "fato": "é vegana",
+       "sujeito": "Juliana Prado",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.595,
+     "chamou_llm": true
+    },
+    "e01": {
+     "fatos": [
+      {
+       "fato": "é gerente de projetos da Lumen Analytics",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "trabalha no escritório de São Paulo",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "atende por Teams das 8h às 17h",
+       "sujeito": "Renata Couto",
+       "tipo": "rotina",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.388,
+     "chamou_llm": true
+    },
+    "e02": {
+     "fatos": [
+      {
+       "fato": "consulta agendada para 05/11 às 10h",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-11-05"
+      }
+     ],
+     "segundos": 0.857,
+     "chamou_llm": true
+    },
+    "e03": {
+     "fatos": [
+      {
+       "fato": "o contrato da Vieira Arquitetura é renovado anualmente em julho",
+       "sujeito": "Vieira Arquitetura",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.759,
+     "chamou_llm": true
+    },
+    "e04": {
+     "fatos": [],
+     "segundos": 0.366,
+     "chamou_llm": true
+    },
+    "e05": {
+     "fatos": [
+      {
+       "fato": "é coordenadora pedagógica",
+       "sujeito": "Helena",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.617,
+     "chamou_llm": true
+    },
+    "e06": {
+     "fatos": [
+      {
+       "fato": "novo e-mail é tiago.lemos@novaempresa.com.br",
+       "sujeito": "Tiago Lemos",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.742,
+     "chamou_llm": true
+    }
+   },
+   "fim": 1793855036.15918
+  },
+  {
+   "inicio": 1793855036.1591835,
+   "trechos": {
+    "c01": {
+     "fatos": [
+      {
+       "fato": "é vegetariano",
+       "sujeito": "Pedro",
+       "tipo": "saude",
+       "validade": "permanente"
+      },
+      {
+       "fato": "não marca compromissos antes das 9h",
+       "sujeito": "Pedro",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.923,
+     "chamou_llm": true
+    },
+    "c02": {
+     "fatos": [
+      {
+       "fato": "vai se casar em março do ano que vem",
+       "sujeito": "Camila",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.469,
+     "chamou_llm": true
+    },
+    "c03": {
+     "fatos": [
+      {
+       "fato": "treina jiu-jitsu às terças e quintas à noite",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.544,
+     "chamou_llm": true
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.147,
+     "chamou_llm": true
+    },
+    "c05": {
+     "fatos": [
+      {
+       "fato": "é engenheiro de dados na Lumen Analytics",
+       "sujeito": "Pedro",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.486,
+     "chamou_llm": true
+    },
+    "c06": {
+     "fatos": [
+      {
+       "fato": "é alérgico a camarão",
+       "sujeito": "Pedro",
+       "tipo": "saude",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.405,
+     "chamou_llm": true
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 0.139,
+     "chamou_llm": true
+    },
+    "c08": {
+     "fatos": [
+      {
+       "fato": "prefere ser chamado de PH",
+       "sujeito": "Pedro",
+       "tipo": "identidade",
+       "validade": "permanente"
+      },
+      {
+       "fato": "prefere receber resumos pelo WhatsApp",
+       "sujeito": "Pedro",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.723,
+     "chamou_llm": true
+    },
+    "c09": {
+     "fatos": [
+      {
+       "fato": "está montando um homelab com dois mini PCs rodando Proxmox",
+       "sujeito": "Pedro",
+       "tipo": "projeto",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.499,
+     "chamou_llm": true
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.153,
+     "chamou_llm": true
+    },
+    "c11": {
+     "fatos": [
+      {
+       "fato": "faz 70 anos",
+       "sujeito": "Seu Antônio",
+       "tipo": "outro",
+       "validade": "2026-12-12"
+      },
+      {
+       "fato": "mora em Marília",
+       "sujeito": "Seu Antônio",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.76,
+     "chamou_llm": true
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.16,
+     "chamou_llm": true
+    },
+    "c13": {
+     "fatos": [
+      {
+       "fato": "é gerente de projetos da Lumen Analytics",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.412,
+     "chamou_llm": true
+    },
+    "c14": {
+     "fatos": [
+      {
+       "fato": "odeia que coisas sejam marcadas no domingo",
+       "sujeito": "Helena",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      },
+      {
+       "fato": "é professora de biologia",
+       "sujeito": "Helena",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "é esposa de Pedro",
+       "sujeito": "Helena",
+       "tipo": "relacao",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.075,
+     "chamou_llm": true
+    },
+    "c15": {
+     "fatos": [
+      {
+       "fato": "vai ficar em Lisboa a trabalho por duas semanas",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-12-04"
+      }
+     ],
+     "segundos": 0.571,
+     "chamou_llm": true
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.157,
+     "chamou_llm": true
+    },
+    "w01": {
+     "fatos": [
+      {
+       "fato": "trabalha na Nexo Pagamentos",
+       "sujeito": "Rafael Moreira",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "mora em Curitiba",
+       "sujeito": "Rafael Moreira",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.889,
+     "chamou_llm": true
+    },
+    "w02": {
+     "fatos": [],
+     "segundos": 0.346,
+     "chamou_llm": true
+    },
+    "w03": {
+     "fatos": [
+      {
+       "fato": "está de licença paternidade até 2026-12-15",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-12-15"
+      },
+      {
+       "fato": "o projeto deve ser tratado com Bia",
+       "sujeito": "Pedro",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.121,
+     "chamou_llm": true
+    },
+    "w04": {
+     "fatos": [],
+     "segundos": 0.338,
+     "chamou_llm": true
+    },
+    "w05": {
+     "fatos": [
+      {
+       "fato": "prefere comunicação por texto",
+       "sujeito": "Marcos Vieira",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.686,
+     "chamou_llm": true
+    },
+    "w06": {
+     "fatos": [
+      {
+       "fato": "começa no TRT",
+       "sujeito": "Camila",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.687,
+     "chamou_llm": true
+    },
+    "w07": {
+     "fatos": [
+      {
+       "fato": "não bebe mais álcool",
+       "sujeito": "Rafael Moreira",
+       "tipo": "saude",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.646,
+     "chamou_llm": true
+    },
+    "w08": {
+     "fatos": [
+      {
+       "fato": "é vegana",
+       "sujeito": "Juliana Prado",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.752,
+     "chamou_llm": true
+    },
+    "e01": {
+     "fatos": [
+      {
+       "fato": "é gerente de projetos da Lumen Analytics",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "trabalha no escritório de São Paulo",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "atende por Teams das 8h às 17h",
+       "sujeito": "Renata Couto",
+       "tipo": "rotina",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.291,
+     "chamou_llm": true
+    },
+    "e02": {
+     "fatos": [
+      {
+       "fato": "consulta agendada para 05/11 às 10h",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-11-05"
+      }
+     ],
+     "segundos": 0.78,
+     "chamou_llm": true
+    },
+    "e03": {
+     "fatos": [
+      {
+       "fato": "o contrato da Vieira Arquitetura é renovado anualmente em julho",
+       "sujeito": "Vieira Arquitetura",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.713,
+     "chamou_llm": true
+    },
+    "e04": {
+     "fatos": [],
+     "segundos": 0.366,
+     "chamou_llm": true
+    },
+    "e05": {
+     "fatos": [
+      {
+       "fato": "é coordenadora pedagógica",
+       "sujeito": "Helena",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.647,
+     "chamou_llm": true
+    },
+    "e06": {
+     "fatos": [
+      {
+       "fato": "novo e-mail é tiago.lemos@novaempresa.com.br",
+       "sujeito": "Tiago Lemos",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.727,
+     "chamou_llm": true
+    }
+   },
+   "fim": 1793855053.7732239
+  },
+  {
+   "inicio": 1793855053.7732255,
+   "trechos": {
+    "c01": {
+     "fatos": [
+      {
+       "fato": "é vegetariano",
+       "sujeito": "Pedro",
+       "tipo": "saude",
+       "validade": "permanente"
+      },
+      {
+       "fato": "não marca compromissos antes das 9h",
+       "sujeito": "Pedro",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.89,
+     "chamou_llm": true
+    },
+    "c02": {
+     "fatos": [
+      {
+       "fato": "vai se casar em março do ano que vem",
+       "sujeito": "Camila",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.444,
+     "chamou_llm": true
+    },
+    "c03": {
+     "fatos": [
+      {
+       "fato": "treina jiu-jitsu às terças e quintas à noite",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.526,
+     "chamou_llm": true
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.14,
+     "chamou_llm": true
+    },
+    "c05": {
+     "fatos": [
+      {
+       "fato": "é engenheiro de dados na Lumen Analytics",
+       "sujeito": "Pedro",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.442,
+     "chamou_llm": true
+    },
+    "c06": {
+     "fatos": [
+      {
+       "fato": "é alérgico a camarão",
+       "sujeito": "Pedro",
+       "tipo": "saude",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.372,
+     "chamou_llm": true
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 0.137,
+     "chamou_llm": true
+    },
+    "c08": {
+     "fatos": [
+      {
+       "fato": "prefere ser chamado de PH",
+       "sujeito": "Pedro",
+       "tipo": "identidade",
+       "validade": "permanente"
+      },
+      {
+       "fato": "prefere receber resumos pelo WhatsApp",
+       "sujeito": "Pedro",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.718,
+     "chamou_llm": true
+    },
+    "c09": {
+     "fatos": [
+      {
+       "fato": "está montando um homelab com dois mini PCs rodando Proxmox para hospedar serviços em casa",
+       "sujeito": "Pedro",
+       "tipo": "projeto",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.567,
+     "chamou_llm": true
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.165,
+     "chamou_llm": true
+    },
+    "c11": {
+     "fatos": [
+      {
+       "fato": "faz 70 anos",
+       "sujeito": "Seu Antônio",
+       "tipo": "outro",
+       "validade": "2026-12-12"
+      },
+      {
+       "fato": "mora em Marília",
+       "sujeito": "Seu Antônio",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.677,
+     "chamou_llm": true
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.155,
+     "chamou_llm": true
+    },
+    "c13": {
+     "fatos": [
+      {
+       "fato": "gerente de projetos da Lumen Analytics",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.418,
+     "chamou_llm": true
+    },
+    "c14": {
+     "fatos": [
+      {
+       "fato": "odeia que coisas sejam marcadas no domingo",
+       "sujeito": "Helena",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      },
+      {
+       "fato": "é professora de biologia",
+       "sujeito": "Helena",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "é esposa de Pedro",
+       "sujeito": "Helena",
+       "tipo": "relacao",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.016,
+     "chamou_llm": true
+    },
+    "c15": {
+     "fatos": [
+      {
+       "fato": "vai ficar em Lisboa a trabalho por duas semanas",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-12-04"
+      }
+     ],
+     "segundos": 0.525,
+     "chamou_llm": true
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.132,
+     "chamou_llm": true
+    },
+    "w01": {
+     "fatos": [
+      {
+       "fato": "trabalha na Nexo Pagamentos",
+       "sujeito": "Rafael Moreira",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "mora em Curitiba",
+       "sujeito": "Rafael Moreira",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.89,
+     "chamou_llm": true
+    },
+    "w02": {
+     "fatos": [],
+     "segundos": 0.336,
+     "chamou_llm": true
+    },
+    "w03": {
+     "fatos": [
+      {
+       "fato": "está de licença paternidade até 2026-12-15",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-12-15"
+      },
+      {
+       "fato": "pode ser contatada sobre o projeto",
+       "sujeito": "Bia",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.22,
+     "chamou_llm": true
+    },
+    "w04": {
+     "fatos": [],
+     "segundos": 0.338,
+     "chamou_llm": true
+    },
+    "w05": {
+     "fatos": [
+      {
+       "fato": "prefere comunicação por texto",
+       "sujeito": "Marcos Vieira",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.665,
+     "chamou_llm": true
+    },
+    "w06": {
+     "fatos": [
+      {
+       "fato": "começa no TRT",
+       "sujeito": "Camila",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.704,
+     "chamou_llm": true
+    },
+    "w07": {
+     "fatos": [
+      {
+       "fato": "não bebe mais álcool",
+       "sujeito": "Rafael Moreira",
+       "tipo": "saude",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.649,
+     "chamou_llm": true
+    },
+    "w08": {
+     "fatos": [
+      {
+       "fato": "é vegana",
+       "sujeito": "Juliana Prado",
+       "tipo": "preferencia",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.642,
+     "chamou_llm": true
+    },
+    "e01": {
+     "fatos": [
+      {
+       "fato": "é gerente de projetos da Lumen Analytics",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "trabalha no escritório de São Paulo",
+       "sujeito": "Renata Couto",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      },
+      {
+       "fato": "atende por Teams das 8h às 17h",
+       "sujeito": "Renata Couto",
+       "tipo": "rotina",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 1.321,
+     "chamou_llm": true
+    },
+    "e02": {
+     "fatos": [
+      {
+       "fato": "consulta agendada para 05/11 às 10h",
+       "sujeito": "Pedro",
+       "tipo": "rotina",
+       "validade": "2026-11-05"
+      }
+     ],
+     "segundos": 0.812,
+     "chamou_llm": true
+    },
+    "e03": {
+     "fatos": [
+      {
+       "fato": "o contrato da Vieira Arquitetura é renovado anualmente em julho",
+       "sujeito": "Vieira Arquitetura",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.742,
+     "chamou_llm": true
+    },
+    "e04": {
+     "fatos": [],
+     "segundos": 0.354,
+     "chamou_llm": true
+    },
+    "e05": {
+     "fatos": [
+      {
+       "fato": "é coordenadora pedagógica",
+       "sujeito": "Helena",
+       "tipo": "trabalho",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.608,
+     "chamou_llm": true
+    },
+    "e06": {
+     "fatos": [
+      {
+       "fato": "novo e-mail é tiago.lemos@novaempresa.com.br",
+       "sujeito": "Tiago Lemos",
+       "tipo": "outro",
+       "validade": "permanente"
+      }
+     ],
+     "segundos": 0.718,
+     "chamou_llm": true
+    }
+   },
+   "fim": 1793855071.0999992
+  }
+ ],
+ "aquecimento_s": 27.44
+}
