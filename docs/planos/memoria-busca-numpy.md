@@ -122,6 +122,21 @@ _cache_lock = threading.Lock()  # o inbox atende requisições em várias thread
 
 Sem Ollama, o caminho continua o mesmo: só a FTS5.
 
+### 4. Contexto por ação: filtro por sujeito
+
+`contexto(consulta, k=8, sujeitos=None)`. Com `sujeitos`, a busca considera só os fatos dessas pessoas,
+comparando pela `chave`, o slug do sujeito.
+
+- **No cache:** guardar também `chaves`, um array com a chave de cada linha. O filtro vira mais uma
+  máscara (`np.isin(chaves, alvo)`).
+- **Na FTS5:** `AND f.chave IN (...)`.
+- **Quem chama:**
+  - O chat (`conversa.py`) continua sem filtro, porque pode perguntar sobre qualquer um.
+  - O rascunho de resposta a um contato passa `sujeitos=[remetente, "Pedro"]`, assim como o briefing
+    sobre uma pessoa.
+  - Cada ação diz de quem precisa saber, e um fato parecido de outra pessoa não entra no prompt.
+- **Teste:** com `sujeitos=["Carlos"]`, um fato de Ana mais parecido com a consulta fica de fora.
+
 ## Testes (`services/inbox/tests/test_memoria.py`)
 
 - **Regressão:** a classe de testes do `contexto()` inteira passa sem mudança. Ela cobre ranking, `k`,
@@ -154,11 +169,11 @@ A FTS5 e o embedding da consulta (~0,04 s na CPU) ficam de fora da meta. O embed
   matriz em cache, invalidada por gatilhos (`estado.versao_vetores`)".
 - A docstring do topo de `lib_memoria.py`: o trecho sobre armazenamento.
 
-## Ordem e esforço (~2 h)
+## Ordem e esforço (~2,5 h)
 
 1. Gatilhos + teste do schema antigo.
 2. `_matriz()` + cache + testes de invalidação.
-3. `contexto()` novo + regressão.
+3. `contexto()` novo + regressão + filtro `sujeitos` (seção 4).
 4. Medida com `memoria_busca.py`.
 5. Docs.
 6. Commit e reinício do `alfred-inbox-api`. O reinício só com o OK de Pedro, porque é produção.
