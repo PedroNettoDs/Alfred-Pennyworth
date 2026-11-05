@@ -1,0 +1,67 @@
+{#
+  Detalhe de um item da agenda. Vars de painel._dados_agenda_item(): i (view-model da lista), item (entrada do
+  agenda.yml), resumo, analise, dados, contexto, pendencia_url, promessa, dados_promessa, historico, ics_pendente.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}{{ i.titulo }}{% endblock %}
+{% block conteudo %}
+<div class="detalhe">
+  {{ m.cabecalho(i.titulo, i.quando ~ " · " ~ i.origem, voltar=("/painel/agenda", "Agenda")) }}
+
+  <div class="detalhe__grade">
+    <div class="detalhe__principal">
+      <section class="cartao" aria-labelledby="c-resumo">
+        <div class="cartao__cabecalho"><h2 class="cartao__titulo" id="c-resumo">Resumo do Alfred</h2>{{ m.selo_urgencia(item.urgencia) }}</div>
+        <p>{{ resumo or "Sem resumo." }}</p>
+        {{ m.chave_valor(analise) }}
+      </section>
+      <section class="cartao" aria-labelledby="c-contexto">
+        <h2 class="cartao__titulo" id="c-contexto">Contexto</h2>
+        <p class="texto-original">{{ contexto or "(sem contexto gravado)" }}</p>
+        {%- if pendencia_url %}<p><a href="{{ pendencia_url }}">Abrir a pendência de origem</a></p>{% endif %}
+      </section>
+      {%- if promessa %}
+      <section class="cartao" aria-labelledby="c-promessa">
+        <h2 class="cartao__titulo" id="c-promessa">Promessa</h2>
+        {%- if promessa.trecho %}<p class="texto-original">“{{ promessa.trecho }}”</p>{% endif %}
+        {{ m.chave_valor(dados_promessa) }}
+      </section>
+      {%- endif %}
+      <section class="cartao" aria-labelledby="c-hist">
+        <h2 class="cartao__titulo" id="c-hist">Histórico</h2>
+        {{ m.historico(historico) }}
+      </section>
+    </div>
+
+    <div class="detalhe__lateral">
+      <section class="cartao" aria-labelledby="c-status">
+        <div class="cartao__cabecalho"><h2 class="cartao__titulo" id="c-status">Situação</h2>{{ m.selo_status(i.status) }}</div>
+        {%- if i.concluido %}
+        <p class="pequeno suave">Feito{% if i.feito_em %} em {{ i.feito_em }}{% endif %}.
+          {%- if ics_pendente %} O ☑ vai para o calendário na próxima passada da extensão.{% endif %}</p>
+        {%- endif %}
+        {%- if i.erro %}<p class="pequeno">Erro: {{ i.erro }}</p>{% endif %}
+        {%- if i.pode_concluir or i.pode_desfazer %}
+        <div class="acoes acoes--separadas">
+          {%- if i.pode_concluir %}
+          <form data-acao="/painel/api/agenda/{{ i.id }}/feito" data-apos-sucesso="recarregar">
+            {{ m.botao("Feito", "primario", attrs={"data-texto-ocupado": "Marcando…"}) }}
+          </form>
+          {%- endif %}
+          {%- if i.pode_desfazer %}
+          <form data-acao="/painel/api/agenda/{{ i.id }}/desfazer" data-apos-sucesso="recarregar">
+            {{ m.botao("Desfazer", attrs={"data-texto-ocupado": "Desfazendo…"}) }}
+          </form>
+          {%- endif %}
+        </div>
+        {%- endif %}
+      </section>
+      <section class="cartao" aria-labelledby="c-dados">
+        <h2 class="cartao__titulo" id="c-dados">Dados</h2>
+        {{ m.chave_valor(dados) }}
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}

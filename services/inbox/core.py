@@ -1155,6 +1155,11 @@ def _load_tasks(f: Path) -> dict:
 
 def _cancelar_task(tid) -> bool:
     """Tarefa aberta → status "cancelled" + completed_at (Pedro desistiu do evento). True se mudou."""
+    return _fechar_task(tid, "cancelled")
+
+
+def _fechar_task(tid, status: str) -> bool:
+    """Tarefa aberta → status ("cancelled" | "done") + completed_at. True se mudou."""
     f = vault() / "tasks.yml"
     with trava_arquivo(f):
         if not f.exists():
@@ -1163,7 +1168,7 @@ def _cancelar_task(tid) -> bool:
         t = next((t for t in data["tasks"] if t.get("id") == tid), None)
         if not t or t.get("status") != "open":
             return False
-        t["status"] = "cancelled"
+        t["status"] = status
         t["completed_at"] = datetime.now().isoformat(timespec="minutes")
         gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))
     return True

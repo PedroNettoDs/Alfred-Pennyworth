@@ -63,6 +63,7 @@ class Base(unittest.TestCase):
         cls.env.start()
         cls.patches = [
             mock.patch.object(core, "_notify", lambda *a, **k: None),
+            mock.patch.object(agenda, "ollama_generate_json", lambda *a, **k: None),   # Resumo do Alfred
             mock.patch.object(core, "_iniciar_aguardador", lambda c, i: None),
             mock.patch.object(lib_whatsapp, "ENVIADOS_FILE", cls.tmp / "enviados.jsonl"),
             mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", cls.tmp / "ids_enviados.json"),
@@ -290,13 +291,28 @@ class TestVerificacao(Base):
         self.assertEqual((r["atrasadas"], r["cumpridas"]), ([], []))
         self.assertEqual(promessas.obter(p["id"])["status"], "aberta")
 
-    def test_feita_pelo_terminal_tira_o_lembrete_futuro(self):
+    def _registrada(self):
         achada = {"o_que": "Ligar para a Fatec", "para_quem": "Ana", "trecho": "sexta eu ligo",
                   "prazo": self.agora + timedelta(days=2), "dia_inteiro": True, "prazo_assumido": False, "confianca": 0.9}
-        p = promessas.registrar(achada, {"canal": "whatsapp", "contato": "Ana", "remote_jid": JID}, self.agora,
-                                notificar=False)
+        return promessas.registrar(achada, {"canal": "whatsapp", "contato": "Ana", "remote_jid": JID}, self.agora,
+                                   notificar=False)
+
+    def test_feita_pelo_terminal_marca_feito_na_agenda(self):
+        p = self._registrada()
         self.assertEqual(promessas.marcar(p["id"], "cumprida")["status"], "cumprida")
+        item = agenda.obter(p["agenda_id"])
+        self.assertEqual((item["status"], item["atualizar"]), ("feito", True))   # ☑ vai para o calendário
+
+    def test_descartar_tira_o_lembrete_futuro(self):
+        p = self._registrada()
+        promessas.marcar(p["id"], "descartada")
         self.assertEqual(agenda.obter(p["agenda_id"])["status"], "cancelado")
+
+    def test_feito_no_painel_cumpre_a_promessa(self):
+        p = self._registrada()
+        agenda.concluir(p["agenda_id"], via="painel")
+        self.assertEqual(promessas.obter(p["id"])["status"], "cumprida")
+        self.assertEqual(agenda.obter(p["agenda_id"])["status"], "feito")
 
 
 class TestEmail(Base):

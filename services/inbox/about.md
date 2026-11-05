@@ -78,7 +78,9 @@ VAULT_ALFRED/
   tasks.yml · .tasks.yml.lock                        ← "vou" cria tarefa (mesmo formato da tool alfred_tasks)
   agenda/      agenda.yml · .agenda.yml.lock         ← compromissos a caminho do calendário (ver Agenda)
                promessas.yml · .promessas.yml.lock   ← o que você disse que ia fazer (ver Promessas)
+               relatorios/AAAA-MM-DD_AAAA-MM-DD.md   ← fechamento semanal: feitos, desfeitos, promessas (ver Agenda)
 logs/promessas_seen.json                             ← falas suas já analisadas pela varredura de promessas
+logs/agenda_semanal.json                             ← data do último fechamento semanal da agenda
 logs/inbox_seen.json                                 ← message-ids de e-mail processados (janela 14 dias)
 logs/whatsapp_seen.json · whatsapp_enviados.jsonl    ← ids de WhatsApp processados · envios simulados (dry-run)
 logs/whatsapp_fila.json                              ← mensagens esperando atraso_minutos (texto/transcrição, sem o áudio)
@@ -344,7 +346,7 @@ Importe primeiro o sub-workflow, copie o ID dele para o nó "Aguardar resposta" 
 
 ```bash
 services/scripts/instalar.sh                          # gera as units (modelos com @ALFRED_DIR@) e habilita API + timers
-systemctl --user list-timers 'alfred-*'               # ciclo 07:30/18:30 · podcast 19:00 · vigia a cada 10 min · briefings
+systemctl --user list-timers 'alfred-*'               # ciclo 07:30/18:30 · podcast + fechamento da agenda (domingo) 19:00 · vigia a cada 10 min · briefings
 systemctl --user status alfred-inbox-api              # API (WhatsApp, extensões do Thunderbird, N8N, Painel)
 journalctl --user -fu alfred-vigia
 ```
@@ -675,7 +677,30 @@ extensão "Alfred — agenda" no Thunderbird (a cada 2 min)
         → aparece no celular) → POST /agenda/{id}/resultado → status no_calendario
         ↓ só então: notificação "Incluído no calendário “Agenda”" [Ok] [Desfazer]
         Desfazer → status desfazer → a extensão remove o evento → desfeito
+        Feito    → status feito → a extensão regrava o evento com ☑ no título (mesmo UID) → Concluídos
+domingo 19:00 (alfred-semanal.timer) → agenda_semanal.py: relatório da semana + treino do Laya + apaga feitos e desfeitos
 ```
+
+**Painel** (`/painel/agenda`): Próximos, Concluídos e Desfeitos e cancelados; cada título abre `/painel/agenda/{id}`
+com **Resumo do Alfred** (resumo, urgência, prioridade, motivo), **Contexto** (a mensagem de origem e o link da
+pendência), **Promessa** (quando veio de uma), **Histórico** (anotado, incluído no calendário, feito, ☑ no calendário,
+desfeito) e os botões **Feito** e **Desfazer**. O resumo sai do `agenda_resumir.md` quando o item é criado (uma chamada
+ao LLM; fora do ar → "Sem resumo", e `./run.sh agenda resumir` refaz depois).
+
+**Feito:** status `feito`, tarefa do `tasks.yml` vira `done`, a extensão regrava o evento com ☑ (`atualizar`: True →
+"enviado" → False quando o resultado volta). Item de promessa → a promessa vira `cumprida`; e o contrário também:
+`promessas feita`, ou o Alfred vendo que você cumpriu, marca os itens dela como feitos. Feito não se desfaz.
+
+**Fechamento semanal** (`agenda_semanal.py`, domingo 19:00; se o PC estava desligado, no primeiro dia com 7 dias ou
+mais desde o último):
+- saem do registro os feitos (com o ☑ já no calendário), desfeitos e cancelados do `agenda.yml` e as promessas
+  cumpridas e descartadas do `promessas.yml` — os eventos continuam no Google;
+- relatório em `VAULT_ALFRED/agenda/relatorios/AAAA-MM-DD_AAAA-MM-DD.md` (feitos, desfeitos, promessas, o que segue aberto);
+- treino do Laya: `services/laya/treino/dados/agenda.jsonl` e `promessas.jsonl` (fora do git), no formato do
+  `laya-train` (`state`, `questions`, `expected`). O rótulo é a sua ação: feito → `sim`, desfeito **antes** do horário →
+  `nao` (alarme falso); desfeito depois do horário é limpeza da lista e fica de fora, assim como o que você digitou
+  (terminal, conversa). Promessa cumprida → `sim`, descartada → `nao`.
+- estado em `logs/agenda_semanal.json` (data do último fechamento).
 
 - Convite ainda não aceito ("consegue dia 25?") e conversa sem data não viram compromisso. Abaixo de
   `confianca_minima` (0.7), compromisso no passado ou sem data resolvida: ignorado.
@@ -688,6 +713,10 @@ extensão "Alfred — agenda" no Thunderbird (a cada 2 min)
 ./run.sh agenda                                        # lista
 ./run.sh agenda anotar "reunião com a Attano sexta 14h" # detecta e anota (mesmo caminho do WhatsApp)
 ./run.sh agenda desfazer <id>
+./run.sh agenda feito <id>                             # concluído: ☑ no calendário, vai para Concluídos
+./run.sh agenda resumir [id…]                          # Resumo do Alfred dos abertos que ainda não têm
+./run.sh agenda semana --simular                       # mostra o relatório da semana sem gravar nem apagar
+./run.sh agenda semana [--se-devido]                   # fechamento semanal agora (o timer usa --se-devido)
 ./run.sh agenda ics                                    # feed dos que ainda não chegaram ao calendário
 ```
 
@@ -695,7 +724,7 @@ API (Bearer): `GET/POST /agenda`, `GET /agenda/fila`, `POST /agenda/{id}/resulta
 `GET /agenda/alfred.ics` sem token, só para 127.0.0.1 (dá para assinar no Thunderbird como agenda *Na rede*
 caso não queira a extensão — somente leitura e não sincroniza com o celular).
 
-Configuração em `perfis.yml → agenda:` (calendário, duração, alarme, confiança, o que é automático).
+Configuração em `perfis.yml → agenda:` (calendário, duração, alarme, confiança, o que é automático, `resumir`).
 
 ### Extensão "Alfred — agenda" (`thunderbird-ext-agenda/`)
 
@@ -742,6 +771,7 @@ fim do ciclo do e-mail (07:30 / 18:30)  ·  ./run.sh promessas varrer
         atrasada → "Atrasado: <o quê> (<quem>)" na agenda, próximo dia às 09:00
 ```
 
+- **Feito** no painel da agenda (ou `promessas feita <id>`) = cumprida: o item ganha ☑ no calendário.
 - Cada promessa nova chega com a notificação da agenda **[Ok] [Desfazer]** assim que está no calendário. Desfazer antes do prazo = não era promessa:
   ela vira `descartada` e não volta como atrasada.
 - A verificação só olha o canal da promessa (WhatsApp → histórico da conversa; e-mail → e-mails enviados aos mesmos

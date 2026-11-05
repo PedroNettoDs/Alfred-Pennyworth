@@ -11,10 +11,16 @@ Fluxo
         sincroniza com o Google e o evento aparece também no celular
         POST /agenda/{id}/resultado → status no_calendario | erro | desfeito
         ↓ no_calendario            notificação no PC "incluído no calendário" com [Ok] [Desfazer]
+    Ao criar, o LLM escreve o Resumo do Alfred (resumo, urgência, prioridade, motivo — agenda_resumir.md);
+    cada mudança de estado vai para "historico" (painel → /painel/agenda/{id}).
+    Feito (painel ou CLI) → status feito; a extensão regrava o evento com ☑ no título (fila_extensao).
+    Domingo, agenda_semanal.py faz o relatório da semana, guarda os exemplos para o treino do Laya e
+    apaga do agenda.yml os feitos e desfeitos.
     Sem a extensão: GET /agenda/alfred.ics (só 127.0.0.1) lista os itens que ainda não foram para o
     calendário — dá para assinar no Thunderbird como agenda "Na rede" (somente leitura).
 
-Status: pendente → no_calendario | erro (tenta de novo até MAX_TENTATIVAS) ; desfazer → desfeito ; cancelado.
+Status: pendente → no_calendario | erro (tenta de novo até MAX_TENTATIVAS) ; desfazer → desfeito ; cancelado ;
+        feito (atualizar: True → "enviado" → False quando o ☑ chegou ao calendário).
 """
 
 import re
@@ -33,6 +39,7 @@ from _shared.lib_templates import render_template
 MAX_TENTATIVAS = 5
 EM_EXECUCAO_TIMEOUT = timedelta(minutes=15)
 TIPOS = ("evento", "tarefa", "lembrete")
+NIVEIS = ("alta", "media", "baixa")
 
 SCHEMA_COMPROMISSO = {
     "type": "object",
@@ -48,6 +55,17 @@ SCHEMA_COMPROMISSO = {
         "trecho":      {"type": "string"},
     },
     "required": ["existe", "tipo", "titulo", "data", "hora", "hora_fim", "local", "confianca", "trecho"],
+}
+
+SCHEMA_RESUMO = {
+    "type": "object",
+    "properties": {
+        "resumo":     {"type": "string"},
+        "urgencia":   {"type": "string", "enum": list(NIVEIS)},
+        "prioridade": {"type": "string", "enum": list(NIVEIS)},
+        "motivo":     {"type": "string"},
+    },
+    "required": ["resumo", "urgencia", "prioridade", "motivo"],
 }
 
 # Só chama o LLM se a mensagem tiver cara de compromisso (data, hora, dia da semana, palavras-chave).
@@ -79,6 +97,7 @@ def _cfg() -> dict:
         "notas_para_mim":      bool(sec.get("notas_para_mim", True)),
         "criar_tarefa":        bool(sec.get("criar_tarefa", True)),
         "notificar":           bool(sec.get("notificar", True)),
+        "resumir":             bool(sec.get("resumir", True)),
     }
 
 
@@ -128,6 +147,26 @@ def listar(status: Optional[str] = None) -> list[dict]:
 
 def obter(aid: str) -> Optional[dict]:
     return next((i for i in _load()["itens"] if i.get("id") == aid), None)
+
+
+FECHADOS = ("feito", "desfeito", "cancelado")
+
+
+def remover(ids) -> int:
+    """Apaga do agenda.yml os itens fechados (FECHADOS) com estes ids — relatório semanal. → quantos saíram."""
+    ids = set(ids)
+    with _trava():
+        data = _load()
+        antes = len(data["itens"])
+        data["itens"] = [i for i in data["itens"] if not (i.get("id") in ids and i.get("status") in FECHADOS)]
+        if len(data["itens"]) != antes:
+            _save(data)
+    return antes - len(data["itens"])
+
+
+def _hist(item: dict, texto: str, tom: str = "") -> None:
+    """Uma linha do histórico do item (painel → Histórico)."""
+    item.setdefault("historico", []).append({"em": core._now().isoformat(timespec="minutes"), "texto": texto, "tom": tom})
 
 
 # ══════════════════════════════════════════════════════════════
@@ -196,6 +235,7 @@ def adicionar(
             "erro":          None,
             "task_id":       None,
             "notificar":     bool(notificar if notificar is not None else cfg["notificar"]),
+            "historico":     [{"em": now.isoformat(timespec="minutes"), "texto": "Anotado pelo Alfred", "tom": ""}],
         }
         if cfg["criar_tarefa"] and tipo in ("tarefa", "lembrete"):
             try:
@@ -208,7 +248,57 @@ def adicionar(
         _save(data)
     quando = _quando_legivel(item)
     log(f"[agenda] + {aid} ({tipo}) {titulo!r} — {quando}")
+    if cfg["resumir"]:
+        item = resumir_item(aid) or item
     return {**item, "_novo": True}
+
+
+def _origem_legivel(item: dict) -> str:
+    o = item.get("origem") or {}
+    return {
+        "whatsapp":    f"mensagem de WhatsApp de {o.get('contato') or 'um contato'}",
+        "whatsapp-eu": "nota que você mandou para si mesmo no WhatsApp",
+        "email":       f"e-mail: {o.get('assunto') or '(sem assunto)'}",
+        "promessa":    f"promessa sua a {o.get('contato') or 'alguém'}" + (" que passou do prazo" if o.get("atraso") else ""),
+    }.get(o.get("canal"), f"anotado por você ({o.get('canal') or 'manual'})")
+
+
+def resumir(item: dict) -> Optional[dict]:
+    """Item da agenda → {"resumo", "urgencia", "prioridade", "motivo"} (Ollama, agenda_resumir.md) ou None."""
+    prompt = render_template("agenda_resumir", {
+        "data_hoje": core._now().strftime("%Y-%m-%d (%A) %H:%M"),
+        "tipo":      item.get("tipo") or "evento",
+        "titulo":    item.get("titulo") or "",
+        "quando":    _quando_legivel(item),
+        "origem":    _origem_legivel(item),
+        "descricao": (item.get("descricao") or "(sem detalhes)")[:2000],
+    })
+    data = ollama_generate_json(prompt, timeout=120, schema=SCHEMA_RESUMO,
+                                options={**core.OPTS_JSON, "num_predict": 300})
+    if not isinstance(data, dict) or not str(data.get("resumo") or "").strip():
+        return None
+    return {"resumo":     str(data["resumo"]).strip()[:600],
+            "urgencia":   data.get("urgencia") if data.get("urgencia") in NIVEIS else None,
+            "prioridade": data.get("prioridade") if data.get("prioridade") in NIVEIS else None,
+            "motivo":     str(data.get("motivo") or "").strip()[:200]}
+
+
+def resumir_item(aid: str) -> Optional[dict]:
+    """Gera e grava o Resumo do Alfred de um item (o LLM roda fora da trava). → item atualizado ou None."""
+    item = obter(aid)
+    r = resumir(item) if item else None
+    if not r:
+        if item:
+            log(f"[agenda] {aid}: sem Resumo do Alfred (LLM)")
+        return None
+    with _trava():
+        data = _load()
+        item = next((i for i in data["itens"] if i.get("id") == aid), None)
+        if not item:
+            return None
+        item.update(r)
+        _save(data)
+    return item
 
 
 _DIAS = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
@@ -348,7 +438,7 @@ def vevent(item: dict) -> list[str]:
     else:
         linhas.append(f"DTSTART:{_utc(item['inicio'])}")
         linhas.append(f"DTEND:{_utc(item.get('fim') or item['inicio'])}")
-    prefixo = {"tarefa": "☐ ", "lembrete": "⏰ "}.get(item.get("tipo"), "")
+    prefixo = "☑ " if item.get("status") == "feito" else {"tarefa": "☐ ", "lembrete": "⏰ "}.get(item.get("tipo"), "")
     linhas.append(f"SUMMARY:{_esc(prefixo + item['titulo'])}")
     if item.get("local"):
         linhas.append(f"LOCATION:{_esc(item['local'])}")
@@ -405,6 +495,19 @@ def fila_extensao() -> list[dict]:
             elif st == "desfazer":
                 out.append({"id": i["id"], "acao": "remover", "uid": i["uid"], "calendario": i.get("calendario"),
                             "titulo": i["titulo"]})
+            elif st == "feito" and i.get("atualizar") and int(i.get("tentativas") or 0) < MAX_TENTATIVAS:
+                # regrava o evento (mesmo UID) com ☑ no título; "enviado" espera o resultado como em_execucao
+                try:
+                    if (i["atualizar"] == "enviado"
+                            and now - datetime.fromisoformat(i.get("atualizado_em")) < EM_EXECUCAO_TIMEOUT):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                i["atualizar"] = "enviado"
+                i["atualizado_em"] = now.isoformat(timespec="minutes")
+                mudou = True
+                out.append({"id": i["id"], "acao": "criar", "uid": i["uid"], "calendario": i.get("calendario"),
+                            "titulo": i["titulo"], "ics": vcalendar([i])})
         if mudou:
             _save(data)
         return out
@@ -419,6 +522,19 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
         now = core._now().isoformat(timespec="minutes")
         if acao == "remover":
             item["status"] = "desfeito" if ok else "desfazer"
+            if ok:
+                _hist(item, "Removido do calendário")
+        elif item.get("status") == "feito":
+            # ☑ no título: só conta a entrega feita depois do Feito ("enviado"); uma criação antiga em
+            # andamento que termine agora não leva o ☑, então continua pendente
+            if ok and item.get("atualizar") == "enviado":
+                item["atualizar"] = False
+                item["erro"] = None
+                _hist(item, "Marcado ☑ no calendário", "sucesso")
+            elif not ok:
+                item["atualizar"] = True
+                item["tentativas"] = int(item.get("tentativas") or 0) + 1
+                item["erro"] = (erro or "erro desconhecido")[:300]
         elif item.get("status") in ("desfazer", "cancelado", "desfeito"):
             # Pedro desfez enquanto a extensão criava: o evento que acabou de nascer precisa sair
             # (ok → "desfazer", a extensão recebe "remover"); se a criação falhou, não há o que remover
@@ -429,11 +545,14 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
             if calendario:
                 item["calendario"] = calendario
             item["erro"] = None
+            _hist(item, f"Incluído no calendário “{item.get('calendario')}”", "sucesso")
         else:
             item["status"] = "erro"
             item["tentativas"] = int(item.get("tentativas") or 0) + 1
             item["erro"] = (erro or "erro desconhecido")[:300]
-        avisar = ok and acao == "criar" and item["status"] == "no_calendario" and item.get("notificar")
+            _hist(item, f"Erro ao incluir no calendário: {item['erro']}", "erro")
+        incluido = ok and acao == "criar" and item["status"] == "no_calendario"
+        avisar = incluido and item.get("notificar")
         if avisar:
             item["notificar"] = False   # uma notificação por item, mesmo se a extensão gravar de novo
         item["atualizado_em"] = now
@@ -441,7 +560,7 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
     log(f"[agenda] {aid} ← extensão: {acao} {'ok' if ok else 'ERRO ' + (erro or '')[:80]}")
     if avisar:
         notificar_item(item)
-    elif ok and acao == "criar":
+    elif incluido:
         core._notify("Alfred — agenda", f"No calendário “{item.get('calendario')}”: {item['titulo']} — {_quando_legivel(item)}")
     return item
 
@@ -453,12 +572,57 @@ def desfazer(aid: str) -> dict:
         if not item:
             raise KeyError(f"Item da agenda não encontrado: {aid}")
         st = item.get("status")
-        if st in ("desfeito", "cancelado", "desfazer"):   # idempotente: 2º "Desfazer" não vira "cancelado"
+        # idempotente: 2º "Desfazer" não vira "cancelado"; o que já foi feito não se desfaz
+        if st in ("desfeito", "cancelado", "desfazer", "feito"):
             return item
         item["status"] = "desfazer" if st in ("no_calendario", "em_execucao") else "cancelado"
-        item["atualizado_em"] = core._now().isoformat(timespec="minutes")
+        item["atualizado_em"] = item["desfeito_em"] = core._now().isoformat(timespec="minutes")
+        _hist(item, "Você desfez" + (" — sai do calendário na próxima sincronização" if item["status"] == "desfazer" else ""))
         _save(data)
     log(f"[agenda] {aid} → {item['status']}")
+    return item
+
+
+class ItemDesfeito(ValueError):
+    """Feito pedido para um item que Pedro já desfez."""
+
+
+def concluir(aid: str, via: str = "painel", propagar: bool = True) -> dict:
+    """
+    Feito: status feito, a extensão regrava o evento com ☑ no título e a tarefa do tasks.yml fecha como
+    done. Item de promessa → a promessa vira cumprida (propagar=False quando quem chama é o promessas.py).
+    Idempotente; item desfeito/cancelado levanta ItemDesfeito.
+    """
+    with _trava():
+        data = _load()
+        item = next((i for i in data["itens"] if i.get("id") == aid), None)
+        if not item:
+            raise KeyError(f"Item da agenda não encontrado: {aid}")
+        st = item.get("status")
+        if st == "feito":
+            return item
+        if st in ("desfazer", "desfeito", "cancelado"):
+            raise ItemDesfeito(f"“{item.get('titulo')}” foi desfeito; não dá para marcar como feito.")
+        now = core._now().isoformat(timespec="minutes")
+        item.update({"status": "feito", "feito_em": now, "atualizado_em": now, "atualizar": True,
+                     "tentativas": 0, "erro": None})
+        _hist(item, f"Marcado como feito ({via})", "sucesso")
+        _save(data)
+    if item.get("task_id"):
+        try:
+            core._fechar_task(item["task_id"], "done")
+        except Exception as e:
+            log(f"[agenda] tarefa #{item['task_id']} não fechada: {e}")
+    origem = item.get("origem") or {}
+    if propagar and origem.get("canal") == "promessa" and origem.get("promessa_id"):
+        try:
+            import promessas
+            promessas.marcar(origem["promessa_id"], "cumprida", f"marcada como feita ({via})")
+        except KeyError:
+            pass                        # promessa já saiu do registro (relatório semanal)
+        except Exception as e:
+            log(f"[agenda] promessa {origem['promessa_id']} não marcada como cumprida: {e}")
+    log(f"[agenda] {aid} → feito ({via})")
     return item
 
 
@@ -497,10 +661,14 @@ def texto_notificacao(item: dict) -> tuple[str, str]:
 # ══════════════════════════════════════════════════════════════
 
 def adicionar_parser(sub) -> None:
-    sp = sub.add_parser("agenda", help="compromissos do Alfred: listar | anotar \"texto\" | desfazer ID | ics | fila")
-    sp.add_argument("acao", nargs="?", default="listar", choices=("listar", "anotar", "desfazer", "ics", "fila"))
+    sp = sub.add_parser("agenda", help="compromissos do Alfred: listar | anotar \"texto\" | desfazer ID | feito ID | "
+                                       "resumir [ID…] | semana | ics | fila")
+    sp.add_argument("acao", nargs="?", default="listar",
+                    choices=("listar", "anotar", "desfazer", "feito", "resumir", "semana", "ics", "fila"))
     sp.add_argument("arg", nargs="*", default=[])
-    sp.add_argument("--todos", action="store_true", help="listar: inclui desfeitos/cancelados")
+    sp.add_argument("--todos", action="store_true", help="listar: inclui desfeitos/cancelados/feitos")
+    sp.add_argument("--se-devido", action="store_true", help="semana: só roda no domingo (ou se o último passou de 7 dias)")
+    sp.add_argument("--simular", action="store_true", help="semana: mostra o relatório sem gravar nem apagar")
     sp.add_argument("--sem-notificar", action="store_true")
     sp.add_argument("--json", action="store_true")
     sp = sub.add_parser("_aguardar-agenda")
@@ -510,7 +678,7 @@ def adicionar_parser(sub) -> None:
 def cmd_agenda(args) -> int:
     import json
     if args.acao == "listar":
-        itens = listar() if args.todos else [i for i in listar() if i.get("status") not in ("desfeito", "cancelado")]
+        itens = listar() if args.todos else [i for i in listar() if i.get("status") not in FECHADOS]
         if args.json:
             print(json.dumps(itens, ensure_ascii=False, indent=2, default=str))
             return 0
@@ -549,6 +717,27 @@ def cmd_agenda(args) -> int:
             return 1
         print(f"{item['id']} → {item['status']}")
         return 0
+    if args.acao == "feito":
+        if not args.arg:
+            print("Uso: agenda feito <id>")
+            return 1
+        try:
+            item = concluir(args.arg[0], via="terminal")
+        except (KeyError, ItemDesfeito) as e:
+            print(f"Erro: {e}")
+            return 1
+        print(f"{item['id']} → feito")
+        return 0
+    if args.acao == "resumir":
+        # sem id: os itens abertos que ainda não têm Resumo do Alfred (criados antes dele existir)
+        ids = args.arg or [i["id"] for i in listar() if i.get("status") not in FECHADOS and not i.get("resumo")]
+        for aid in ids:
+            item = resumir_item(aid)
+            print(f"{aid}: {(item or {}).get('resumo') or 'sem resumo (LLM fora do ar ou id inexistente)'}")
+        return 0
+    if args.acao == "semana":
+        import agenda_semanal
+        return agenda_semanal.cmd(args)
     if args.acao == "ics":
         print(feed_ics(), end="")
         return 0

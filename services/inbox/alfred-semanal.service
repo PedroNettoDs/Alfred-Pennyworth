@@ -1,5 +1,5 @@
 [Unit]
-Description=Alfred — podcast a cada 3 dias (jornal do e-mail + briefings → diálogo em 2 vozes + manifesto)
+Description=Alfred — fechamento semanal da agenda (domingo) + podcast a cada 3 dias (jornal do e-mail + briefings → diálogo em 2 vozes + manifesto)
 After=network-online.target
 # Disparado por alfred-semanal.timer. Unit de USUÁRIO: instale em ~/.config/systemd/user/
 
@@ -7,6 +7,8 @@ After=network-online.target
 Environment=ALFRED_AUTOMACAO=1
 Type=oneshot
 WorkingDirectory=@ALFRED_DIR@/services/inbox
+# "-": falha no fechamento da agenda não impede o podcast
+ExecStart=-"@ALFRED_DIR@/services/inbox/run.sh" agenda semana --se-devido
 ExecStart="@ALFRED_DIR@/services/inbox/run.sh" podcast --se-devido
 StandardOutput=journal
 StandardError=journal

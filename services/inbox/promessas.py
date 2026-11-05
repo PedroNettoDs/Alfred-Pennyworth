@@ -16,7 +16,9 @@ Fluxo (no fim do ciclo do e-mail, 07:30 / 18:30, e em `run.sh promessas varrer`)
         atrasada → agenda.adicionar("Atrasado: …", tipo tarefa) no próximo dia às 09:00
     "Desfazer" na notificação da agenda (antes do prazo) → descartada: não volta como atrasada.
 
-Status: aberta → cumprida | atrasada | descartada ; atrasada → cumprida | descartada (CLI feita / descartar).
+Status: aberta → cumprida | atrasada | descartada ; atrasada → cumprida | descartada (CLI feita / descartar,
+        Feito no painel da agenda). Cumprida → os itens dela na agenda viram feito (☑ no calendário).
+        Domingo, agenda_semanal.py apaga as cumpridas e descartadas (ficam no relatório da semana).
 Ordem das travas: promessas sozinha (a agenda é chamada fora dela).
 """
 
@@ -134,6 +136,19 @@ def listar(status: Optional[str] = None) -> list[dict]:
 
 def obter(pid: str) -> Optional[dict]:
     return next((p for p in _load()["promessas"] if p.get("id") == pid), None)
+
+
+def remover(ids) -> int:
+    """Apaga do promessas.yml as cumpridas/descartadas com estes ids — relatório semanal. → quantas saíram."""
+    ids = set(ids)
+    with _trava():
+        data = _load()
+        antes = len(data["promessas"])
+        data["promessas"] = [p for p in data["promessas"]
+                             if not (p.get("id") in ids and p.get("status") in ("cumprida", "descartada"))]
+        if len(data["promessas"]) != antes:
+            _save(data)
+    return antes - len(data["promessas"])
 
 
 def _atualizar(pid: str, **campos) -> Optional[dict]:
@@ -497,6 +512,7 @@ def verificar(agora: Optional[datetime] = None, msgs_email: Optional[list[dict]]
             continue
         if veredito["cumprida"] == "sim":
             _atualizar(p["id"], status="cumprida", motivo=veredito["motivo"], verificada_em=agora.isoformat(timespec="minutes"))
+            _fechar_na_agenda(p, "cumprida", "o Alfred viu que você cumpriu")
             res["cumpridas"].append(p["id"])
             log(f"[promessas] {p['id']} cumprida: {veredito['motivo']}")
             continue
@@ -553,17 +569,31 @@ def ciclo(inbox_cfg: dict, retroativo_dias: Optional[float] = None, notificar: b
     return resumo
 
 
-def marcar(pid: str, status: str, motivo: str = "") -> dict:
-    """CLI: feita → cumprida · descartar → descartada. Tira da agenda o que ainda não aconteceu."""
-    p = obter(pid)
-    if not p:
-        raise KeyError(f"Promessa não encontrada: {pid}")
+def _fechar_na_agenda(p: dict, status: str, via: str) -> None:
+    """cumprida → os itens da promessa na agenda viram feito (☑ no calendário) · descartada → sai da agenda
+    o que ainda não aconteceu."""
     agora = core._now()
     for aid in (p.get("agenda_id"), p.get("agenda_atraso_id")):
         item = agenda.obter(aid) if aid else None
-        if item and (core._parse_dt(str(item.get("inicio"))) or agora) > agora:
+        if not item or item.get("status") in ("feito", "desfazer", "desfeito", "cancelado"):
+            continue
+        if status == "cumprida":
+            agenda.concluir(aid, via=via, propagar=False)
+        elif (core._parse_dt(str(item.get("inicio"))) or agora) > agora:
             agenda.desfazer(aid)
-    return _atualizar(pid, status=status, motivo=motivo or f"marcada pelo terminal em {agora:%d/%m %H:%M}")
+
+
+def marcar(pid: str, status: str, motivo: str = "") -> dict:
+    """CLI feita / painel Feito → cumprida · descartar → descartada; a agenda acompanha (_fechar_na_agenda)."""
+    p = obter(pid)
+    if not p:
+        raise KeyError(f"Promessa não encontrada: {pid}")
+    if p.get("status") == status:
+        return p
+    agora = core._now()
+    motivo = motivo or f"marcada pelo terminal em {agora:%d/%m %H:%M}"
+    _fechar_na_agenda(p, status, motivo)
+    return _atualizar(pid, status=status, motivo=motivo)
 
 
 # ══════════════════════════════════════════════════════════════

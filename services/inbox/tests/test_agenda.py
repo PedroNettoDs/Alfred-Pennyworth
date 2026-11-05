@@ -27,6 +27,8 @@ os.environ.setdefault("OLLAMA_BASE_URL", "http://127.0.0.1:9")
 
 import core      # noqa: E402
 import agenda    # noqa: E402
+import agenda_semanal  # noqa: E402
+import promessas  # noqa: E402
 import whatsapp  # noqa: E402
 from _shared import lib_whatsapp  # noqa: E402
 
@@ -49,6 +51,9 @@ class Base(unittest.TestCase):
         cls.patches = [
             mock.patch.object(core, "_notify", lambda *a, **k: None),
             mock.patch.object(core, "_iniciar_aguardador", lambda c, i: cls.notificados.append((c, i))),
+            mock.patch.object(agenda, "ollama_generate_json", lambda *a, **k: None),   # Resumo do Alfred (TestResumo troca)
+            mock.patch.object(agenda_semanal, "estado_file", lambda: cls.tmp / "agenda_semanal.json"),
+            mock.patch.object(agenda_semanal, "dados_laya", lambda: cls.tmp / "laya"),
             mock.patch.object(lib_whatsapp, "ENVIADOS_FILE", cls.tmp / "enviados.jsonl"),
             mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", cls.tmp / "ids_enviados.json"),
             mock.patch.object(whatsapp, "SEEN_FILE", cls.tmp / "seen.json"),
@@ -71,6 +76,7 @@ class Base(unittest.TestCase):
             (self.tmp / "vault" / f).unlink(missing_ok=True)
         for f in self.tmp.glob("*.json*"):
             f.unlink()
+        shutil.rmtree(self.tmp / "laya", ignore_errors=True)
         self.notificados.clear()
 
 
@@ -283,6 +289,160 @@ class TestLimparAudios(Base):
         p = core.obter_pendencia("wa-velho")
         self.assertIsNone(p["arquivos"]["mp3"])
         self.assertIn("audio_removido_em", p)
+
+
+class TestResumo(Base):
+    def test_adicionar_grava_resumo_do_alfred(self):
+        r = {"resumo": "Reunião com a Attano sobre o orçamento; leve a proposta.", "urgencia": "alta",
+             "prioridade": "alta", "motivo": "amanhã, trabalho"}
+        with mock.patch.object(agenda, "ollama_generate_json", return_value=r) as llm:
+            a = agenda.adicionar("Reunião com Attano", _amanha(14), descricao="Mensagem de Ana (WhatsApp): “amanhã 14h”",
+                                 origem={"canal": "whatsapp", "contato": "Ana"}, notificar=False)
+        self.assertIn("mensagem de WhatsApp de Ana", llm.call_args.args[0])
+        item = agenda.obter(a["id"])
+        self.assertEqual((item["resumo"], item["urgencia"], item["prioridade"]), (r["resumo"], "alta", "alta"))
+        self.assertEqual(a["resumo"], r["resumo"])
+
+    def test_llm_fora_do_ar_cria_sem_resumo(self):
+        a = agenda.adicionar("Consulta", _amanha(9), notificar=False)
+        self.assertNotIn("resumo", agenda.obter(a["id"]))
+        self.assertEqual(agenda.obter(a["id"])["status"], "pendente")
+
+    def test_nivel_invalido_vira_none(self):
+        with mock.patch.object(agenda, "ollama_generate_json",
+                               return_value={"resumo": "x", "urgencia": "urgentissima", "prioridade": "baixa", "motivo": ""}):
+            a = agenda.adicionar("Consulta", _amanha(9), notificar=False)
+        self.assertEqual((agenda.obter(a["id"])["urgencia"], agenda.obter(a["id"])["prioridade"]), (None, "baixa"))
+
+    def test_historico(self):
+        a = agenda.adicionar("Consulta", _amanha(9), notificar=False)
+        agenda.fila_extensao()
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
+        agenda.desfazer(a["id"])
+        agenda.registrar_resultado(a["id"], "remover", True)
+        textos = [h["texto"] for h in agenda.obter(a["id"])["historico"]]
+        self.assertEqual(textos[0], "Anotado pelo Alfred")
+        self.assertIn("Incluído no calendário “Agenda”", textos)
+        self.assertTrue(any(t.startswith("Você desfez") for t in textos))
+        self.assertEqual(textos[-1], "Removido do calendário")
+
+
+class TestFeito(Base):
+    def _no_calendario(self, titulo="Pagar boleto da Vivo", tipo="tarefa"):
+        a = agenda.adicionar(titulo, _amanha(10), tipo=tipo, notificar=False)
+        agenda.fila_extensao()
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
+        return a
+
+    def test_feito_regrava_com_check_e_fecha_a_tarefa(self):
+        a = self._no_calendario()
+        item = agenda.concluir(a["id"])
+        self.assertEqual((item["status"], item["atualizar"]), ("feito", True))
+        tasks = (self.tmp / "vault" / "tasks.yml").read_text(encoding="utf-8")
+        self.assertIn("status: done", tasks)
+        fila = agenda.fila_extensao()
+        self.assertEqual([(i["id"], i["acao"]) for i in fila], [(a["id"], "criar")])
+        self.assertIn("SUMMARY:☑ Pagar boleto da Vivo", fila[0]["ics"])
+        self.assertEqual(agenda.fila_extensao(), [])                       # não reenvia enquanto espera
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
+        item = agenda.obter(a["id"])
+        self.assertEqual((item["status"], item["atualizar"]), ("feito", False))
+        self.assertEqual(item["historico"][-1]["texto"], "Marcado ☑ no calendário")
+        self.assertEqual(agenda.fila_extensao(), [])
+        self.assertEqual(self.notificados, [])
+
+    def test_criacao_antiga_terminando_nao_conta_como_check(self):
+        a = agenda.adicionar("Aula aberta", _amanha(20), notificar=False)
+        agenda.fila_extensao()                                             # extensão criando sem o ☑
+        agenda.concluir(a["id"])
+        agenda.registrar_resultado(a["id"], "criar", True, calendario="Agenda")
+        self.assertIs(agenda.obter(a["id"])["atualizar"], True)            # o ☑ ainda precisa ir
+
+    def test_erro_ao_regravar_tenta_de_novo(self):
+        a = self._no_calendario()
+        agenda.concluir(a["id"])
+        agenda.fila_extensao()
+        agenda.registrar_resultado(a["id"], "criar", False, erro="offline")
+        self.assertIs(agenda.obter(a["id"])["atualizar"], True)
+        self.assertEqual(len(agenda.fila_extensao()), 1)
+
+    def test_desfeito_nao_vira_feito_e_feito_nao_se_desfaz(self):
+        a = agenda.adicionar("Prova", _amanha(19), notificar=False)
+        agenda.desfazer(a["id"])
+        with self.assertRaises(agenda.ItemDesfeito):
+            agenda.concluir(a["id"])
+        b = self._no_calendario("Dentista", "evento")
+        agenda.concluir(b["id"])
+        self.assertEqual(agenda.desfazer(b["id"])["status"], "feito")
+        self.assertEqual(agenda.concluir(b["id"])["status"], "feito")    # idempotente
+
+
+class TestSemanal(Base):
+    def setUp(self):
+        super().setUp()
+        for f in ("promessas.yml",):
+            (self.tmp / "vault" / "agenda" / f).unlink(missing_ok=True)
+
+    def test_devido(self):
+        domingo = datetime(2026, 11, 8, 19, 0).astimezone()
+        self.assertTrue(agenda_semanal.devido(domingo))
+        self.assertFalse(agenda_semanal.devido(domingo - timedelta(days=1)))     # nunca rodou: espera o domingo
+        agenda_semanal.estado_file().write_text(json.dumps({"ultimo": domingo.isoformat()}))
+        self.assertFalse(agenda_semanal.devido(domingo + timedelta(hours=1)))    # já rodou nesta semana
+        self.assertFalse(agenda_semanal.devido(domingo + timedelta(days=3)))
+        self.assertTrue(agenda_semanal.devido(domingo + timedelta(days=7)))
+        self.assertTrue(agenda_semanal.devido(domingo + timedelta(days=8)))      # domingo perdido (PC desligado)
+
+    def test_relatorio_laya_e_limpeza(self):
+        wa = {"canal": "whatsapp", "contato": "Ana"}
+        feito = agenda.adicionar("Reunião com Ana", _amanha(14), descricao="Mensagem de Ana (WhatsApp): “amanhã 14h?”\n"
+                                 "Pendência Alfred: x", origem=wa, notificar=False)
+        agenda.concluir(feito["id"])
+        agenda.fila_extensao()
+        agenda.registrar_resultado(feito["id"], "criar", True)            # ☑ chegou ao calendário
+        alarme = agenda.adicionar("Jogo do Brasil", _amanha(16), descricao="Mensagem de Ana (WhatsApp): “viu o jogo?”",
+                                  origem=wa, notificar=False)
+        agenda.desfazer(alarme["id"])                                     # antes do horário: alarme falso
+        limpeza = agenda.adicionar("Café", core._now() - timedelta(hours=2), descricao="Mensagem de Ana: “café?”",
+                                   origem=wa, notificar=False)
+        agenda.desfazer(limpeza["id"])                                    # depois do horário: só limpeza
+        digitado = agenda.adicionar("Academia", _amanha(7), origem={"canal": "terminal"}, notificar=False)
+        agenda.concluir(digitado["id"])
+        agenda.fila_extensao()
+        agenda.registrar_resultado(digitado["id"], "criar", True)
+        a_caminho = agenda.adicionar("Pagar Vivo", _amanha(9), origem=wa, notificar=False)
+        agenda.concluir(a_caminho["id"])                                  # ☑ ainda não foi: fica
+        aberto = agenda.adicionar("Dentista", _amanha(11), origem=wa, notificar=False)
+        pc = promessas.registrar({"o_que": "Mandar o guia", "para_quem": "Matheus", "trecho": "eu te passo o guia",
+                                  "prazo": _amanha(9), "dia_inteiro": True, "prazo_assumido": True, "confianca": 0.9},
+                                 {"canal": "whatsapp", "contato": "Matheus"}, core._now(), notificar=False)
+        promessas.marcar(pc["id"], "cumprida")
+        pd = promessas.registrar({"o_que": "Ver isso", "para_quem": "João", "trecho": "pode ser",
+                                  "prazo": _amanha(9), "dia_inteiro": True, "prazo_assumido": True, "confianca": 0.9},
+                                 {"canal": "whatsapp", "contato": "João"}, core._now(), notificar=False)
+        promessas.marcar(pd["id"], "descartada")
+
+        sim = agenda_semanal.processar(simular=True)
+        self.assertIn("## Feitos", sim["texto"])
+        self.assertFalse(Path(sim["relatorio"]).exists())
+        self.assertEqual(len(agenda.listar()), 8)                          # simular não apaga
+
+        r = agenda_semanal.processar()
+        texto = Path(r["relatorio"]).read_text(encoding="utf-8")
+        for trecho in ("Reunião com Ana", "Jogo do Brasil", "Mandar o guia", "1 antes do horário"):
+            self.assertIn(trecho, texto)
+        restantes = {i["id"] for i in agenda.listar()}
+        # a promessa cumprida fechou o próprio item na agenda: ☑ ainda a caminho, então fica
+        item_pc = pc["agenda_id"]
+        self.assertEqual(restantes, {a_caminho["id"], aberto["id"], item_pc})
+        self.assertEqual([p["id"] for p in promessas.listar()], [])
+        ex = [json.loads(l) for l in (self.tmp / "laya" / "agenda.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(sorted(e["expected"]["compromisso"] for e in ex), ["nao", "sim"])
+        self.assertTrue(all("Pendência Alfred" not in e["state"] for e in ex))
+        self.assertIn("questions", ex[0])
+        pr = [json.loads(l) for l in (self.tmp / "laya" / "promessas.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(sorted(e["expected"]["promessa"] for e in pr), ["nao", "sim"])
+        self.assertTrue(agenda_semanal.estado_file().exists())
 
 
 if __name__ == "__main__":

@@ -743,7 +743,7 @@ class TestAgenda(Base):
                 mock.patch.object(agenda, "detectar_compromisso", detectar):
             r = lf.executar("criar_compromisso", {"texto": "marca dentista daqui a 2 dias às 15h"})
             self.assertEqual(detectar.call_args.kwargs["para_mim"], True)   # Pedro anotando para ele mesmo
-            self.assertIn("o próprio Pedro", llm.call_args.args[0])
+            self.assertIn("o próprio Pedro", llm.call_args_list[0].args[0])   # 1ª chamada: detecção; 2ª: resumo
             self.assertIn(f"Anotado na agenda: Dentista (evento) — {dia:%d/%m}", r)
             self.assertIn("15:00 · Clínica Sorriso", r)
             itens = agenda.listar()

@@ -845,6 +845,33 @@ class TestAgenda(Base):
         html = self.guardar(cli.get("/painel/parcial/agenda")).text
         self.assertIn("Desfeitos e cancelados", html)
 
+    def test_feito_detalhe_e_concluidos(self):
+        amanha = core._now().replace(hour=15, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        r = {"resumo": "Leve a proposta impressa.", "urgencia": "alta", "prioridade": "media", "motivo": "é amanhã"}
+        with mock.patch.object(agenda, "ollama_generate_json", return_value=r):
+            a = agenda.adicionar("Reunião com a Attano", amanha, descricao="Mensagem de Ana (WhatsApp): “amanhã 15h?”",
+                                 origem={"canal": "whatsapp", "contato": "Ana"}, notificar=False)
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/agenda")).text
+        self.assertIn(f'href="/painel/agenda/{a["id"]}"', html)
+        self.assertIn("Urgência alta", html)
+        html = self.guardar(cli.get(f"/painel/agenda/{a['id']}")).text
+        for trecho in ("Resumo do Alfred", "Leve a proposta impressa.", "Média", "Contexto", "amanhã 15h?",
+                       "Histórico", "Anotado pelo Alfred", "Feito", "Desfazer"):
+            self.assertIn(trecho, html)
+        token = self.csrf(cli)
+        resp = self.acao(cli, f"/painel/api/agenda/{a['id']}/feito", csrf=token)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertIn("☑", resp.json()["mensagem"])
+        self.assertEqual(agenda.obter(a["id"])["status"], "feito")
+        self.assertEqual(self.acao(cli, f"/painel/api/agenda/{a['id']}/feito", csrf=token).status_code, 409)
+        self.assertEqual(self.acao(cli, f"/painel/api/agenda/{a['id']}/desfazer", csrf=token).status_code, 409)
+        self.assertEqual(self.acao(cli, "/painel/api/agenda/x/feito", csrf=token).status_code, 404)
+        html = self.guardar(cli.get("/painel/parcial/agenda")).text
+        self.assertIn("Concluídos", html)
+        self.assertIn("feito em", html)
+        self.assertEqual(cli.get("/painel/agenda/nao-existe").status_code, 404)
+
     def test_vazia(self):
         self.assertIn("A agenda está vazia.", self.guardar(self.entrar().get("/painel/agenda")).text)
 

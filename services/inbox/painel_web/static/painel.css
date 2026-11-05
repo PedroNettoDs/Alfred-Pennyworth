@@ -610,6 +610,8 @@ textarea.entrada { resize: vertical; }
 .agenda-item + .agenda-item { border-top: 1px solid var(--borda); }
 .agenda-item__quando { font-variant-numeric: tabular-nums; font-weight: 600; }
 .agenda-item__titulo { font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.agenda-item__titulo a { color: inherit; text-decoration: none; }
+.agenda-item__titulo a:hover, .agenda-item__titulo a:focus-visible { text-decoration: underline; }
 .agenda-item__origem { color: var(--texto-suave); font-size: var(--t-xs); }
 .agenda-item--inativo .agenda-item__titulo { color: var(--texto-suave); font-weight: 500; text-decoration: line-through; text-decoration-color: var(--borda-forte); }
 .agenda-item .mensagem { grid-column: 1 / -1; margin-top: 0; }

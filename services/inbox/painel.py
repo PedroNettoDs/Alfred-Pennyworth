@@ -421,7 +421,7 @@ ROTULO_STATUS = {
     "aguardando": "aguardando", "respondida": "respondida", "respondida_manual": "respondida pelo celular",
     "vou": "vou", "nao_vou": "não vou", "ignorada": "ignorada", "expirada": "expirada",
     "pendente": "pendente", "no_calendario": "no calendário", "em_execucao": "em execução",
-    "desfazer": "remoção pendente", "desfeito": "desfeito", "cancelado": "cancelado", "erro": "erro",
+    "desfazer": "remoção pendente", "desfeito": "desfeito", "cancelado": "cancelado", "erro": "erro", "feito": "feito",
     "aprovado": "aprovado", "recusado": "recusado", "expirado": "expirado", "concluido": "concluído",
     "simulado": "simulado", "parcial": "parcial", "falhou": "falhou",
 }
@@ -583,26 +583,88 @@ def _agenda_vm(i: dict, agora: datetime) -> dict:
         de = "Nota para si mesmo"
     elif canal == "email":
         de = "E-mail" + (f" · {origem.get('assunto')}" if origem.get("assunto") else "")
+    elif canal == "promessa":
+        de = ("Promessa atrasada" if origem.get("atraso") else "Promessa") + (f" a {origem.get('contato')}" if origem.get("contato") else "")
     else:
         de = {"terminal": "Terminal", "api": "API", "manual": "Manual"}.get(canal, canal or "Manual")
     inicio = i.get("inicio")
     quando = fmt_data(inicio) + (" (dia inteiro)" if i.get("dia_inteiro") else "")
     st = i.get("status")
-    return {"id": i.get("id"), "titulo": i.get("titulo"), "quando": quando, "iso": _iso(inicio) or str(inicio or ""),
-            "relativo": fmt_relativo(inicio, agora), "origem": de, "status": st, "local": i.get("local"),
-            "pode_desfazer": st in AGENDA_DESFAZIVEIS, "inativo": st in ("desfeito", "cancelado"),
+    return {"id": i.get("id"), "url": f"/painel/agenda/{i.get('id')}", "titulo": i.get("titulo"), "quando": quando,
+            "iso": _iso(inicio) or str(inicio or ""), "relativo": fmt_relativo(inicio, agora), "origem": de,
+            "status": st, "local": i.get("local"), "urgencia": i.get("urgencia"),
+            "pode_desfazer": st in AGENDA_DESFAZIVEIS, "pode_concluir": st in AGENDA_DESFAZIVEIS,
+            "inativo": st in ("desfeito", "cancelado"), "concluido": st == "feito",
+            "feito_em": fmt_data(i.get("feito_em")), "_feito_ts": _ts(i.get("feito_em")),
             "erro": i.get("erro") if st == "erro" else None}
 
 
 AGENDA_DESFAZIVEIS = ("pendente", "no_calendario", "em_execucao", "erro")
 
 
-def _agenda() -> tuple[list[dict], list[dict]]:
+def _agenda() -> tuple[list[dict], list[dict], list[dict]]:
+    """→ (próximos, concluídos, desfeitos/cancelados)."""
     agora = _agora()
     itens = [_agenda_vm(i, agora) for i in agenda.listar()]
-    ativos = sorted([i for i in itens if not i["inativo"]], key=lambda i: _ts(i["iso"]) or 0)
+    ativos = sorted([i for i in itens if not i["inativo"] and not i["concluido"]], key=lambda i: _ts(i["iso"]) or 0)
+    concluidos = sorted([i for i in itens if i["concluido"]], key=lambda i: -i["_feito_ts"])
     inativos = sorted([i for i in itens if i["inativo"]], key=lambda i: -(_ts(i["iso"]) or 0))
-    return ativos, inativos
+    return ativos, concluidos, inativos
+
+
+ROTULO_NIVEL = {"alta": "Alta", "media": "Média", "baixa": "Baixa"}
+
+
+def _historico_agenda(i: dict, promessa: Optional[dict]) -> list[dict]:
+    """historico do item (desde que existe) ou, nos itens antigos, o que dá para tirar das datas gravadas."""
+    ev = []
+    if promessa and promessa.get("dito_em"):
+        ev.append(_evento_hist(f"Você prometeu a {promessa.get('para_quem') or 'alguém'}", promessa["dito_em"], "",
+                               f"“{promessa.get('trecho')}”" if promessa.get("trecho") else ""))
+    if i.get("historico"):
+        ev += [_evento_hist(h.get("texto") or "", h.get("em"), h.get("tom") or "") for h in i["historico"]]
+    else:
+        ev.append(_evento_hist("Anotado pelo Alfred", i.get("criado_em")))
+        if i.get("no_calendario_em"):
+            ev.append(_evento_hist(f"Incluído no calendário “{i.get('calendario')}”", i["no_calendario_em"], "sucesso"))
+        if i.get("status") in ("desfeito", "cancelado", "desfazer"):
+            ev.append(_evento_hist("Você desfez", i.get("desfeito_em") or i.get("atualizado_em")))
+    if promessa and promessa.get("status") in ("cumprida", "atrasada") and promessa.get("motivo"):
+        ev.append(_evento_hist(f"Promessa {promessa['status']}", promessa.get("verificada_em") or promessa.get("atualizado_em"),
+                               "sucesso" if promessa["status"] == "cumprida" else "aguardando", promessa["motivo"]))
+    return sorted(ev, key=lambda e: e["_ts"] or 0) if all(e["_ts"] for e in ev) else ev
+
+
+def _dados_agenda_item(i: dict) -> dict:
+    vm = _agenda_vm(i, _agora())
+    origem = i.get("origem") or {}
+    promessa = None
+    if origem.get("canal") == "promessa" and origem.get("promessa_id"):
+        import promessas
+        promessa = promessas.obter(origem["promessa_id"])
+    pid = origem.get("pendencia_id")
+    conf = origem.get("confianca")
+    return {
+        "i": vm, "item": i, "resumo": i.get("resumo") or "",
+        "analise": [("Urgência", ROTULO_NIVEL.get(i.get("urgencia"))), ("Prioridade", ROTULO_NIVEL.get(i.get("prioridade"))),
+                    ("Motivo", i.get("motivo"))],
+        "dados": [("Tipo", {"evento": "Evento", "tarefa": "Tarefa", "lembrete": "Lembrete"}.get(i.get("tipo"), i.get("tipo"))),
+                  ("Quando", vm["quando"]), ("Local", i.get("local")), ("De onde veio", vm["origem"]),
+                  ("Calendário", i.get("calendario")), ("Confiança da detecção", f"{round(float(conf) * 100)}%"
+                                                         if isinstance(conf, (int, float)) else None),
+                  ("Tarefa", f"#{i['task_id']} em tasks.yml" if i.get("task_id") else None)],
+        "contexto": i.get("descricao") or "",
+        "pendencia_url": f"/painel/pendencias/{pid}" if pid and core.obter_pendencia(pid) else None,
+        "promessa": promessa,
+        "dados_promessa": [("O quê", promessa.get("o_que")), ("Para", promessa.get("para_quem")),
+                           ("Dito em", fmt_data(promessa.get("dito_em"))),
+                           ("Prazo", fmt_data(str(promessa.get("prazo") or "")[:10] if promessa.get("dia_inteiro")
+                                              else promessa.get("prazo"))
+                                     + (" (assumido)" if promessa.get("prazo_assumido") else "")),
+                           ("Situação", promessa.get("status"))] if promessa else [],
+        "historico": _historico_agenda(i, promessa),
+        "ics_pendente": i.get("status") == "feito" and bool(i.get("atualizar")),
+    }
 
 
 def _motivo_lote(lote: dict) -> str:
@@ -673,7 +735,7 @@ def _dados_inicio() -> dict:
     agora = _agora()
     aguard = _lista_pendencias("aguardando", "", "")
     recentes = sorted(aguard, key=lambda x: -_ts(x["iso"]))[:5]
-    ativos, _ = _agenda()
+    ativos = _agenda()[0]
     proximos = [i for i in ativos if i["status"] != "desfazer"   # Pedro mandou tirar do calendário
                 and (_ts(i["iso"]) or 0) >= (agora - timedelta(hours=1)).timestamp()][:4]
     lotes, _erro_lim = _limpeza()
@@ -999,8 +1061,18 @@ def pendencia(request: Request, pid: str):
 def tela_agenda(request: Request):
     if not _nonce_da_sessao(request):
         return _para_login(request)
-    ativos, inativos = _agenda()
-    return _pagina(request, "agenda.html", "agenda", ativos=ativos, inativos=inativos)
+    ativos, concluidos, inativos = _agenda()
+    return _pagina(request, "agenda.html", "agenda", ativos=ativos, concluidos=concluidos, inativos=inativos)
+
+
+@router.get("/agenda/{aid}")
+def agenda_item(request: Request, aid: str):
+    if not _nonce_da_sessao(request):
+        return _para_login(request)
+    item = agenda.obter(aid)
+    if not item:
+        return _pagina(request, "nao_encontrada.html", "agenda", status=404)
+    return _pagina(request, "agenda_item.html", "agenda", **_dados_agenda_item(item))
 
 
 @router.get("/limpeza")
@@ -1048,8 +1120,8 @@ def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Option
     elif nome == "inicio":
         html = _render("_inicio.html", **_dados_inicio())
     elif nome == "agenda":
-        ativos, inativos = _agenda()
-        html = _render("_agenda_lista.html", ativos=ativos, inativos=inativos)
+        ativos, concluidos, inativos = _agenda()
+        html = _render("_agenda_lista.html", ativos=ativos, concluidos=concluidos, inativos=inativos)
     elif nome == "limpeza":
         lotes, erro = _limpeza()
         html = _render("_limpeza_lista.html", lotes=lotes, erro_limpeza=erro)
@@ -1243,6 +1315,30 @@ async def acao_desfazer(request: Request, aid: str):
     else:
         msg = "Item cancelado. Ele não irá para o calendário."
     return JSONResponse({"ok": True, "mensagem": msg, "status": r.get("status")})
+
+
+@router.post("/api/agenda/{aid}/feito")
+async def acao_feito(request: Request, aid: str):
+    if recusa := _checar_post(request):
+        return recusa
+
+    def _fazer():
+        item = agenda.obter(aid)
+        if not item:
+            return _erro(404, "Item da agenda não encontrado.")
+        st = item.get("status")
+        if st not in AGENDA_DESFAZIVEIS:
+            return _erro(409, f"Este item já foi resolvido ({ROTULO_STATUS.get(st, st)}).", status=st)
+        try:
+            return agenda.concluir(aid, via="painel")
+        except agenda.ItemDesfeito as e:
+            return _erro(409, str(e), status="desfeito")
+
+    r = await run_in_threadpool(_fazer)
+    if isinstance(r, Response):
+        return r
+    return JSONResponse({"ok": True, "status": r.get("status"),
+                         "mensagem": "Feito. O evento ganha ☑ no calendário na próxima passada da extensão."})
 
 
 async def _acao_lote(request: Request, lid: str, acao: str):
