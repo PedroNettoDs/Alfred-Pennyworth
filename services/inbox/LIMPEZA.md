@@ -25,7 +25,7 @@ run.sh limpeza candidatos      dry-run: lista candidatos com motivo + o que fica
 run.sh limpeza propor          cria o lote "aguardando" em VAULT_ALFRED/pendencias/limpeza.yml
                                + pendencias/<id>.md ("Posso apagar estes N e-mails?") + notify-send
 run.sh limpeza aprovar <id>    confirmação explícita → revalida cada item → status "aprovado"
-          (ou POST /limpeza/<id>/aprovar, ou a tool responder_limpeza no Open WebUI)
+          (ou POST /limpeza/<id>/aprovar, ou a ferramenta responder_limpeza da conversa)
 Painel → Limpar                confirmação "Mover N e-mails para a Lixeira?" → limpeza.limpar(id):
           (ou "Aprovar e limpar")  revalida o que falta mover → "aprovado" + limpar: true
 extensão (a cada 10 min)       GET /limpeza/fila → move cada mensagem p/ Lixeira → POST /limpeza/<id>/resultado
@@ -105,9 +105,9 @@ limpeza:
 | POST | `/limpeza/{id}/resultado` `{itens:[{message_id,status,detalhe}]}` | uso da extensão |
 
 O botão **Limpar** existe só no Painel (`POST /painel/api/limpeza/{id}/limpar`, sessão + CSRF); não há rota
-Bearer nem tool do Open WebUI para ele.
+Bearer nem ferramenta da conversa para ele.
 
-Tool do Open WebUI (`tools/alfred_pendencias.py`): `listar_limpezas()` e `responder_limpeza(id, "aprovar"|"recusar")`.
+Ferramentas da conversa (`_shared/lib_ferramentas.py`): `listar_limpezas()` e `responder_limpeza(id, "aprovar"|"recusar")` ⚠ (pede aprovação).
 
 ## Instalar a extensão (`thunderbird-ext/`)
 

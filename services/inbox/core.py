@@ -185,8 +185,8 @@ def _now() -> datetime:
 #
 # pendencias.yml, tasks.yml, agenda.yml e limpeza.yml são gravados por vários PROCESSOS: a API
 # (threads do webhook, thread da fila, painel), os aguardadores destacados das notificações, o CLI
-# (run.sh), o ciclo do e-mail (timer), o vigia e as tools do Open WebUI (no container, pelo bind
-# mount do vault). Cada gravação é "ler → mudar → gravar"; sem trava, quem grava por último apaga o
+# (run.sh), o ciclo do e-mail (timer), o vigia e as ferramentas da conversa (lib_ferramentas).
+# Cada gravação é "ler → mudar → gravar"; sem trava, quem grava por último apaga o
 # que o outro gravou no meio. Regras:
 #   - só GRAVAÇÕES pegam a trava, e por um trecho curto (nada de LLM/TTS/rede segurando);
 #   - leituras não pegam trava — por isso toda gravação é atômica (tmp + os.replace): quem lê vê o
@@ -199,13 +199,13 @@ _TRAVAS_REGISTRO = threading.Lock()
 
 
 def _arquivo_trava(dados: Path) -> Path:
-    """pendencias/pendencias.yml → pendencias/.pendencias.yml.lock (mesmo nome dentro do container)."""
+    """pendencias/pendencias.yml → pendencias/.pendencias.yml.lock."""
     return dados.parent / f".{dados.name}.lock"
 
 
 def _abrir_trava(lock_path: Path) -> int:
-    """fd do .lock (não herdável — padrão do Python). Criado 0666: o host (Pedro) e o container do Open WebUI
-    (root) abrem o mesmo arquivo; sem permissão de escrita, abre só leitura (flock funciona igual)."""
+    """fd do .lock (não herdável — padrão do Python). Criado 0666 (herança do container do Open WebUI, que
+    rodava como root); sem permissão de escrita, abre só leitura (flock funciona igual)."""
     try:
         fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o666)
     except PermissionError:
@@ -805,7 +805,7 @@ _CAMINHOS = {
     "notificação no pc": "notificação no PC",
     "notificação":       "notificação no PC",
     "painel":            "Painel do Alfred",
-    "chat":              "chat do Open WebUI",
+    "chat":              "conversa com o Alfred",
 }
 
 
@@ -1054,7 +1054,7 @@ def _montar_pendencia(pid: str, m: dict, ev: dict, cfg: dict, inbox_name: str) -
         "## Como responder",
         "",
         f"- Terminal: `services/inbox/run.sh responder {pid} vou` ou `... nao-vou`",
-        f"- Chat (Open WebUI, tool Alfred Pendências): \"responder pendência {pid}: vou\"",
+        f"- Conversa: `services/inbox/run.sh conversa \"responder pendência {pid}: vou\"`",
         f"- Áudio da pergunta: `services/inbox/run.sh ouvir {pid}`",
         "",
     ])
@@ -1193,8 +1193,8 @@ _IDS_CORROMPIDO: dict[str, int] = {}   # tasks.yml ilegível → maior id que el
 
 
 def _add_task(title: str, due_date: Optional[str], tags: list[str], priority: str = "normal") -> Optional[int]:
-    """Cria tarefa em VAULT_ALFRED/tasks.yml no mesmo formato da tool alfred_tasks.
-    Trava + gravação atômica: a tool do Open WebUI e o agendamento gravam o mesmo arquivo (ids únicos)."""
+    """Cria tarefa em VAULT_ALFRED/tasks.yml (a ferramenta adicionar_tarefa da conversa também passa por aqui).
+    Trava + gravação atômica: as ferramentas da conversa e o agendamento gravam o mesmo arquivo (ids únicos)."""
     f = vault() / "tasks.yml"
     with trava_arquivo(f):
         data = _load_tasks(f)

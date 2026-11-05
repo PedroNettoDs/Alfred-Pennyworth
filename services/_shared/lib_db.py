@@ -1,8 +1,7 @@
 """
 Alfred — SQLite + FTS5 compartilhado (busca local, histórico do WhatsApp, cache de classificação).
 
-Três usos, um arquivo só ($VAULT_ALFRED/.alfred/alfred.db — o Obsidian ignora pastas com ponto,
-e o container do Open WebUI já enxerga o cofre em /vaults/alfred):
+Três usos, um arquivo só ($VAULT_ALFRED/.alfred/alfred.db — o Obsidian ignora pastas com ponto):
 
   1. notas   — índice FTS5 dos .md dos cofres (DERIVADO: apague o .db e `indexar` reconstrói tudo).
   2. wa_msgs — histórico das mensagens do WhatsApp (texto/transcrição). Única tabela gravada direto;

@@ -772,7 +772,7 @@ def _ollama() -> dict:
         return {"estado": "indisponivel", "detalhe": f"Sem resposta de {base} ({type(e).__name__})"}
 
 
-CONTAINERS = ("alfred-evolution", "alfred-evolution-db", "alfred-webui", "alfred-searxng", "alfred-chromadb", "alfred-n8n")
+CONTAINERS = ("alfred-evolution", "alfred-evolution-db", "alfred-searxng", "alfred-chromadb", "alfred-n8n")
 
 
 def _containers() -> dict:

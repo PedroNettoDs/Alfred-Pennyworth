@@ -5,32 +5,6 @@ name: alfred
 
 services:
 
-  # ── Open WebUI ──────────────────────────────────────────────
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: alfred-webui
-    restart: unless-stopped
-    ports:
-      - "${DOCKER_BIND_IP:-0.0.0.0}:${PORT_WEBUI}:8080"
-    environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
-      - WEBUI_AUTH=${WEBUI_AUTH}
-      - ENABLE_RAG_WEB_SEARCH=true
-      - RAG_WEB_SEARCH_ENGINE=searxng
-      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>&format=json
-      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=
-      - ENABLE_API_KEY=true
-    volumes:
-      - ./data/open-webui:/app/backend/data
-      - "${VAULT_ALFRED}:/vaults/alfred:rw"
-      - "${VAULT_PEDRO}:/vaults/pedro:ro"
-    depends_on:
-      - searxng
-      - chromadb
-    networks:
-      - alfred-net
-
   # ── SearXNG ─────────────────────────────────────────────────
   searxng:
     image: searxng/searxng:latest
