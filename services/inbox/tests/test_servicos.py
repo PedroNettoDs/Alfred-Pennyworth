@@ -9,6 +9,7 @@ vault/logs em pastas temporárias, `requests` trocado por um módulo falso quand
 """
 
 import importlib.util
+import inspect
 import os
 import subprocess
 import sys
@@ -136,6 +137,18 @@ class TestExecutorExecucao(unittest.TestCase):
         r = executor._executar(argvs, 10, descartar)
         self.assertEqual(r["returncode"], 0)
         self.assertIn("Model name", r["stdout"])           # LC_ALL=C.UTF-8 (antes: "Nome do modelo" em pt_BR)
+        self.assertFalse(r["truncado"])
+
+    def test_saida_limitada(self):
+        # antes: head -c 50M voltava inteiro (78,6 MB de resposta) e passava pelo /tmp (tmpfs)
+        r = executor._executar([["head", "-c", "50M", "/dev/zero"]], 10, False)
+        self.assertEqual(r["returncode"], 0)                # o comando vai até o fim: o excedente é lido e descartado
+        self.assertTrue(r["truncado"])
+        self.assertEqual(len(r["stdout"]), executor.MAX_SAIDA_BYTES)
+        r = executor._executar([["sh", "-c", "head -c 3M /dev/zero >&2"]], 10, False)
+        self.assertTrue(r["truncado"])
+        self.assertEqual(len(r["stderr"]), executor.MAX_SAIDA_BYTES)
+        self.assertEqual(r["stdout"], "")
 
     def test_descarta_stderr(self):
         argvs, descartar = executor._analisar("ls /nao-existe-xyz 2>/dev/null")
@@ -169,6 +182,24 @@ class TestExecutorExecucao(unittest.TestCase):
             r = c.post("/execute", json={"command": "date"}, headers=h)
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.json()["returncode"], 0)
+
+    def test_limite_de_simultaneos(self):
+        from fastapi.testclient import TestClient
+        self.assertTrue(inspect.iscoroutinefunction(executor.health))   # /health fora do pool de threads
+        vagas = threading.BoundedSemaphore(1)
+        with mock.patch.object(executor, "TOKEN", "tk"), mock.patch.object(executor, "_vagas", vagas):
+            c = TestClient(executor.app)
+            h = {"Authorization": "Bearer tk"}
+            # a vaga é devolvida depois do timeout (408)
+            r = c.post("/execute", json={"command": "tail -n 1 -f /dev/null", "timeout": 1}, headers=h)
+            self.assertEqual(r.status_code, 408)
+            vagas.acquire()                                   # um comando ocupando a única vaga
+            try:
+                self.assertEqual(c.post("/execute", json={"command": "date"}, headers=h).status_code, 429)
+                self.assertEqual(c.get("/health").status_code, 200)
+            finally:
+                vagas.release()
+            self.assertEqual(c.post("/execute", json={"command": "date"}, headers=h).status_code, 200)
 
 
 # ══════════════════════════════════════════════════════════════

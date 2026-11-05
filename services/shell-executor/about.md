@@ -44,9 +44,13 @@ Executa um comando da whitelist e retorna stdout/stderr.
 {
   "stdout": "NAME                    ID      SIZE   MODIFIED\nllama3.1:8b  ...",
   "stderr": "",
-  "returncode": 0
+  "returncode": 0,
+  "truncado": false
 }
 ```
+
+`truncado: true` quando stdout ou stderr passou de 1 MiB (`MAX_SAIDA_BYTES`): cada um volta com o primeiro MiB e
+o resto é descartado (o comando roda até o fim).
 
 **Response (comando não permitido):**
 ```json
@@ -56,8 +60,10 @@ Executa um comando da whitelist e retorna stdout/stderr.
 ```
 HTTP 403.
 
+**Executor ocupado:** com 8 comandos já em execução (`MAX_SIMULTANEOS`), o próximo recebe HTTP 429 na hora.
+
 ### `GET /health`
-Retorna `{"status": "ok", "version": "2.1.0"}`.
+Retorna `{"status": "ok", "version": "2.2.0"}`. É `async`: responde mesmo com o executor ocupado.
 
 ## Autenticação
 
@@ -118,6 +124,10 @@ O Open WebUI usa este serviço via tool calling. Exemplos de tools que chamam o 
 - **Token Bearer:** mesmo dentro da rede local, o caller precisa do token.
 - **Timeout:** padrão de 15s, de 1 a 1800 por request (fora disso: HTTP 422). No timeout o **grupo de processos**
   inteiro do comando é morto (antes só o `/bin/sh` morria e os filhos seguiam rodando) e a resposta é HTTP 408.
+- **Teto de saída:** stdout e stderr são lidos por pipe enquanto o comando roda e guardam até 1 MiB cada (antes iam
+  inteiros para o `/tmp`, que é tmpfs, e para a resposta: 200 MB de saída viravam 896 MiB de pico no executor).
+- **Limite de concorrência:** até 8 comandos ao mesmo tempo; o resto recebe HTTP 429. Sem isso, 40 comandos lentos
+  enchiam o pool de threads e até o `/health` esperava.
 - **Sem shell:** o comando é quebrado com `shlex` e o pipeline é montado pelo próprio executor (`shell=False`) —
   não há expansão de variável, glob ou substituição de comando; só `~` no início de um argumento vira a home.
 - **Saída estável:** os comandos rodam com `LC_ALL=C.UTF-8` (saída em inglês: o `alfred_system_monitor` procura

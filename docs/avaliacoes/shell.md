@@ -275,3 +275,37 @@ resposta). Depois, repetir `shell_medir.py --so saida` para conferir o pico de R
 **Fora do escopo:** as brechas semânticas da allowlist (`curl -X/-d` para serviços locais, `docker inspect`,
 leitura de arquivos fora do filtro) não têm relação com o Odysseus. Elas estão na avaliação de Skills e merecem
 uma tarefa própria.
+
+## 7. Adaptação aplicada (executor 2.2.0)
+
+As duas ideias do veredito entraram em `services/shell-executor/main.py`, com código próprio:
+
+- **Teto de saída.** `_executar` lê stdout e stderr por pipe (`selectors`) enquanto o comando roda e guarda até
+  `MAX_SAIDA_BYTES` (1 MiB) de cada um. O excedente é lido e descartado, o comando vai até o fim, e a resposta traz
+  `truncado: true`. Nada passa mais pelo `/tmp`.
+- **Concorrência.** `BoundedSemaphore(MAX_SIMULTANEOS = 8)` no `/execute`: sem vaga, HTTP 429 na hora. A vaga volta
+  também no 408. `/health` virou `async def` e não disputa o pool.
+
+Testes novos em `services/inbox/tests/test_servicos.py`: `test_saida_limitada` (`head -c 50M` volta com 1 MiB e
+`truncado: true`) e `test_limite_de_simultaneos` (429 sem vaga, `/health` 200, vaga devolvida depois do 408).
+
+Medição repetida com o mesmo `shell_medir.py --so timeout,saida,concorrencia --tamanhos 1,10,50,200`, na instância
+de teste em 17071 (carga 2,0 antes e depois):
+
+| | antes (2.1.0) | depois (2.2.0) |
+|---|---|---|
+| Timeout de 2 s (simples / pipeline) | 408 em 2,01 / 2,00 s, 0 vivos | 408 em 2,02 / 2,01 s, 0 vivos |
+| 200 MB de saída: resposta | 314 572 840 B em 2,33 s | 1 572 920 B em 0,05 s |
+| 200 MB de saída: pico RSS / tmpfs | 896 MiB / 200 MiB | 60 MiB (base 59) / 0 |
+| 50 MB de saída: pico RSS | 296 MiB | 60 MiB |
+| `/health` com 40 comandos lentos | 4826 ms | 3 ms |
+| `/health` com 45 comandos lentos | 4893 ms | 2 ms |
+| `date` com 40 comandos lentos | 200 em 4848 ms | 429 em 6 ms |
+| 10 / 25 / 50 × `date` simultâneos | todos 200 | 1 / 8 / 14 recebem 429 |
+
+O custo é a última linha: uma rajada de mais de 8 comandos ao mesmo tempo tem parte recusada. Nenhum chamador de
+hoje faz isso: o `relatorio_sistema` e o `alfred_system_monitor` rodam os comandos em série, e o `conversa.py` usa
+um worker só. Se algum chamador passar a disparar em paralelo, ele precisa tratar o 429 (hoje vira
+`RuntimeError("executor respondeu 429: ...")` em `lib_ferramentas._executor`).
+
+O cliente que desiste continua sem cancelar o comando (vivo 3 s depois, morto no próprio timeout), como antes.
