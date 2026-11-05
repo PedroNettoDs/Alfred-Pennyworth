@@ -191,5 +191,115 @@
     ],
     "alucinacoes": 0,
     "obs": "só 8 frases citam; números conferidos nas páginas (apuração 1º e 2º turno, diferença calculada certa); de novo '[Descoberta n]' sem URL no texto; rodadas 2 e 3 vazias por SearXNG suspenso"
+  },
+  "rapido-produtos": {
+    "citacoes": [
+      "N",
+      "P",
+      "S",
+      "N",
+      "N",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      0.5,
+      0,
+      0,
+      0.5
+    ],
+    "alucinacoes": 0,
+    "obs": "news,it: 3 trechos de notícia sobre homelab com Pi 5, o resto MDN (Math.PI, Firefox 1.5) e Hackage; nenhum número de desempenho, consumo ou preço"
+  },
+  "profundo-produtos": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "P",
+      "S"
+    ],
+    "cobertura": [
+      0.5,
+      0,
+      0.5,
+      0
+    ],
+    "alucinacoes": 0,
+    "obs": "news,it: 2 de 40 resultados passaram no filtro, 1 página lida (notícia de jan/2025 do Pi 5 de 16 GB); nada sobre Orange Pi 5 nem consumo; preços conferidos na página mas antigos; relatório honesto sobre as lacunas"
+  },
+  "iterativo-produtos": {
+    "citacoes": [
+      "P",
+      "P",
+      "P",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "N",
+      "P"
+    ],
+    "cobertura": [
+      1,
+      0.5,
+      1,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "13 fontes boas de comparação; números conferidos nas páginas (8 núcleos, 30–50%, 2.300 MB/s, 2–6 W), mas '[Descoberta n]' só bate com a fonte certa em parte dos casos (numeração da janela muda entre rodadas); fora da amostra: 'empate' no consumo em repouso contradiz a fonte (2,7–4 W × 5–8 W) e NVMe do Pi 5 'via USB ou GPIO' está errado"
+  },
+  "rapido-general-produtos": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      0,
+      0.5
+    ],
+    "alucinacoes": 0,
+    "obs": "12 trechos de comparação de verdade (picockpit, makeuseof, xda); consumo 8–10 W e pico 12 W com fonte; sem preço; temperatura do Orange Pi 5 Max atribuída ao Orange Pi 5"
+  },
+  "profundo-general-produtos": {
+    "citacoes": [
+      "P",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      0.5,
+      0.5,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "general: 37 de 40 resultados relevantes, 12 páginas lidas; números conferidos nas páginas; erro herdado da fonte [2] (diz que o Orange Pi 5 usa RK3566 e saiu em 2021 — é RK3588S) e o relatório aponta a divergência entre fontes; consumo só de Pi 4 e Orange Pi Zero 3"
   }
 }

@@ -10,13 +10,16 @@
 #
 # PAUSA_S (padrão 0): espera entre execuções, fora do lock — espaça as buscas no SearXNG (os motores de `general`
 #   suspendem a instância por 1 h com "too many requests").
-# MEM_MIN_MB (padrão 4000): para o lote se a memória disponível cair abaixo disso (o qwen3.6:35b-a3b do modo
-#   profundo tem ~14 GB fora da VRAM).
+# MEM_MIN_MB (padrão 4000): para o lote se a memória disponível cair abaixo disso.
+# MEM_PROFUNDO_MB (padrão 10000): modos profundo* esperam até 30 min por essa memória disponível (o
+#   qwen3.6:35b-a3b da síntese tem ~14 GB fora da VRAM); se não aparecer, a execução é pulada e anotada.
 set -uo pipefail
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RAIZ="$(cd "$AQUI/../../.." && pwd)"
-# venv do researcher de produção (só leitura); um checkout sem venv usa o próprio
+# venv do researcher (só leitura): o deste checkout ou, num worktree sem venv, o do checkout principal
 PY="${PY_RESEARCHER:-$RAIZ/services/researcher/venv/bin/python}"
+[[ -x "$PY" ]] || PY="$(git -C "$RAIZ" rev-parse --path-format=absolute --git-common-dir)/../services/researcher/venv/bin/python"
+[[ -x "$PY" ]] || { echo "venv do researcher não encontrado (defina PY_RESEARCHER)" >&2; exit 2; }
 LOCK=/tmp/alfred-bench-gpu.lock
 RESULTADOS="$AQUI/resultados"
 SAIDA="$1"; shift
@@ -32,6 +35,17 @@ for p in "${PERGUNTAS[@]}"; do
     if (( livre < ${MEM_MIN_MB:-4000} )); then
       echo "memória disponível ${livre} MB < ${MEM_MIN_MB:-4000} MB — lote parado antes de $m/$p" >&2
       exit 2
+    fi
+    if [[ "$m" == profundo* ]]; then
+      for _ in $(seq 60); do
+        livre=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+        (( livre >= ${MEM_PROFUNDO_MB:-10000} )) && break
+        sleep 30
+      done
+      if (( livre < ${MEM_PROFUNDO_MB:-10000} )); then
+        echo "{\"modo\": \"$m\", \"pergunta\": \"$p\", \"status\": \"pulado_memoria\", \"mem_disponivel_mb\": $livre}" >> "$RESULTADOS/lock.jsonl"
+        continue
+      fi
     fi
     pedido=$(date +%s.%N)
     flock "$LOCK" bash -c "echo \$(date +%s.%N) > '$SAIDA/.lock-$m-$p'; '$PY' '$AQUI/bench_pesquisa.py' --modo '$m' --pergunta '$p' --saida '$SAIDA' --metricas '$RESULTADOS/metricas.jsonl'"
