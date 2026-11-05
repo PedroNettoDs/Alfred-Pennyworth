@@ -1,0 +1,18 @@
+# medir_do_zero.sh, 03/11/2026 ~07:54-08:25 UTC, commit 4c30b84, bancada Ubuntu 24.04 (python 3.12.3), Docker aninhado
+# passo	segundos	código de saída (1 no instalar/verificar = "ollama" pendente, esperado: GPU fora da bancada)
+00-git	13.6	0
+01-clone	0.1	0
+02-verificar	0.2	1
+03-apt	60.4	0
+04-verificar	0.5	1
+05-grupo-docker	0.6	0
+06-verificar	0.4	1
+07-instalar	660.7	1
+08-saude	900.6	1
+09-inventario	11.1	0
+10-reinstalar	160.8	1
+11-saude	14.8	0
+12-saude-pos-reboot	14.8	0
+13-reinstalar-noop	6.7	1
+14-testes-inbox	45.8	0
+total	1851	-
