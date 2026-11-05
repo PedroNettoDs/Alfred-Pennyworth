@@ -294,6 +294,15 @@ pior caso do HNSW e não representa embeddings reais. A latência dele vale; a r
   - custa ~99 s para construir o índice;
   - é aproximado;
   - 20 ms por consulta são irrelevantes perto dos segundos do LLM.
+- **ChromaDB que já roda na porta 8001**, medido só com leitura na coleção `cofres-bge-m3` (1.749 vetores
+  de 1024 dimensões; `scripts/memoria_chroma.py`, resultado em `resultados/rodada-2026-11-05/chroma.json`):
+  - do jeito do `lib_chromadb`, com cliente HTTP novo a cada consulta: 11,7 a 16,8 ms;
+  - com a conexão reaproveitada: 3,6 a 6,1 ms;
+  - o piso do HTTP (heartbeat) é 0,5 ms.
+  - É 7 a 10 vezes mais rápido que o `contexto()` de hoje, mas 5 a 25 vezes mais lento que o numpy em
+    cache no mesmo tamanho (0,4 a 0,7 ms). Ainda exigiria manter uma segunda cópia em sincronia com o
+    SQLite.
+  - Plano do numpy em `docs/planos/memoria-busca-numpy.md`.
 - **Resposta à pergunta "a partir de quantos fatos o FAISS compensa":**
   - contra o Python puro, qualquer busca vetorizada compensa já com algumas centenas de fatos, e passa a
     ser necessária perto de 1,5 a 2 mil;
