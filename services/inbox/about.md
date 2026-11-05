@@ -192,7 +192,8 @@ enviar a um contato) e o botão para autorizar, editar ou recusar. É servida pe
 por `main.py`). Usa templates Jinja2 em `painel_web/templates/` e um CSS e um JS em `painel_web/static/` (contrato
 dos componentes em `painel_web/COMPONENTES.md`). Não tem build, CDN nem fonte externa: funciona offline. Toda ação
 chama as **mesmas funções** do CLI, da notificação e da API — o painel não grava YAML nem tem lógica própria de envio,
-resposta, agenda ou limpeza.
+resposta, agenda ou limpeza. A aba **Pesquisar** pede ao researcher (`pesquisa.py`) e mostra o que ele gravou no cofre
+— ver [Pesquisar](#pesquisar).
 
 ### Como abrir
 
@@ -241,6 +242,7 @@ resposta, agenda ou limpeza.
 | **Detalhe já resolvido** | "Esta pendência já foi resolvida por <caminho>.", o resultado (status, data, resposta, envio, nota, tarefa) e nenhuma ação |
 | **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
 | **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data e, depois que a extensão passa, o resultado de cada um) recolhível; o resultado agregado da última passada (movidos para a Lixeira, não encontrados, recusados, com erro); **Aprovar**, **Aprovar e limpar** e **Recusar** (nota opcional) nos lotes aguardando; **Limpar** nos lotes aprovados, simulados, parciais ou que falharam (some enquanto a limpeza pedida espera a extensão) |
+| **Pesquisar** (`/painel/pesquisar`) | formulário (tema + **Rápido** ou **Profundo**) e as 20 pesquisas mais recentes de `VAULT_ALFRED/research/*/index.md` (título, data, modo). Cada uma abre `/painel/pesquisar/{slug}`: a síntese de `synthesis.md` no markdown seguro do painel (o mesmo da explicação do e-mail) e a lista de fontes de `sources.md`. O profundo abre `/painel/pesquisar/andamento/{job_id}` (etapa, mensagem, contagem, subperguntas), que se atualiza sozinho e vai para o resultado quando termina — ver [Pesquisar](#pesquisar) |
 | **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
 
 O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
@@ -263,6 +265,7 @@ Datas sempre em America/Sao_Paulo, `DD/MM/AAAA HH:MM`, e relativas nas listas ("
 | **Aprovar** (limpeza) | confirmação "Os N e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente." → `limpeza.aprovar(id, nota)` (com a revalidação de sempre) | `aprovado`; a extensão do Thunderbird executa na próxima passada, ou só simula se "Executar de verdade" estiver desligado nela |
 | **Limpar** / **Aprovar e limpar** (limpeza) | confirmação "Mover os N e-mails para a Lixeira da conta? …" → `limpeza.limpar(id, nota)`: aprova antes se o lote está aguardando e revalida os itens ainda não movidos ([LIMPEZA.md](LIMPEZA.md#botão-limpar-painel--limpeza)) | `aprovado` + `limpar: true`; a extensão move de verdade só esse lote, mesmo com "Executar de verdade" desligado; 409 enquanto ela executa o lote |
 | **Recusar** (limpeza) | `limpeza.recusar(id, nota)` | `recusado`, nenhum e-mail é movido |
+| **Pesquisar** | `pesquisa.pesquisar(tema, profundo)` → `POST 127.0.0.1:${PORT_RESEARCHER:-7072}/research` com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN` | rápido: espera a síntese (~40–50 s, teto de 300 s) e abre o resultado; profundo: 202 + `job_id` → abre o andamento. Researcher fora do ar ou erro dele → 502 com a mensagem e **Tentar de novo** |
 
 - **Já resolvida por outro caminho** (celular, notificação, CLI, chat): o servidor confere "ainda aguardando" antes de
   agir e de novo dentro da trava entre processos; não executa e responde 409 "Esta pendência já foi resolvida por
@@ -298,14 +301,34 @@ recarrega a cada seta) e Enter ou **Buscar** aplicam.
 | Rota | O quê |
 |---|---|
 | GET/POST `/painel/login`, POST `/painel/sair` | login / logout |
-| GET `/painel`, `/painel/pendencias?aba=aguardando\|resolvidas&tipo=whatsapp\|email&q=`, `/painel/pendencias/{id}`, `/painel/agenda`, `/painel/limpeza`, `/painel/sistema` | telas (sem sessão → 303 para o login) |
-| GET `/painel/parcial/{inicio\|pendencias\|agenda\|limpeza\|sistema}`, `/painel/api/contadores`, `/painel/api/pendencias/{id}/estado` | polling (sem sessão → 401 JSON) |
+| GET `/painel`, `/painel/pendencias?aba=aguardando\|resolvidas&tipo=whatsapp\|email&q=`, `/painel/pendencias/{id}`, `/painel/agenda`, `/painel/limpeza`, `/painel/pesquisar`, `/painel/pesquisar/{slug}`, `/painel/pesquisar/andamento/{job_id}`, `/painel/sistema` | telas (sem sessão → 303 para o login) |
+| GET `/painel/parcial/{inicio\|pendencias\|agenda\|limpeza\|sistema}`, `/painel/parcial/pesquisa?job=<job_id>`, `/painel/api/contadores`, `/painel/api/pendencias/{id}/estado` | polling (sem sessão → 401 JSON) |
 | POST `/painel/api/pendencias/{id}/responder-texto` `{texto}` · `/ignorar` · `/agendar` `{quando}` · `/responder` `{resposta, nota}` | ações das pendências |
 | POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` · `/limpar` `{nota}` | agenda e limpeza |
+| POST `/painel/api/pesquisar` `{tema, modo: rapido\|profundo}` | nova pesquisa; a resposta traz `url` (resultado ou andamento) |
 | GET `/painel/static/painel.css`, `/painel/static/painel.js` | estáticos (lista fechada) |
 
 Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 403 CSRF/origem/rede; 404; 409 já resolvida;
 502 falha de envio (`pode_tentar_de_novo: true`).
+
+### Pesquisar
+
+`pesquisa.py` é o cliente do researcher e o leitor do cofre; o researcher continua dono da busca, da síntese e da
+gravação (`services/researcher/about.md`).
+
+- **Rápido:** chamada síncrona a `POST /research` (o researcher leva ~40–50 s; o painel espera até 300 s). A resposta
+  traz `url` e o `painel.js` vai para lá (`data-apos-sucesso="ir-resposta"`). Acerto de cache semântico abre a pasta
+  do tema parecido (`matched_slug`), não a do tema digitado.
+- **Profundo:** `"profundo": true` → 202 + `job_id` (4–5 min em segundo plano no researcher). A página de andamento é
+  um contêiner de polling (`/painel/parcial/pesquisa?job=…`, a cada 15 s) que consulta `GET /research/{job_id}`;
+  quando o job termina, o parcial traz `[data-ir-para]` e o JS abre o resultado (sem JS, o link **Abrir o
+  relatório** faz o mesmo). Job com erro ou `interrompido` (o researcher reiniciou no meio) mostra o erro. Researcher
+  fora do ar no meio: a página avisa e continua consultando.
+- **Resultado:** `synthesis.md` sem o frontmatter e sem o `# título` (vira o título da tela), no `_markdown_seguro`
+  do painel: HTML do LLM ou da web sai escapado; links só `http`/`https`, em nova aba. Citações `[n]` ficam como
+  texto. Fontes: os `- **URL**:` do `sources.md` (os dois modos usam esse formato).
+- O frontmatter dos `.md` é lido linha a linha (o formato do `vault_write`), sem YAML: um título com `#` ou `[` não
+  derruba a lista.
 
 ### Fora do escopo e limitações
 
@@ -323,7 +346,7 @@ Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 
 
 ```bash
 cd services/inbox
-venv/bin/python -m unittest tests.test_painel -v     # 39 testes offline, ~3 s
+venv/bin/python -m unittest tests.test_painel -v     # 54 testes offline, ~6 s
 ```
 
 Vault temporário, LLM/TTS mockados e envios simulados. Cobrem login (token errado/certo, cookie adulterado, expirado,
@@ -331,8 +354,9 @@ assinado com outro token ou revogado, `PAINEL_SESSAO_DIAS`), cookie e `X-CSRF-To
 `PAINEL_SESSAO_DIAS` inválido ou fora da faixa, recusa de outros IPs (10.x, 172.17.x, 192.168.x) e de Host
 estranho, CSRF e origem, CSRF renovado depois de entrar de novo, API subindo sem o jinja2 (sem `/painel`), envio com texto editado (simulado e real mockado), pendência resolvida pelo celular com o
 detalhe aberto (409), duplo clique com envio lento (um envio só), falha de envio com nova tentativa, vou / não vou igual
-ao CLI, limpeza, desfazer da agenda, polling, Evolution fora do ar, a aba Resolvidas lado a lado, áudio e cabeçalhos — e
-conferem que o token não aparece em nenhuma resposta.
+ao CLI, limpeza, desfazer da agenda, polling, Evolution fora do ar, a aba Resolvidas lado a lado, áudio e cabeçalhos,
+a aba Pesquisar (researcher trocado por `httpx.MockTransport`: rápido, cache semântico, profundo do andamento ao fim,
+erro e `interrompido`, researcher fora do ar, validação e 404) — e conferem que o token não aparece em nenhuma resposta.
 
 ## N8N — workflows em `n8n/`
 

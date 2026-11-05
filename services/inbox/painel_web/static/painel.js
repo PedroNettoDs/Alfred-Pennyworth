@@ -10,7 +10,8 @@
  *   1. utilitários (CSRF, ícones, mensagens)
  *   2. cliente de ações  — form[data-acao] → POST JSON (+ <dialog> de confirmação opcional)
  *   3. polling (15 s)    — [data-poll-url], [data-contador], [data-estado-url]
- *   4. pequenos extras   — filtros que se enviam sozinhos (mouse/Enter), marcação de "texto sendo editado"
+ *   4. pequenos extras   — filtros que se enviam sozinhos (mouse/Enter), marcação de "texto sendo editado",
+ *                          ir para a URL da resposta / do parcial (Pesquisar)
  */
 (function () {
   "use strict";
@@ -211,6 +212,13 @@
     }
   }
 
+  // Destino de navegação vindo do servidor (resposta da ação ou parcial): só páginas do próprio painel.
+  function destinoSeguro(url) {
+    if (typeof url !== "string") return null;
+    if (/^\/painel\/[^\/\\]/.test(url)) return url;
+    return null;
+  }
+
   // Link do Google Agenda só se for mesmo do Google Agenda (o resto vira texto).
   function linkAgenda(url) {
     if (typeof url === "string" && url.indexOf("https://calendar.google.com/") === 0) {
@@ -400,6 +408,12 @@
     }
     if (apos === "recarregar") {
       location.reload();
+      return;
+    }
+    // "ir-resposta": a URL vem na resposta (ex.: Pesquisar → resultado ou andamento). Sem URL válida, mostra a mensagem.
+    var destino = apos === "ir-resposta" ? destinoSeguro(dados && dados.url) : null;
+    if (destino) {
+      location.assign(destino);
       return;
     }
 
@@ -782,6 +796,13 @@
       el.removeAttribute("data-via-ponteiro");
       enviarFiltro(el.form);
     }
+  });
+
+  // Parcial que pede navegação (pesquisa profunda pronta): [data-ir-para="/painel/..."] dentro do contêiner.
+  document.addEventListener("painel:atualizado", function (ev) {
+    var el = ev.target instanceof Element ? ev.target.querySelector("[data-ir-para]") : null;
+    var destino = el && destinoSeguro(el.getAttribute("data-ir-para"));
+    if (destino) location.assign(destino);
   });
 
   // Aba oculta: nada roda (o intervalo checa document.hidden). Voltou: atualiza na hora.

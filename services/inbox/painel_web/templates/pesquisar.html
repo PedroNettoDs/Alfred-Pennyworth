@@ -1,0 +1,46 @@
+{#
+  Aba Pesquisar. Vars de painel.tela_pesquisar(): modos ([(valor, rótulo)]), recentes (lista de
+  painel._pesquisas_recentes(): titulo, url, modo, quando, relativo, iso).
+  O form chama POST /painel/api/pesquisar; a resposta traz `url` (resultado do rápido ou andamento do profundo)
+  e o painel.js vai para lá (data-apos-sucesso="ir-resposta").
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Pesquisar{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Pesquisar", "O Alfred busca na web, lê as fontes e grava o resultado em research/ no cofre") }}
+<div class="pilha">
+  <section class="cartao" aria-labelledby="c-nova">
+    <h2 class="cartao__titulo" id="c-nova">Nova pesquisa</h2>
+    <form class="pilha--curta" data-acao="/painel/api/pesquisar" data-apos-sucesso="ir-resposta">
+      {{ m.campo("tema", "Tema", obrigatorio=true, attrs={"maxlength": "300", "autocomplete": "off"},
+                 ajuda="Ex.: systemd Restart= e StartLimitBurst · resultado da eleição de 2026 · Ollama vs llama.cpp") }}
+      {{ m.selecao("modo", "Modo", modos, "rapido") }}
+      <p class="pequeno suave">O rápido espera a resposta aqui mesmo. O profundo roda em segundo plano: pode sair da página e voltar pelo histórico abaixo quando terminar.</p>
+      <div class="acoes">{{ m.botao("Pesquisar", "primario", nome_icone="busca", attrs={"data-texto-ocupado": "Pesquisando…"}) }}</div>
+      {{ m.resultado() }}
+    </form>
+  </section>
+
+  <section aria-labelledby="c-recentes">
+    <h2 class="secao-titulo" id="c-recentes">Pesquisas recentes</h2>
+    {%- if recentes %}
+    <ul class="lista">
+      {%- for i in recentes %}
+      <li class="agenda-item">
+        {{ m.tempo(i.iso, i.quando, i.relativo, "agenda-item__quando") }}
+        <div>
+          <p class="agenda-item__titulo"><a href="{{ i.url }}">{{ i.titulo }}</a></p>
+          <span class="agenda-item__origem">Pesquisa {{ i.modo|lower }}</span>
+        </div>
+        <span></span>
+        <span></span>
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- else %}
+    {{ m.vazio("Nenhuma pesquisa no cofre ainda, senhor.", "busca") }}
+    {%- endif %}
+  </section>
+</div>
+{% endblock %}

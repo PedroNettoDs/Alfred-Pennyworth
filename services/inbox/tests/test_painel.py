@@ -60,8 +60,10 @@ import agenda      # noqa: E402
 import limpeza     # noqa: E402
 import main        # noqa: E402
 import painel      # noqa: E402
+import pesquisa    # noqa: E402
 from _shared import lib_whatsapp  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+import httpx       # noqa: E402
 
 PAYLOADS = AQUI / "payloads"
 _CARREGAR_CFG = whatsapp.carregar_cfg
@@ -1068,6 +1070,188 @@ class TestSemJinja2(unittest.TestCase):
                                  "audio_bearer": "404"})
 
 
+# ══════════════════════════════════════════════════════════════
+#  15. Pesquisar (researcher por httpx.MockTransport; resultado no cofre temporário)
+# ══════════════════════════════════════════════════════════════
+
+SINTESE = ("---\ntitle: \"Síntese — Tokio: runtime\"\ndate: 2026-11-05\ntopic: tokio-runtime\ntype: synthesis\n"
+           "modo: profundo\n---\n\n# Tokio: runtime\n\n## Resumo\nTokio é o runtime **mais usado** [1].\n\n"
+           "<script>alert(1)</script>\n\n## Fontes\n\n- [1] [Guia do Tokio](https://tokio.example/guia)\n\n"
+           "---\n*Sintetizado em 05/11/2026 03:40 (pesquisa profunda: 3 subperguntas, 2 páginas lidas)*\n")
+FONTES = ("---\ntitle: Fontes\n---\n\n# Fontes: Tokio\n\n## [1] Guia do Tokio\n- **URL**: https://tokio.example/guia\n"
+          "- **Subpergunta**: O que é?\n  - fato\n\n## [2] Async Rust\n- **URL**: https://async.example/livro\n")
+
+
+class _Researcher:
+    """httpx.MockTransport no lugar do researcher (127.0.0.1:PORT_RESEARCHER=9). `respostas`: (método, caminho) →
+    httpx.Response ou função(request); guarda os pedidos."""
+
+    def __init__(self, respostas):
+        self.respostas, self.pedidos = respostas, []
+        self.mock = httpx.MockTransport(self._responder)
+
+    def _responder(self, request):
+        self.pedidos.append(request)
+        r = self.respostas.get((request.method, request.url.path))
+        if r is None:
+            return httpx.Response(404, json={"detail": "Pesquisa não encontrada"})
+        return r(request) if callable(r) else r
+
+
+class TestPesquisar(Base):
+    def setUp(self):
+        super().setUp()
+        self.dir = TMP / "vault" / "research" / "tokio-runtime"
+        self.dir.mkdir(parents=True)
+        (self.dir / "index.md").write_text("---\ntitle: \"Tokio: runtime\"\ndate: 2026-11-05\nmodo: profundo\n---\n\n"
+                                           "# Tokio: runtime\n", encoding="utf-8")
+        (self.dir / "synthesis.md").write_text(SINTESE, encoding="utf-8")
+        (self.dir / "sources.md").write_text(FONTES, encoding="utf-8")
+
+    def researcher(self, respostas) -> _Researcher:
+        r = _Researcher(respostas)
+        p = mock.patch.object(pesquisa, "_transporte", r.mock)
+        p.start()
+        self.addCleanup(p.stop)
+        return r
+
+    def job(self, **campos):
+        return {"id": "0123456789ab", "topic": "Tokio: runtime", "slug": "tokio-runtime", "status": "running",
+                "etapa": "leitura", "mensagem": "subpergunta 2/3: nota 2", "subperguntas": ["O que é o Tokio?"],
+                "contagem": {"resultados": 14, "relevantes": 6, "tentadas": 3, "lidas": 2}, **campos}
+
+    def test_aba_na_navegacao_e_recentes(self):
+        velho = TMP / "vault" / "research" / "velho"
+        velho.mkdir()
+        (velho / "index.md").write_text("---\ntitle: Tema [antigo] #1\n---\n", encoding="utf-8")
+        os.utime(velho / "index.md", (time.time() - 3 * 86400,) * 2)
+        html = self.guardar(self.entrar().get("/painel/pesquisar")).text
+        self.assertIn('href="/painel/pesquisar" aria-current="page"', html)
+        self.assertIn('data-acao="/painel/api/pesquisar"', html)
+        self.assertIn('data-apos-sucesso="ir-resposta"', html)
+        self.assertIn('<option value="profundo">', html)
+        self.assertIn('href="/painel/pesquisar/tokio-runtime">Tokio: runtime</a>', html)
+        self.assertIn("Pesquisa profunda", html)
+        self.assertIn("Tema [antigo] #1", html)                      # título que quebraria um parser YAML
+        self.assertLess(html.index("tokio-runtime"), html.index("velho"))   # mais nova primeiro
+
+    def test_sem_pesquisas(self):
+        shutil.rmtree(TMP / "vault" / "research")
+        self.assertIn("Nenhuma pesquisa no cofre ainda", self.guardar(self.entrar().get("/painel/pesquisar")).text)
+
+    def test_rapido_chama_o_researcher_e_mostra_a_sintese(self):
+        r = self.researcher({("POST", "/research"): httpx.Response(200, json={
+            "status": "success", "slug": "tokio-runtime", "cached": False, "sources_found": 2})})
+        cli = self.entrar()
+        resp = self.acao(cli, "/painel/api/pesquisar", {"tema": "  Tokio:\n runtime ", "modo": "rapido"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["url"], "/painel/pesquisar/tokio-runtime")
+        pedido = r.pedidos[0]
+        self.assertEqual(str(pedido.url), "http://127.0.0.1:9/research")
+        self.assertEqual(pedido.headers["authorization"], f"Bearer {TOKEN}")
+        self.assertEqual(json.loads(pedido.content), {"topic": "Tokio: runtime", "profundo": False})
+        self.assertEqual(pedido.extensions["timeout"]["read"], pesquisa.TIMEOUT_RAPIDO)
+
+        html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text
+        self.assertIn('<h1 class="tela-titulo">Tokio: runtime</h1>', html)
+        self.assertEqual(html.count("Tokio: runtime</h1>"), 1)        # o "# título" do .md não repete
+        self.assertIn("<h3>Resumo</h3>", html)                          # markdown do painel (h1 da tela, ## → h3)
+        self.assertIn("Tokio é o runtime <strong>mais usado</strong> [1].", html)
+        self.assertIn('<a href="https://tokio.example/guia" target="_blank" rel="noopener noreferrer">Guia do Tokio</a>', html)
+        self.assertNotIn("<script>alert", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertIn("Relatório do Alfred", html)
+        self.assertIn("Fontes (2)", html)
+        self.assertIn('href="https://async.example/livro"', html)
+
+    def test_cache_semantico_abre_a_pasta_do_tema_parecido(self):
+        self.researcher({("POST", "/research"): httpx.Response(200, json={
+            "status": "success", "slug": "runtime-tokio", "cached": True, "cache_type": "semantic",
+            "matched_slug": "tokio-runtime", "matched_topic": "Tokio: runtime"})})
+        resp = self.acao(self.entrar(), "/painel/api/pesquisar", {"tema": "runtime tokio", "modo": "rapido"})
+        self.assertEqual(resp.json()["url"], "/painel/pesquisar/tokio-runtime")
+
+    def test_profundo_andamento_e_fim(self):
+        estado = {"job": self.job()}
+        r = self.researcher({
+            ("POST", "/research"): httpx.Response(202, json={"status": "running", "profundo": True,
+                                                             "job_id": "0123456789ab", "slug": "tokio-runtime"}),
+            ("GET", "/research/0123456789ab"): lambda req: httpx.Response(200, json=estado["job"]),
+        })
+        cli = self.entrar()
+        resp = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio: runtime", "modo": "profundo"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["url"], "/painel/pesquisar/andamento/0123456789ab")
+        self.assertTrue(json.loads(r.pedidos[0].content)["profundo"])
+
+        html = self.guardar(cli.get("/painel/pesquisar/andamento/0123456789ab")).text
+        self.assertIn('data-poll-url="/painel/parcial/pesquisa?job=0123456789ab"', html)
+        for trecho in ("Lendo as páginas", "subpergunta 2/3: nota 2", "O que é o Tokio?", "2 de 3 tentadas", "Em andamento"):
+            self.assertIn(trecho, html)
+        self.assertNotIn("data-ir-para", html)
+        self.assertEqual(r.pedidos[-1].headers["authorization"], f"Bearer {TOKEN}")
+
+        estado["job"] = self.job(status="done", etapa="concluido", resultado={"slug": "tokio-runtime"})
+        parcial = self.guardar(cli.get("/painel/parcial/pesquisa?job=0123456789ab"))
+        self.assertEqual(parcial.status_code, 200)
+        self.assertNotIn("<html", parcial.text)
+        self.assertIn('data-ir-para="/painel/pesquisar/tokio-runtime"', parcial.text)
+        pagina = self.guardar(cli.get("/painel/pesquisar/andamento/0123456789ab", follow_redirects=False))
+        self.assertEqual((pagina.status_code, pagina.headers["location"]), (303, "/painel/pesquisar/tokio-runtime"))
+
+    def test_profundo_com_erro_ou_interrompido(self):
+        estado = {"job": self.job(status="error", erro="Nenhuma página pôde ser lida — nada gravado.")}
+        self.researcher({("GET", "/research/0123456789ab"): lambda req: httpx.Response(200, json=estado["job"])})
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/pesquisar/andamento/0123456789ab")).text
+        self.assertIn("Nenhuma página pôde ser lida", html)
+        self.assertIn('role="alert"', html)
+        estado["job"] = self.job(status="interrompido")
+        self.assertIn("reiniciou no meio", self.guardar(cli.get("/painel/parcial/pesquisa?job=0123456789ab")).text)
+
+    def test_researcher_fora_do_ar(self):
+        def recusa(request):
+            raise httpx.ConnectError("conexão recusada", request=request)
+
+        self.researcher({("POST", "/research"): recusa, ("GET", "/research/0123456789ab"): recusa})
+        cli = self.entrar()
+        resp = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio", "modo": "rapido"})
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("não está no ar", resp.json()["erro"])
+        self.assertTrue(resp.json()["pode_tentar_de_novo"])
+        # andamento com o researcher fora: a página abre, avisa e continua consultando
+        html = self.guardar(cli.get("/painel/pesquisar/andamento/0123456789ab")).text
+        self.assertIn("não está no ar", html)
+        self.assertIn('data-poll-url="/painel/parcial/pesquisa?job=0123456789ab"', html)
+        self.assertEqual(self.guardar(cli.get("/painel/pesquisar")).status_code, 200)   # a aba não quebra
+
+    def test_erro_do_researcher_vira_mensagem(self):
+        self.researcher({("POST", "/research"): httpx.Response(
+            503, json={"detail": "O LLM não respondeu (síntese vazia). Tente de novo em instantes."})})
+        resp = self.acao(self.entrar(), "/painel/api/pesquisar", {"tema": "Tokio", "modo": "rapido"})
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("O LLM não respondeu", resp.json()["erro"])
+
+    def test_validacao_e_nao_encontrada(self):
+        r = self.researcher({})
+        cli = self.entrar()
+        token = self.csrf(cli)
+        for corpo, campo in (({"tema": "   ", "modo": "rapido"}, "tema"), ({"tema": "x" * 301}, "tema"),
+                             ({"tema": "Tokio", "modo": "turbo"}, "modo")):
+            resp = self.acao(cli, "/painel/api/pesquisar", corpo, csrf=token)
+            self.assertEqual((resp.status_code, resp.json()["campo"]), (400, campo), corpo)
+        self.assertEqual(r.pedidos, [])
+        self.assertEqual(self.acao(cli, "/painel/api/pesquisar", {"tema": "x"}, csrf="errado").status_code, 403)
+        for url in ("/painel/pesquisar/nao-existe", "/painel/pesquisar/a.b", "/painel/pesquisar/andamento/nao-hex",
+                    "/painel/pesquisar/andamento/abcdef123456"):
+            resp = self.guardar(cli.get(url))
+            self.assertEqual(resp.status_code, 404, url)
+            self.assertIn("Pesquisa não encontrada", resp.text)
+        self.assertEqual(self.guardar(cli.get("/painel/pesquisar/..%2F..%2Fpendencias")).status_code, 404)
+        self.assertEqual(self.guardar(cli.get("/painel/parcial/pesquisa?job=abcdef123456")).status_code, 404)
+        self.assertEqual(self.guardar(self.cliente().get("/painel/pesquisar", follow_redirects=False)).status_code, 303)
+
+
 class TestCabecalhos(Base):
     def test_csp_sem_inline_e_sem_token(self):
         p = self.criar_wa()
@@ -1077,7 +1261,7 @@ class TestCabecalhos(Base):
         self.entrar(cli)
         for url in ("/painel", "/painel/pendencias", "/painel/pendencias?aba=resolvidas", f"/painel/pendencias/{p['id']}",
                     f"/painel/pendencias/{e['id']}", "/painel/agenda", "/painel/limpeza", "/painel/sistema",
-                    "/painel/pendencias/nao-existe"):
+                    "/painel/pendencias/nao-existe", "/painel/pesquisar", "/painel/pesquisar/nao-existe"):
             paginas.append(self.guardar(cli.get(url)))
         for r in paginas:
             u = str(r.request.url)

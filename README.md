@@ -160,6 +160,7 @@ Alfred-Pennyworth/
 │   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir)
 │   │   ├── main.py                    # FastAPI :7073 — fachada HTTP para o N8N e webhook da Evolution
 │   │   ├── painel.py                  # Painel do Alfred (/painel, só 127.0.0.1): telas e ações de aprovação
+│   │   ├── pesquisa.py                # aba Pesquisar: cliente do researcher + leitura de research/ no cofre
 │   │   ├── painel_web/                # Templates Jinja2 + painel.css / painel.js do painel (sem build)
 │   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
 │   │   ├── tests/                     # test_whatsapp, test_painel, test_trava… + payloads da Evolution (texto, áudio .ogg, resposta citada…)
@@ -589,7 +590,7 @@ cd services/inbox
 ./run.sh serve           # API HTTP :7073 para o N8N + Painel do Alfred em /painel
 ```
 
-**Painel do Alfred** — com a API no ar, `http://127.0.0.1:7073/painel` (só desta máquina; login com o `SHELL_EXECUTOR_TOKEN`) mostra as pendências, o rascunho que o Alfred propõe para cada resposta (**Autorizar envio** / **Não enviar** / **Agendar**; **Vou** / **Não vou** no e-mail), a agenda (**Desfazer**), os lotes de limpeza (**Aprovar** / **Recusar**) e o estado do sistema, atualizando a cada 15 s. Dependência nova `jinja2`: num venv existente rode `venv/bin/pip install -r requirements.txt` antes de reiniciar a API (sem ele a API sobe sem o painel e o log avisa). Detalhes: [about.md](services/inbox/about.md#painel-do-alfred).
+**Painel do Alfred** — com a API no ar, `http://127.0.0.1:7073/painel` (só desta máquina; login com o `SHELL_EXECUTOR_TOKEN`) mostra as pendências, o rascunho que o Alfred propõe para cada resposta (**Autorizar envio** / **Não enviar** / **Agendar**; **Vou** / **Não vou** no e-mail), a agenda (**Desfazer**), os lotes de limpeza (**Aprovar** / **Recusar**), a aba **Pesquisar** (pesquisa rápida ou profunda pelo researcher, com as recentes do cofre) e o estado do sistema, atualizando a cada 15 s. Dependência nova `jinja2`: num venv existente rode `venv/bin/pip install -r requirements.txt` antes de reiniciar a API (sem ele a API sobe sem o painel e o log avisa). Detalhes: [about.md](services/inbox/about.md#painel-do-alfred).
 
 Configuração em `services/_shared/perfis.yml` (seção `inbox:`) e no `.env` (`THUNDERBIRD_PROFILE` — vazio = descoberta automática: snap, `~/.config/thunderbird` (Thunderbird 158+), `~/.thunderbird` e flatpak —, `INBOX_DEFAULT`, `OLLAMA_THINK=false` para gemma4/qwen3). Agendamento com units de **usuário** (`systemctl --user`), porque notificação e áudio precisam da sessão gráfica. Detalhes, API e workflows do N8N: [`services/inbox/about.md`](services/inbox/about.md).
 

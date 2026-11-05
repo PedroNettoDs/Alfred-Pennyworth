@@ -1,0 +1,22 @@
+{# Miolo do andamento da pesquisa profunda (página e /painel/parcial/pesquisa). Vars de painel._dados_andamento():
+   estado, etapa, mensagem, subperguntas, contagem, erro, erro_conexao, pronto. #}
+{% import "_macros.html" as m %}
+{%- if pronto %}
+{% call m.aviso("sucesso", "Pesquisa pronta.") %}<a href="{{ pronto }}" data-ir-para="{{ pronto }}">Abrir o relatório</a>{% endcall %}
+{%- elif erro %}
+{% call m.aviso("erro", erro) %}<a href="/painel/pesquisar">Voltar a Pesquisar</a>{% endcall %}
+{%- else %}
+{%- if erro_conexao %}{{ m.aviso("aguardando", erro_conexao) }}{% endif %}
+<section class="cartao" aria-labelledby="c-andamento">
+  <div class="cartao__cabecalho"><h2 class="cartao__titulo" id="c-andamento">{{ etapa or "Consultando" }}</h2>{{ m.selo("aguardando", "Em andamento") }}</div>
+  {%- if mensagem %}<p class="pequeno suave">{{ mensagem }}</p>{% endif %}
+  {%- if contagem %}
+  {{ m.chave_valor([("Resultados da busca", contagem.resultados), ("Relevantes", contagem.relevantes),
+                    ("Páginas lidas", contagem.lidas ~ " de " ~ contagem.tentadas ~ " tentadas")]) }}
+  {%- endif %}
+  {%- if subperguntas %}
+  <p class="cartao__rotulo">Subperguntas</p>
+  <ol class="prosa">{% for s in subperguntas %}<li>{{ s }}</li>{% endfor %}</ol>
+  {%- endif %}
+</section>
+{%- endif %}

@@ -32,7 +32,7 @@ Guia objetivo para quem escreve `painel.py` e os templates de cada tela. A lingu
 | Variável | Tipo | Uso |
 |---|---|---|
 | `csrf` | str | `<meta name="csrf-token">`, que o JS manda em `X-CSRF-Token` em todo POST |
-| `ativo` | `"inicio"`, `"pendencias"`, `"agenda"`, `"limpeza"` ou `"sistema"` | `aria-current="page"` no item da navegação |
+| `ativo` | `"inicio"`, `"pendencias"`, `"agenda"`, `"limpeza"`, `"pesquisar"` ou `"sistema"` | `aria-current="page"` no item da navegação |
 | `contadores` | dict (opcional) | mesmo JSON de `/painel/api/contadores`; valor inicial dos contadores da navegação (`aguardando`, `limpeza_aguardando`) |
 | `simulado` | bool (opcional) | mostra o selo "Modo simulado" no rodapé da navegação |
 
@@ -89,7 +89,7 @@ começa com `/painel` e não com `//`). O campo `token` é `type=password` e nun
 | `data-confirmar="<id do dialog>"` | form ou botão | Abre o `<dialog>` antes; só executa no `[data-confirmar-ok]` |
 | `data-dialogo-<nome>="texto"` | form ou botão | Texto que vai para `[data-preencher="<nome>"]` do diálogo |
 | `data-preencher-campo="<name>"` | dentro do dialog | Recebe o valor **atual** do campo `<name>` do form (texto final) |
-| `data-apos-sucesso` | form ou botão | `manter` (padrão: form continua usável), `encerrar` (desabilita o escopo e mantém o texto), `recarregar`, `ir:/caminho` |
+| `data-apos-sucesso` | form ou botão | `manter` (padrão: form continua usável), `encerrar` (desabilita o escopo e mantém o texto), `recarregar`, `ir:/caminho`, `ir-resposta` (vai para o `url` da resposta; só caminhos `/painel/…`, senão mostra a `mensagem`) |
 | `data-texto-ocupado="Enviando…"` | botão | Texto do botão durante a requisição |
 | `data-acoes` | contêiner | **Escopo de trava**: enquanto um form dentro dele roda, todos os botões dele ficam desabilitados (duplo clique, "Autorizar" + "Não enviar" juntos). Sem ele, o escopo é o próprio form |
 | `data-resultado` | dentro do form (ou `data-resultado="<id>"` no form) | Onde aparece a mensagem (macro `m.resultado()`). Sem ele, o JS cria um no fim do form |
@@ -126,6 +126,7 @@ login também funciona).
 | `<details id="…">` dentro do contêiner | Volta aberto depois da troca se estava aberto (**precisa de `id` estável**, ex.: `lote-<lid>-emails`) |
 | `data-contador="<chave>"` | Recebe o número de `GET /painel/api/contadores` (`aguardando`, `whatsapp`, `email`, `limpeza_aguardando`) |
 | `data-contador-ocultar-zero` | Ancestral do contador, escondido quando o valor é 0 |
+| `data-ir-para="/painel/…"` | Dentro de um parcial: depois da troca (`painel:atualizado`), o JS vai para essa página (só caminhos `/painel/…`). Usado quando a pesquisa profunda termina; ponha num `<a href>` com o mesmo destino para funcionar sem JS |
 | `data-estado-url="/painel/api/pendencias/<id>/estado"` | (detalhe) Consulta `{status, resolvida, caminho, mensagem}`. Se deixou de aguardar, revela o `[data-banner-resolvida]` com `mensagem` (ou "Esta pendência já foi resolvida por <caminho>.") e desabilita todos os `[data-acoes]` dentro dele, mantendo o texto |
 
 Uma rodada **pula** um contêiner quando o foco está nele, quando ele tem um form com `data-estado`
@@ -345,6 +346,24 @@ Lote:
 ```
 Vazia: `m.vazio("Nenhum lote de limpeza, senhor.", "limpeza")`.
 
+### Pesquisar (`/painel/pesquisar`, `ativo="pesquisar"`)
+
+```jinja
+<section class="cartao">… h2 "Nova pesquisa"
+  <form data-acao="/painel/api/pesquisar" data-apos-sucesso="ir-resposta">
+    {{ m.campo("tema", "Tema", obrigatorio=true) }} {{ m.selecao("modo", "Modo", modos, "rapido") }}
+    {{ m.botao("Pesquisar", "primario", nome_icone="busca", attrs={"data-texto-ocupado": "Pesquisando…"}) }}
+    {{ m.resultado() }}
+  </form>
+</section>
+<h2 class="secao-titulo">Pesquisas recentes</h2>
+<ul class="lista"><li class="agenda-item">{{ m.tempo(…, "agenda-item__quando") }}<div><p class="agenda-item__titulo"><a …></a></p>…</div><span></span><span></span></li></ul>
+```
+Resultado (`/painel/pesquisar/{slug}`, `pesquisa.html`): `div.detalhe` com a síntese em `div.prosa` (markdown seguro) e
+as fontes na lateral. Andamento (`/painel/pesquisar/andamento/{job_id}`): `div[data-poll-url="/painel/parcial/pesquisa?job=…"]`
+com `_pesquisa_andamento.html` (pronto: `m.aviso("sucesso")` + `<a data-ir-para>`; erro: `m.aviso("erro")`).
+Vazia: `m.vazio("Nenhuma pesquisa no cofre ainda, senhor.", "busca")`.
+
 ### Sistema (`/painel/sistema`, `ativo="sistema"`, só leitura)
 
 ```jinja
@@ -434,6 +453,9 @@ Curtos, formais e sem humor em erro. Estados vazios: "Nenhuma pendência aguarda
 | `pendencia.html` | `/painel/pendencias/{id}` | WhatsApp e e-mail no mesmo template |
 | `agenda.html` + `_agenda_lista.html` | `/painel/agenda`, `/painel/parcial/agenda` | |
 | `limpeza.html` + `_limpeza_lista.html` | `/painel/limpeza`, `/painel/parcial/limpeza` | |
+| `pesquisar.html` | `/painel/pesquisar` | formulário + pesquisas recentes |
+| `pesquisa.html` | `/painel/pesquisar/{slug}` | síntese + fontes; `p=None` → "Pesquisa não encontrada" (404) |
+| `pesquisa_andamento.html` + `_pesquisa_andamento.html` | `/painel/pesquisar/andamento/{job_id}`, `/painel/parcial/pesquisa?job=` | |
 | `sistema.html` + `_sistema.html` | `/painel/sistema`, `/painel/parcial/sistema` | |
 | `nao_encontrada.html` | detalhe com id inexistente (404) | |
 

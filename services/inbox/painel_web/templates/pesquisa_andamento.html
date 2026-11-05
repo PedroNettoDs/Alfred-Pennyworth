@@ -1,0 +1,12 @@
+{#
+  Pesquisa profunda em andamento. Vars de painel._dados_andamento() (as mesmas do parcial).
+  O contêiner é atualizado pelo polling (/painel/parcial/pesquisa?job=<id>); quando a pesquisa termina, o parcial
+  traz [data-ir-para] e o painel.js abre o resultado.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Pesquisando{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho(tema or "Pesquisa profunda", "Pesquisa profunda · leva de 4 a 5 minutos; esta página se atualiza sozinha", voltar=("/painel/pesquisar", "Pesquisar")) }}
+<div class="pilha" data-poll-url="/painel/parcial/pesquisa?job={{ job_id }}">{% include "_pesquisa_andamento.html" %}</div>
+{% endblock %}

@@ -1,0 +1,44 @@
+{#
+  Resultado de uma pesquisa (VAULT_ALFRED/research/<slug>/synthesis.md). Vars de painel.tela_pesquisa():
+  p (pesquisa.obter: titulo, slug, modo, fontes [{titulo, url}]; None = não encontrada), sintese (Markup do
+  _markdown_seguro), modo (rótulo), quando.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}{{ p.titulo if p else "Não encontrada" }}{% endblock %}
+{% block conteudo %}
+{%- if not p %}
+{{ m.cabecalho("Pesquisa não encontrada", none, voltar=("/painel/pesquisar", "Pesquisar")) }}
+{{ m.vazio("Não encontrei essa pesquisa no cofre, senhor.", "busca") }}
+{%- else %}
+<div class="detalhe">
+  {{ m.cabecalho(p.titulo, "Pesquisa " ~ modo|lower ~ " · " ~ quando ~ " · research/" ~ p.slug ~ "/", voltar=("/painel/pesquisar", "Pesquisar")) }}
+  <div class="detalhe__grade">
+    <div class="detalhe__principal">
+      <section class="cartao" aria-labelledby="c-sintese">
+        <h2 class="cartao__titulo" id="c-sintese">{{ "Relatório do Alfred" if p.modo == "profundo" else "Síntese do Alfred" }}</h2>
+        {%- if sintese %}
+        <div class="prosa">{{ sintese }}</div>
+        {%- else %}
+        <p class="suave">A síntese está vazia.</p>
+        {%- endif %}
+      </section>
+    </div>
+    <div class="detalhe__lateral">
+      <section class="cartao" aria-labelledby="c-fontes">
+        <h2 class="cartao__titulo" id="c-fontes">Fontes ({{ p.fontes|length }})</h2>
+        {%- if p.fontes %}
+        <ol class="prosa pequeno">
+          {%- for f in p.fontes %}
+          <li><a class="link-externo" href="{{ f.url }}" target="_blank" rel="noopener noreferrer">{{ f.titulo }}<span class="sr-only"> (abre em nova aba)</span></a></li>
+          {%- endfor %}
+        </ol>
+        {%- else %}
+        <p class="suave">Sem fontes em sources.md.</p>
+        {%- endif %}
+      </section>
+    </div>
+  </div>
+</div>
+{%- endif %}
+{% endblock %}

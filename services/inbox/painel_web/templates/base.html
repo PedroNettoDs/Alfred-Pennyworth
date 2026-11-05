@@ -1,6 +1,6 @@
 {#
   Esqueleto de todas as telas do Painel do Alfred.
-  Variáveis: csrf (str), ativo ("inicio"|"pendencias"|"agenda"|"limpeza"|"sistema"),
+  Variáveis: csrf (str), ativo ("inicio"|"pendencias"|"agenda"|"limpeza"|"pesquisar"|"sistema"),
              contadores (dict de /painel/api/contadores; opcional), simulado (bool; opcional).
   Blocos:    titulo (texto do <title>), conteudo (dentro de <main>), pagina (o <body> inteiro — só o login troca).
   Sem <script> nem style= inline: a CSP só aceita painel.js e painel.css.
@@ -40,6 +40,7 @@
                 ("pendencias", "/painel/pendencias", "Pendências", "pendencias", "aguardando"),
                 ("agenda",     "/painel/agenda",     "Agenda",     "agenda",     none),
                 ("limpeza",    "/painel/limpeza",    "Limpeza",    "limpeza",    "limpeza_aguardando"),
+                ("pesquisar",  "/painel/pesquisar",  "Pesquisar",  "busca",      none),
                 ("sistema",    "/painel/sistema",    "Sistema",    "sistema",    none),
               ] %}
           {%- set n = contadores.get(contador, 0) if contador else 0 %}

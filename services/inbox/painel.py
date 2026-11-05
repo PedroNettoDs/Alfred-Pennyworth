@@ -3,9 +3,9 @@ Painel do Alfred — interface web local de aprovações, servida pela própria 
 
     http://127.0.0.1:7073/painel      (login com o mesmo SHELL_EXECUTOR_TOKEN da API)
 
-Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza e Sistema (só leitura). As ações chamam as
-MESMAS funções do CLI/notificação/API — whatsapp.responder_texto, whatsapp.agendar_pendencia,
-core.responder, agenda.desfazer, limpeza.aprovar/recusar/limpar —; nada aqui grava YAML.
+Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza, Pesquisar e Sistema (só leitura). As ações chamam
+as MESMAS funções do CLI/notificação/API — whatsapp.responder_texto, whatsapp.agendar_pendencia,
+core.responder, agenda.desfazer, limpeza.aprovar/recusar/limpar, pesquisa.pesquisar —; nada aqui grava YAML.
 
 Segurança (toda rota /painel/*, inclusive login e estáticos):
   - só 127.0.0.1/::1 (a API escuta em 0.0.0.0 por causa do Docker: containers chegam como 172.17.x.x)
@@ -47,6 +47,7 @@ from starlette.concurrency import run_in_threadpool
 import agenda
 import core
 import limpeza
+import pesquisa
 import whatsapp
 from _shared import lib_whatsapp
 
@@ -847,6 +848,48 @@ def _dados_sistema() -> dict:
     }
 
 
+# ── Pesquisar (pesquisa.py: researcher em 127.0.0.1:PORT_RESEARCHER; o resultado fica no cofre) ──
+
+MODOS_PESQUISA = (("rapido", "Rápido (~45 s): síntese dos trechos da busca"),
+                  ("profundo", "Profundo (4–5 min): lê as páginas e cita as fontes"))
+ROTULO_MODO = {"rapido": "Rápida", "profundo": "Profunda"}
+ROTULO_ETAPA = {"fila": "Na fila", "plano": "Planejando as subperguntas", "busca": "Buscando na web",
+                "leitura": "Lendo as páginas", "sintese": "Escrevendo o relatório", "vault": "Gravando no cofre",
+                "concluido": "Pronto"}
+
+
+def _url_pesquisa(slug: str) -> str:
+    return "/painel/pesquisar/" + quote(slug, safe="")
+
+
+def _pesquisas_recentes() -> list[dict]:
+    return [{"titulo": i["titulo"], "url": _url_pesquisa(i["slug"]), "modo": ROTULO_MODO.get(i["modo"], i["modo"]),
+             "quando": fmt_data(i["quando"]), "relativo": fmt_relativo(i["quando"]), "iso": _iso(i["quando"])}
+            for i in pesquisa.recentes()]
+
+
+def _dados_andamento(job_id: str) -> Optional[dict]:
+    """Pesquisa profunda em andamento (página e parcial do polling). None = job desconhecido. Pronta → `pronto`
+    com a URL do resultado (o painel.js vai para lá sozinho)."""
+    try:
+        j = pesquisa.andamento(job_id)
+    except KeyError:
+        return None
+    except pesquisa.ErroPesquisa as e:   # researcher fora no meio: a tela continua consultando
+        return {"job_id": job_id, "tema": "", "estado": "running", "etapa": "", "mensagem": "", "subperguntas": [],
+                "contagem": {}, "erro": "", "erro_conexao": str(e), "pronto": ""}
+    st = j.get("status")
+    erro = j.get("erro") or ""
+    if st == "interrompido":
+        erro = "O researcher reiniciou no meio desta pesquisa e ela parou. Peça de novo."
+    slug = pesquisa.slug_resultado(j.get("resultado") or {}) if st == "done" else ""
+    return {"job_id": job_id, "tema": j.get("topic") or "", "estado": st,
+            "etapa": ROTULO_ETAPA.get(j.get("etapa"), j.get("etapa") or ""), "mensagem": j.get("mensagem") or "",
+            "subperguntas": j.get("subperguntas") or [], "contagem": j.get("contagem") or {},
+            "erro": erro if st in ("error", "interrompido") else "", "erro_conexao": "",
+            "pronto": _url_pesquisa(slug) if slug else ""}
+
+
 # ── Detalhe da pendência ──
 
 def _estado_audio(p: dict) -> str:
@@ -1107,10 +1150,41 @@ def tela_whatsapp(request: Request):
                    wa=_conexao_whatsapp(_status_whatsapp()), instancia=lib_whatsapp.instancia())
 
 
+@router.get("/pesquisar")
+def tela_pesquisar(request: Request):
+    if not _nonce_da_sessao(request):
+        return _para_login(request)
+    return _pagina(request, "pesquisar.html", "pesquisar", modos=MODOS_PESQUISA, recentes=_pesquisas_recentes())
+
+
+@router.get("/pesquisar/andamento/{job_id}")
+def tela_pesquisa_andamento(request: Request, job_id: str):
+    if not _nonce_da_sessao(request):
+        return _para_login(request)
+    dados = _dados_andamento(job_id)
+    if dados is None:
+        return _pagina(request, "pesquisa.html", "pesquisar", status=404, p=None)
+    if dados["pronto"]:
+        return RedirectResponse(dados["pronto"], status_code=303)
+    return _pagina(request, "pesquisa_andamento.html", "pesquisar", **dados)
+
+
+@router.get("/pesquisar/{slug}")
+def tela_pesquisa(request: Request, slug: str):
+    if not _nonce_da_sessao(request):
+        return _para_login(request)
+    p = pesquisa.obter(slug)
+    if not p:
+        return _pagina(request, "pesquisa.html", "pesquisar", status=404, p=None)
+    return _pagina(request, "pesquisa.html", "pesquisar", p=p, sintese=_markdown_seguro(p["sintese"]),
+                   modo=ROTULO_MODO.get(p["modo"], p["modo"]), quando=fmt_data(p["quando"]))
+
+
 # ── Fragmentos do polling (mesmos parciais das páginas) ──
 
 @router.get("/parcial/{nome}")
-def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None):
+def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None,
+            job: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _erro(401, MSG_SESSAO)
     if nome == "pendencias":
@@ -1127,6 +1201,11 @@ def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Option
         html = _render("_limpeza_lista.html", lotes=lotes, erro_limpeza=erro)
     elif nome == "sistema":
         html = _render("_sistema.html", **_dados_sistema())
+    elif nome == "pesquisa":
+        dados = _dados_andamento(job or "")
+        if dados is None:
+            return _erro(404, "Pesquisa não encontrada.")
+        html = _render("_pesquisa_andamento.html", **dados)
     else:
         return _erro(404, "Parcial desconhecido.")
     return HTMLResponse(html)
@@ -1339,6 +1418,34 @@ async def acao_feito(request: Request, aid: str):
         return r
     return JSONResponse({"ok": True, "status": r.get("status"),
                          "mensagem": "Feito. O evento ganha ☑ no calendário na próxima passada da extensão."})
+
+
+@router.post("/api/pesquisar")
+async def acao_pesquisar(request: Request):
+    if recusa := _checar_post(request):
+        return recusa
+    corpo = await _corpo_json(request)
+    tema = re.sub(r"\s+", " ", str(corpo.get("tema") or "")).strip()
+    modo = str(corpo.get("modo") or "rapido")
+    if not tema:
+        return _erro(400, "Escreva o tema da pesquisa.", campo="tema")
+    if len(tema) > 300:
+        return _erro(400, "Tema longo demais: resuma em até 300 caracteres.", campo="tema")
+    if modo not in ("rapido", "profundo"):
+        return _erro(400, "Modo inválido: use Rápido ou Profundo.", campo="modo")
+    try:
+        # o rápido segura a resposta por ~45 s: fora do laço do servidor
+        r = await run_in_threadpool(pesquisa.pesquisar, tema, modo == "profundo")
+    except pesquisa.ErroPesquisa as e:
+        return _erro(502, str(e), pode_tentar_de_novo=True)
+    if r.get("job_id"):
+        return JSONResponse({"ok": True, "url": f"/painel/pesquisar/andamento/{r['job_id']}",
+                             "mensagem": "Pesquisa profunda iniciada. Acompanhe o andamento."})
+    slug = pesquisa.slug_resultado(r)
+    if not slug:
+        return _erro(502, "O researcher respondeu sem a pasta da pesquisa.", pode_tentar_de_novo=True)
+    # cache semântico: a pasta é a do tema parecido (a tela mostra o título dele)
+    return JSONResponse({"ok": True, "url": _url_pesquisa(slug), "mensagem": "Pesquisa pronta."})
 
 
 async def _acao_lote(request: Request, lid: str, acao: str):
