@@ -5,7 +5,8 @@ Painel do Alfred — interface web local de aprovações, servida pela própria 
 
 Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza, Pesquisar e Sistema (só leitura). As ações chamam
 as MESMAS funções do CLI/notificação/API — whatsapp.responder_texto, whatsapp.agendar_pendencia,
-core.responder, agenda.desfazer, limpeza.aprovar/recusar/limpar, pesquisa.pesquisar —; nada aqui grava YAML.
+core.responder, agenda.desfazer, limpeza.aprovar/recusar/limpar, pesquisa.pesquisar/abrir_notebook —; nada aqui
+grava YAML.
 
 Segurança (toda rota /painel/*, inclusive login e estáticos):
   - só 127.0.0.1/::1 (a API escuta em 0.0.0.0 por causa do Docker: containers chegam como 172.17.x.x)
@@ -864,7 +865,7 @@ def _url_pesquisa(slug: str) -> str:
 
 def _pesquisas_recentes() -> list[dict]:
     return [{"titulo": i["titulo"], "url": _url_pesquisa(i["slug"]), "modo": ROTULO_MODO.get(i["modo"], i["modo"]),
-             "quando": fmt_data(i["quando"]), "relativo": fmt_relativo(i["quando"]), "iso": _iso(i["quando"])}
+             "notebook": bool(i["notebook"]), "quando": fmt_data(i["quando"]), "relativo": fmt_relativo(i["quando"]), "iso": _iso(i["quando"])}
             for i in pesquisa.recentes()]
 
 
@@ -1446,6 +1447,26 @@ async def acao_pesquisar(request: Request):
         return _erro(502, "O researcher respondeu sem a pasta da pesquisa.", pode_tentar_de_novo=True)
     # cache semântico: a pasta é a do tema parecido (a tela mostra o título dele)
     return JSONResponse({"ok": True, "url": _url_pesquisa(slug), "mensagem": "Pesquisa pronta."})
+
+
+@router.post("/api/pesquisar/{slug}/notebook")
+async def acao_notebook(request: Request, slug: str):
+    """"Abrir um notebook sobre isso": cria (ou reabre) o notebook no OpenNotebook; o JS vai para o `url`."""
+    if recusa := _checar_post(request):
+        return recusa
+    try:
+        r = await run_in_threadpool(pesquisa.abrir_notebook, slug)
+    except KeyError:
+        return _erro(404, "Pesquisa não encontrada.")
+    except pesquisa.ErroPesquisa as e:
+        return _erro(502, str(e), pode_tentar_de_novo=True)
+    if r["fontes"]:
+        msg = f"{'Notebook criado' if r['criado'] else 'Notebook completado'} com {r['fontes']} fonte(s)."
+        if r["falhas"]:
+            msg += f" {len(r['falhas'])} ficaram de fora."
+    else:
+        msg = "Abrindo o notebook desta pesquisa."
+    return JSONResponse({"ok": True, "url": r["url"], "mensagem": msg, "falhas": r["falhas"]})
 
 
 async def _acao_lote(request: Request, lid: str, acao: str):

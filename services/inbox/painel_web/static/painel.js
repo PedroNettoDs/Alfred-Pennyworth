@@ -19,6 +19,7 @@
   var INTERVALO_MS = 15000;
   var URL_LOGIN = "/painel/login";
   var URL_CONTADORES = "/painel/api/contadores";
+  var URL_OPENNOTEBOOK = "http://127.0.0.1:8502/notebooks/";   // "Abrir um notebook sobre isso" (Pesquisar)
 
   var MSG_REDE = "Não foi possível falar com a API do Alfred. Verifique se ela está no ar e tente de novo.";
   var MSG_SEM_CONEXAO = "Sem contato com a API do Alfred. As listas voltam a se atualizar sozinhas quando ela responder.";
@@ -212,10 +213,12 @@
     }
   }
 
-  // Destino de navegação vindo do servidor (resposta da ação ou parcial): só páginas do próprio painel.
+  // Destino de navegação vindo do servidor (resposta da ação ou parcial): só páginas do próprio painel e
+  // notebooks do OpenNotebook local.
   function destinoSeguro(url) {
     if (typeof url !== "string") return null;
     if (/^\/painel\/[^\/\\]/.test(url)) return url;
+    if (url.indexOf(URL_OPENNOTEBOOK) === 0) return url;
     return null;
   }
 

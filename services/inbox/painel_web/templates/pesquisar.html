@@ -1,6 +1,6 @@
 {#
   Aba Pesquisar. Vars de painel.tela_pesquisar(): modos ([(valor, rótulo)]), recentes (lista de
-  painel._pesquisas_recentes(): titulo, url, modo, quando, relativo, iso).
+  painel._pesquisas_recentes(): titulo, url, modo, notebook (bool), quando, relativo, iso).
   O form chama POST /painel/api/pesquisar; a resposta traz `url` (resultado do rápido ou andamento do profundo)
   e o painel.js vai para lá (data-apos-sucesso="ir-resposta").
 #}
@@ -31,7 +31,7 @@
         {{ m.tempo(i.iso, i.quando, i.relativo, "agenda-item__quando") }}
         <div>
           <p class="agenda-item__titulo"><a href="{{ i.url }}">{{ i.titulo }}</a></p>
-          <span class="agenda-item__origem">Pesquisa {{ i.modo|lower }}</span>
+          <span class="agenda-item__origem">Pesquisa {{ i.modo|lower }}{% if i.notebook %} · no OpenNotebook{% endif %}</span>
         </div>
         <span></span>
         <span></span>

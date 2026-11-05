@@ -192,8 +192,8 @@ enviar a um contato) e o botão para autorizar, editar ou recusar. É servida pe
 por `main.py`). Usa templates Jinja2 em `painel_web/templates/` e um CSS e um JS em `painel_web/static/` (contrato
 dos componentes em `painel_web/COMPONENTES.md`). Não tem build, CDN nem fonte externa: funciona offline. Toda ação
 chama as **mesmas funções** do CLI, da notificação e da API — o painel não grava YAML nem tem lógica própria de envio,
-resposta, agenda ou limpeza. A aba **Pesquisar** pede ao researcher (`pesquisa.py`) e mostra o que ele gravou no cofre
-— ver [Pesquisar](#pesquisar).
+resposta, agenda ou limpeza. A aba **Pesquisar** pede ao researcher (`pesquisa.py`), mostra o que ele gravou no cofre
+e leva a pesquisa ao OpenNotebook — ver [Pesquisar](#pesquisar).
 
 ### Como abrir
 
@@ -242,7 +242,7 @@ resposta, agenda ou limpeza. A aba **Pesquisar** pede ao researcher (`pesquisa.p
 | **Detalhe já resolvido** | "Esta pendência já foi resolvida por <caminho>.", o resultado (status, data, resposta, envio, nota, tarefa) e nenhuma ação |
 | **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
 | **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data e, depois que a extensão passa, o resultado de cada um) recolhível; o resultado agregado da última passada (movidos para a Lixeira, não encontrados, recusados, com erro); **Aprovar**, **Aprovar e limpar** e **Recusar** (nota opcional) nos lotes aguardando; **Limpar** nos lotes aprovados, simulados, parciais ou que falharam (some enquanto a limpeza pedida espera a extensão) |
-| **Pesquisar** (`/painel/pesquisar`) | formulário (tema + **Rápido** ou **Profundo**) e as 20 pesquisas mais recentes de `VAULT_ALFRED/research/*/index.md` (título, data, modo). Cada uma abre `/painel/pesquisar/{slug}`: a síntese de `synthesis.md` no markdown seguro do painel (o mesmo da explicação do e-mail) e a lista de fontes de `sources.md`. O profundo abre `/painel/pesquisar/andamento/{job_id}` (etapa, mensagem, contagem, subperguntas), que se atualiza sozinho e vai para o resultado quando termina — ver [Pesquisar](#pesquisar) |
+| **Pesquisar** (`/painel/pesquisar`) | formulário (tema + **Rápido** ou **Profundo**) e as 20 pesquisas mais recentes de `VAULT_ALFRED/research/*/index.md` (título, data, modo). Cada uma abre `/painel/pesquisar/{slug}`: a síntese de `synthesis.md` no markdown seguro do painel (o mesmo da explicação do e-mail), a lista de fontes de `sources.md` e o botão **Abrir um notebook sobre isso** (OpenNotebook). O profundo abre `/painel/pesquisar/andamento/{job_id}` (etapa, mensagem, contagem, subperguntas), que se atualiza sozinho e vai para o resultado quando termina — ver [Pesquisar](#pesquisar) |
 | **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
 
 O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
@@ -265,6 +265,7 @@ Datas sempre em America/Sao_Paulo, `DD/MM/AAAA HH:MM`, e relativas nas listas ("
 | **Aprovar** (limpeza) | confirmação "Os N e-mails irão para a Lixeira da conta. Nada é apagado de forma permanente." → `limpeza.aprovar(id, nota)` (com a revalidação de sempre) | `aprovado`; a extensão do Thunderbird executa na próxima passada, ou só simula se "Executar de verdade" estiver desligado nela |
 | **Limpar** / **Aprovar e limpar** (limpeza) | confirmação "Mover os N e-mails para a Lixeira da conta? …" → `limpeza.limpar(id, nota)`: aprova antes se o lote está aguardando e revalida os itens ainda não movidos ([LIMPEZA.md](LIMPEZA.md#botão-limpar-painel--limpeza)) | `aprovado` + `limpar: true`; a extensão move de verdade só esse lote, mesmo com "Executar de verdade" desligado; 409 enquanto ela executa o lote |
 | **Recusar** (limpeza) | `limpeza.recusar(id, nota)` | `recusado`, nenhum e-mail é movido |
+| **Abrir um notebook sobre isso** (pesquisa) | `pesquisa.abrir_notebook(slug)` → API do OpenNotebook em `127.0.0.1:5055` (ver [Pesquisar](#pesquisar)) | o JS vai para `http://127.0.0.1:8502/notebooks/<id>`. Já tem notebook → abre o mesmo. OpenNotebook fora do ar → 502 na tela, com **Tentar de novo** |
 | **Pesquisar** | `pesquisa.pesquisar(tema, profundo)` → `POST 127.0.0.1:${PORT_RESEARCHER:-7072}/research` com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN` | rápido: espera a síntese (~40–50 s, teto de 300 s) e abre o resultado; profundo: 202 + `job_id` → abre o andamento. Researcher fora do ar ou erro dele → 502 com a mensagem e **Tentar de novo** |
 
 - **Já resolvida por outro caminho** (celular, notificação, CLI, chat): o servidor confere "ainda aguardando" antes de
@@ -306,6 +307,7 @@ recarrega a cada seta) e Enter ou **Buscar** aplicam.
 | POST `/painel/api/pendencias/{id}/responder-texto` `{texto}` · `/ignorar` · `/agendar` `{quando}` · `/responder` `{resposta, nota}` | ações das pendências |
 | POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` · `/limpar` `{nota}` | agenda e limpeza |
 | POST `/painel/api/pesquisar` `{tema, modo: rapido\|profundo}` | nova pesquisa; a resposta traz `url` (resultado ou andamento) |
+| POST `/painel/api/pesquisar/{slug}/notebook` | cria ou reabre o notebook no OpenNotebook; a resposta traz `url` (a interface, 127.0.0.1:8502) e `falhas` |
 | GET `/painel/static/painel.css`, `/painel/static/painel.js` | estáticos (lista fechada) |
 
 Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 403 CSRF/origem/rede; 404; 409 já resolvida;
@@ -330,6 +332,32 @@ gravação (`services/researcher/about.md`).
 - O frontmatter dos `.md` é lido linha a linha (o formato do `vault_write`), sem YAML: um título com `#` ou `[` não
   derruba a lista.
 
+**OpenNotebook** (alternativa local ao NotebookLM; não busca na web — o `/api/search` dele só consulta fontes já
+adicionadas). O Alfred acha e lê as fontes; o OpenNotebook guarda tudo para conversar, anotar e gerar podcast. A API
+fica em `http://127.0.0.1:5055` (v1.14, sem auth, só localhost) e a interface em `http://127.0.0.1:8502` — o link só
+abre na própria máquina. **Abrir um notebook sobre isso** roda no servidor do inbox (`pesquisa.abrir_notebook`):
+
+1. `POST /api/notebooks` `{"name": <título>, "description": "Pesquisa … do Alfred — research/<slug>/ …"}`; o id
+   (`notebook:…`) vai **na hora** para o frontmatter do `index.md` (`opennotebook: "notebook:…"`, só essa linha muda);
+2. para cada URL de `sources.md`, `POST /api/sources/json` `{"type": "link", "url", "title", "notebooks": [id],
+   "embed": true, "async_processing": true}` — só `http`/`https` de host público (`lib_web.url_publica`): o
+   OpenNotebook baixa a página e roda com a rede do host. O rápido lista até 20 resultados da busca; o profundo, só
+   as páginas que leu;
+3. mais uma fonte `{"type": "text", "content": <synthesis.md sem frontmatter>, "title": "Relatório do Alfred"}`;
+4. o JS vai para `http://127.0.0.1:8502/notebooks/<id com quote(safe='')>` (`painel.js` só aceita esse prefixo ou
+   `/painel/…`).
+
+Com id gravado, o botão vira **Abrir o notebook**: `GET /api/notebooks/<id>` → existe com fontes → só abre; existe
+sem nenhuma fonte (o envio falhou antes) → manda as fontes de novo para ele; 404 (apagado lá) → cria outro e troca o
+id. OpenNotebook fora do ar → 502 "O OpenNotebook não respondeu em http://127.0.0.1:5055 …" e nada é gravado; fonte
+recusada entra em `falhas` (e no log `[pesquisa]`) sem parar as outras; nenhuma aceita → 502 e **Tentar de novo** usa
+o mesmo notebook. Uma pesquisa nova do mesmo tema regrava o `index.md` e o próximo clique cria outro notebook.
+
+O processamento das fontes (leitura, embedding) acontece no OpenNotebook, com os modelos configurados lá. O padrão de
+embedding dele é o `qwen3-embedding:4b`, que roda na GPU e tira o `gemma4:12b` da VRAM (o Alfred usa
+`OLLAMA_EMBED_NUM_GPU=0` para evitar isso); o `bge-m3` já está cadastrado lá como alternativa. A troca é decisão
+pendente e não é feita pelo Alfred.
+
 ### Fora do escopo e limitações
 
 - Não edita configuração (`perfis.yml`, `.env`), não tem botão de modo jogo, chat com o Alfred, novos tipos de ação nem
@@ -346,7 +374,7 @@ gravação (`services/researcher/about.md`).
 
 ```bash
 cd services/inbox
-venv/bin/python -m unittest tests.test_painel -v     # 54 testes offline, ~6 s
+venv/bin/python -m unittest tests.test_painel -v     # 61 testes offline, ~6 s
 ```
 
 Vault temporário, LLM/TTS mockados e envios simulados. Cobrem login (token errado/certo, cookie adulterado, expirado,
@@ -356,7 +384,9 @@ estranho, CSRF e origem, CSRF renovado depois de entrar de novo, API subindo sem
 detalhe aberto (409), duplo clique com envio lento (um envio só), falha de envio com nova tentativa, vou / não vou igual
 ao CLI, limpeza, desfazer da agenda, polling, Evolution fora do ar, a aba Resolvidas lado a lado, áudio e cabeçalhos,
 a aba Pesquisar (researcher trocado por `httpx.MockTransport`: rápido, cache semântico, profundo do andamento ao fim,
-erro e `interrompido`, researcher fora do ar, validação e 404) — e conferem que o token não aparece em nenhuma resposta.
+erro e `interrompido`, researcher fora do ar, validação e 404), o botão do OpenNotebook (também por `MockTransport`:
+criação com fontes e relatório, id no frontmatter, reabrir o mesmo, notebook apagado lá, notebook sem fontes, URL
+privada de fora, OpenNotebook fora do ar) — e conferem que o token não aparece em nenhuma resposta.
 
 ## N8N — workflows em `n8n/`
 

@@ -1,7 +1,9 @@
 {#
   Resultado de uma pesquisa (VAULT_ALFRED/research/<slug>/synthesis.md). Vars de painel.tela_pesquisa():
-  p (pesquisa.obter: titulo, slug, modo, fontes [{titulo, url}]; None = não encontrada), sintese (Markup do
-  _markdown_seguro), modo (rótulo), quando.
+  p (pesquisa.obter: titulo, slug, modo, fontes [{titulo, url}], notebook (id ou ""); None = não encontrada),
+  sintese (Markup do _markdown_seguro), modo (rótulo), quando.
+  "Abrir um notebook sobre isso" → POST /painel/api/pesquisar/<slug>/notebook; o painel.js vai para o `url` da
+  resposta (o notebook no OpenNotebook, 127.0.0.1:8502).
 #}
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
@@ -25,6 +27,19 @@
       </section>
     </div>
     <div class="detalhe__lateral">
+      <section class="cartao" aria-labelledby="c-notebook">
+        <h2 class="cartao__titulo" id="c-notebook">OpenNotebook</h2>
+        {%- if p.notebook %}
+        <p class="pequeno suave">Esta pesquisa já tem um notebook: o botão abre o mesmo.</p>
+        {%- else %}
+        <p class="pequeno suave">Leva as fontes e este relatório para um notebook novo, onde dá para conversar, anotar e gerar podcast. As páginas são lidas lá, em segundo plano.</p>
+        {%- endif %}
+        <form data-acao="/painel/api/pesquisar/{{ p.slug|urlencode }}/notebook" data-apos-sucesso="ir-resposta">
+          {{ m.botao("Abrir o notebook" if p.notebook else "Abrir um notebook sobre isso", "primario", nome_icone="externo",
+                     attrs={"data-texto-ocupado": "Abrindo…" if p.notebook else "Criando o notebook…"}) }}
+          {{ m.resultado() }}
+        </form>
+      </section>
       <section class="cartao" aria-labelledby="c-fontes">
         <h2 class="cartao__titulo" id="c-fontes">Fontes ({{ p.fontes|length }})</h2>
         {%- if p.fontes %}

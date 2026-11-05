@@ -1071,7 +1071,7 @@ class TestSemJinja2(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════
-#  15. Pesquisar (researcher por httpx.MockTransport; resultado no cofre temporário)
+#  15. Pesquisar e OpenNotebook (researcher e OpenNotebook por httpx.MockTransport; cofre temporário)
 # ══════════════════════════════════════════════════════════════
 
 SINTESE = ("---\ntitle: \"Síntese — Tokio: runtime\"\ndate: 2026-11-05\ntopic: tokio-runtime\ntype: synthesis\n"
@@ -1082,9 +1082,9 @@ FONTES = ("---\ntitle: Fontes\n---\n\n# Fontes: Tokio\n\n## [1] Guia do Tokio\n-
           "- **Subpergunta**: O que é?\n  - fato\n\n## [2] Async Rust\n- **URL**: https://async.example/livro\n")
 
 
-class _Researcher:
-    """httpx.MockTransport no lugar do researcher (127.0.0.1:PORT_RESEARCHER=9). `respostas`: (método, caminho) →
-    httpx.Response ou função(request); guarda os pedidos."""
+class _Servico:
+    """httpx.MockTransport no lugar do researcher (127.0.0.1:PORT_RESEARCHER=9) e do OpenNotebook (127.0.0.1:5055).
+    `respostas`: (método, caminho) → httpx.Response ou função(request); guarda os pedidos."""
 
     def __init__(self, respostas):
         self.respostas, self.pedidos = respostas, []
@@ -1098,7 +1098,7 @@ class _Researcher:
         return r(request) if callable(r) else r
 
 
-class TestPesquisar(Base):
+class _ComPesquisa(Base):
     def setUp(self):
         super().setUp()
         self.dir = TMP / "vault" / "research" / "tokio-runtime"
@@ -1108,13 +1108,17 @@ class TestPesquisar(Base):
         (self.dir / "synthesis.md").write_text(SINTESE, encoding="utf-8")
         (self.dir / "sources.md").write_text(FONTES, encoding="utf-8")
 
-    def researcher(self, respostas) -> _Researcher:
-        r = _Researcher(respostas)
+    def researcher(self, respostas) -> _Servico:
+        r = _Servico(respostas)
         p = mock.patch.object(pesquisa, "_transporte", r.mock)
         p.start()
         self.addCleanup(p.stop)
         return r
 
+    opennotebook = researcher   # o mesmo transporte atende os dois (os caminhos não se repetem)
+
+
+class TestPesquisar(_ComPesquisa):
     def job(self, **campos):
         return {"id": "0123456789ab", "topic": "Tokio: runtime", "slug": "tokio-runtime", "status": "running",
                 "etapa": "leitura", "mensagem": "subpergunta 2/3: nota 2", "subperguntas": ["O que é o Tokio?"],
@@ -1250,6 +1254,144 @@ class TestPesquisar(Base):
         self.assertEqual(self.guardar(cli.get("/painel/pesquisar/..%2F..%2Fpendencias")).status_code, 404)
         self.assertEqual(self.guardar(cli.get("/painel/parcial/pesquisa?job=abcdef123456")).status_code, 404)
         self.assertEqual(self.guardar(self.cliente().get("/painel/pesquisar", follow_redirects=False)).status_code, 303)
+
+
+class TestNotebook(_ComPesquisa):
+    NID = "notebook:abc123"
+    URL = "http://127.0.0.1:8502/notebooks/notebook%3Aabc123"
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(pesquisa, "_dns", lambda host: ["10.0.0.5"] if host == "interno.example" else
+                              (["127.0.0.1"] if host == "127.0.0.1" else ["93.184.216.34"]))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def servico(self, notebook=None, fonte=None, criar=None):
+        ids = iter([self.NID, "notebook:novo456"])
+        return self.opennotebook({
+            ("POST", "/api/notebooks"): criar or (lambda req: httpx.Response(200, json={
+                "id": next(ids), "name": json.loads(req.content)["name"], "description": "", "archived": False,
+                "created": "", "updated": "", "source_count": 0, "note_count": 0})),
+            ("GET", "/api/notebooks/notebook:abc123"): notebook or httpx.Response(404, json={"detail": "Notebook not found"}),
+            ("POST", "/api/sources/json"): fonte or httpx.Response(200, json={"id": "source:1", "title": "x"}),
+        })
+
+    def botao(self, cli=None, slug="tokio-runtime"):
+        cli = cli or self.entrar()
+        return self.acao(cli, f"/painel/api/pesquisar/{slug}/notebook")
+
+    def corpos(self, servico, metodo, caminho):
+        return [json.loads(r.content) for r in servico.pedidos if (r.method, r.url.path) == (metodo, caminho)]
+
+    def test_cria_o_notebook_com_as_fontes_e_o_relatorio(self):
+        on = self.servico()
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text
+        self.assertIn('data-acao="/painel/api/pesquisar/tokio-runtime/notebook" data-apos-sucesso="ir-resposta"', html)
+        self.assertIn("Abrir um notebook sobre isso", html)
+
+        r = self.botao(cli)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["url"], self.URL)
+        self.assertIn("Notebook criado com 3 fonte(s).", r.json()["mensagem"])
+        self.assertTrue(all(str(x.url).startswith("http://127.0.0.1:5055/api/") for x in on.pedidos))
+        self.assertTrue(all("authorization" not in x.headers for x in on.pedidos))   # o token fica no Alfred
+
+        nb = self.corpos(on, "POST", "/api/notebooks")
+        self.assertEqual(len(nb), 1)
+        self.assertEqual(nb[0]["name"], "Tokio: runtime")
+        self.assertIn("research/tokio-runtime/", nb[0]["description"])
+        fontes = self.corpos(on, "POST", "/api/sources/json")
+        self.assertEqual([(f["type"], f.get("url"), f["title"]) for f in fontes[:2]],
+                         [("link", "https://tokio.example/guia", "Guia do Tokio"),
+                          ("link", "https://async.example/livro", "Async Rust")])
+        for f in fontes:
+            self.assertEqual((f["notebooks"], f["embed"], f["async_processing"]), ([self.NID], True, True))
+        self.assertEqual((fontes[2]["type"], fontes[2]["title"]), ("text", "Relatório do Alfred"))
+        self.assertTrue(fontes[2]["content"].startswith("# Tokio: runtime\n\n## Resumo"))   # sem o frontmatter
+        self.assertIn("## Fontes", fontes[2]["content"])
+
+        indice = (self.dir / "index.md").read_text(encoding="utf-8")
+        self.assertTrue(indice.startswith('---\ntitle: "Tokio: runtime"\ndate: 2026-11-05\nmodo: profundo\n'
+                                          'opennotebook: "notebook:abc123"\n---\n\n# Tokio: runtime\n'), indice)
+        self.assertIn("Abrir o notebook", self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text)
+        self.assertIn("no OpenNotebook", self.guardar(cli.get("/painel/pesquisar")).text)
+
+    def test_reabre_o_mesmo_notebook(self):
+        self.servico()
+        cli = self.entrar()
+        self.botao(cli)
+        on = self.servico(notebook=httpx.Response(200, json={"id": self.NID, "source_count": 3}))
+        r = self.botao(cli)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["url"], self.URL)
+        self.assertEqual(r.json()["mensagem"], "Abrindo o notebook desta pesquisa.")
+        self.assertEqual([(x.method, x.url.path) for x in on.pedidos], [("GET", "/api/notebooks/notebook:abc123")])
+        self.assertIn("/api/notebooks/notebook%3Aabc123", str(on.pedidos[0].url))     # id com quote(safe='')
+
+    def test_notebook_apagado_no_opennotebook_cria_outro(self):
+        self.servico()
+        cli = self.entrar()
+        self.botao(cli)
+        on = self.servico(criar=lambda req: httpx.Response(200, json={"id": "notebook:novo456"}))
+        r = self.botao(cli)
+        self.assertEqual(r.json()["url"], "http://127.0.0.1:8502/notebooks/notebook%3Anovo456")
+        self.assertEqual(len(self.corpos(on, "POST", "/api/notebooks")), 1)
+        indice = (self.dir / "index.md").read_text(encoding="utf-8")
+        self.assertEqual(indice.count("opennotebook:"), 1)
+        self.assertIn('opennotebook: "notebook:novo456"', indice)
+
+    def test_notebook_sem_fontes_recebe_as_fontes_de_novo(self):
+        on = self.servico(fonte=httpx.Response(500, json={"detail": "erro"}))
+        cli = self.entrar()
+        r = self.botao(cli)
+        self.assertEqual(r.status_code, 502)
+        self.assertIn("não aceitou nenhuma fonte", r.json()["erro"])
+        self.assertTrue(r.json()["pode_tentar_de_novo"])
+        self.assertIn('opennotebook: "notebook:abc123"', (self.dir / "index.md").read_text(encoding="utf-8"))
+        # Tentar de novo: o notebook existe, vazio → as fontes vão para ele (nenhum notebook novo)
+        on = self.servico(notebook=httpx.Response(200, json={"id": self.NID, "source_count": 0}))
+        r = self.botao(cli)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["url"], self.URL)
+        self.assertIn("Notebook completado com 3 fonte(s).", r.json()["mensagem"])
+        self.assertEqual(self.corpos(on, "POST", "/api/notebooks"), [])
+        self.assertEqual(len(self.corpos(on, "POST", "/api/sources/json")), 3)
+
+    def test_url_privada_fica_de_fora(self):
+        with (self.dir / "sources.md").open("a", encoding="utf-8") as f:
+            f.write("\n## [3] Painel\n- **URL**: http://127.0.0.1:7073/painel\n\n## [4] Interno\n- **URL**: http://interno.example/x\n"
+                    "\n## [5] Arquivo\n- **URL**: file:///etc/passwd\n")
+        on = self.servico()
+        r = self.botao()
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn("3 ficaram de fora", r.json()["mensagem"])
+        self.assertEqual(r.json()["falhas"], ["http://127.0.0.1:7073/painel", "http://interno.example/x", "file:///etc/passwd"])
+        enviadas = [f.get("url") for f in self.corpos(on, "POST", "/api/sources/json")]
+        self.assertEqual(enviadas, ["https://tokio.example/guia", "https://async.example/livro", None])
+
+    def test_opennotebook_fora_do_ar(self):
+        def recusa(request):
+            raise httpx.ConnectError("conexão recusada", request=request)
+
+        self.servico(criar=recusa)
+        antes = (self.dir / "index.md").read_text(encoding="utf-8")
+        cli = self.entrar()
+        r = self.botao(cli)
+        self.assertEqual(r.status_code, 502)
+        self.assertIn("O OpenNotebook não respondeu em http://127.0.0.1:5055", r.json()["erro"])
+        self.assertTrue(r.json()["pode_tentar_de_novo"])
+        self.assertEqual((self.dir / "index.md").read_text(encoding="utf-8"), antes)   # nada gravado
+        self.assertEqual(self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).status_code, 200)   # a aba não quebra
+
+    def test_pesquisa_desconhecida_e_csrf(self):
+        on = self.servico()
+        cli = self.entrar()
+        self.assertEqual(self.botao(cli, "nao-existe").status_code, 404)
+        r = self.acao(cli, "/painel/api/pesquisar/tokio-runtime/notebook", csrf="errado")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(on.pedidos, [])
 
 
 class TestCabecalhos(Base):
