@@ -76,6 +76,10 @@ NUM_CTX_SINTESE      = 16384          # as notas de 6 subperguntas × 3 páginas
 TIPOS_TEXTO          = {"", "text/html", "application/xhtml+xml", "text/plain"}
 USER_AGENT           = "Mozilla/5.0 (compatible; AlfredResearcher/3.2; +local)"
 
+# ── Config: busca (os dois modos) ─────────────────────────────
+CATEGORIAS_PADRAO  = "general"   # news,it trazia MDN/Hackage em 3 de 5 perguntas (docs/avaliacoes/pesquisa.md)
+CATEGORIAS_RESERVA = "news,it"   # general vazio: os 3 motores web da instância suspendem sob carga
+
 _transporte_http: Optional[httpx.BaseTransport] = None   # os testes trocam por httpx.MockTransport
 
 _jobs: dict[str, dict] = {}          # jobs profundos em andamento (os terminados ficam só em JOBS_DIR)
@@ -312,6 +316,22 @@ def _relevancia_minima() -> float:
         return RELEVANCIA_MIN_PADRAO
 
 
+def _hoje() -> str:
+    """Primeira linha dos prompts de plano e de consultas: sem a data, a pergunta de notícia vira subpergunta no futuro."""
+    return f"Hoje é {datetime.now():%d/%m/%Y}.\n"
+
+
+def _buscar(consulta: str, max_results: int) -> list[dict]:
+    """searxng_search na categoria pesquisa.categorias do perfis.yml (padrão general). Lista vazia → a mesma
+    consulta em news,it: cobre os motores de general suspensos, não um resultado ruim."""
+    categorias = str(_config_pesquisa().get("categorias") or "").strip() or CATEGORIAS_PADRAO
+    resultados = searxng_search(consulta, categories=categorias, max_results=max_results)
+    if not resultados and categorias != CATEGORIAS_RESERVA:
+        log(f"[researcher] SearXNG vazio em {categorias!r} para {consulta!r} — repetindo em {CATEGORIAS_RESERVA!r}")
+        resultados = searxng_search(consulta, categories=CATEGORIAS_RESERVA, max_results=max_results)
+    return resultados
+
+
 # ── Estado dos jobs (gravação atômica: temporário + os.replace) ──
 def _gravar_json_atomico(caminho: Path, dados) -> None:
     """Quem lê (GET /research/{id}, outro processo) vê o arquivo antigo inteiro ou o novo inteiro, nunca metade."""
@@ -406,6 +426,7 @@ def _plano(topic: str, perfil_ctx: str) -> list[str]:
     """3–6 subperguntas pesquisáveis sozinhas. LLM fora ou resposta inútil → o próprio tema como única subpergunta."""
     perfil_hint = f"\n{perfil_ctx}\n" if perfil_ctx else ""
     prompt = (
+        f"{_hoje()}"
         f'Você planeja uma pesquisa sobre: "{topic}"\n'
         f"{perfil_hint}"
         f"Quebre o tema em 3 a 6 subperguntas objetivas e complementares. Cada uma precisa funcionar sozinha "
@@ -470,7 +491,7 @@ def _relevante(subpergunta: str, resultado: dict) -> bool:
 
 def _candidatos(job: dict, subpergunta: str, max_results: int, vistos: set[str]) -> list[dict]:
     """Resultados do SearXNG para a subpergunta, sem duplicatas (URL/título, e URLs já tentadas antes) e relevantes."""
-    unicos = [r for r in deduplicate_by_url_and_title(searxng_search(subpergunta, max_results=max_results))
+    unicos = [r for r in deduplicate_by_url_and_title(_buscar(subpergunta, max_results))
               if r.get("url") and r["url"] not in vistos]
     relevantes = [r for r in unicos if _relevante(subpergunta, r)]
     job["contagem"]["resultados"] += len(unicos)
@@ -771,6 +792,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
 
     # 3a. Gerar consultas
     queries_prompt = (
+        f"{_hoje()}"
         f'Gere {req.num_queries} consultas de pesquisa variadas sobre: "{topic}"\n'
         f"{perfil_hint}"
         f"Inclua variações em português e inglês.\n"
@@ -790,7 +812,7 @@ def research(req: ResearchRequest, authorization: Optional[str] = Header(None)):
     # 3b. Buscar
     all_results = []
     for q in queries:
-        all_results.extend(searxng_search(q, max_results=req.results_per_query))
+        all_results.extend(_buscar(q, req.results_per_query))
 
     seen, unique = set(), []
     for r in all_results:

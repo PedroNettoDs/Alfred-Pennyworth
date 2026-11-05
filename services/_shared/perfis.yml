@@ -254,6 +254,7 @@ pesquisa:
   modelo_notas: "gemma4:e4b"
   modelo_sintese: "qwen3.6:35b-a3b"   # vazio = MODEL_CHAT
   relevancia_minima: 0.5              # cosseno subpergunta × (título + trecho) para baixar a página (0 = baixa tudo)
+  categorias: "general"               # categoria do SearXNG nos dois modos; resultado vazio → repete em "news,it"
 
 # ── Conversa com o Alfred — services/inbox/conversa.py (aba Conversa do Painel) ──
 # Tool calling nativo (lib_ferramentas), bloco "Agora", memória e histórico. Medições e a troca de modelo

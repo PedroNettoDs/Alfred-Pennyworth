@@ -18,6 +18,7 @@ import socket
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -137,6 +138,13 @@ class TestPlano(_Base):
         self.assertEqual(researcher.SCHEMA_PLANO["properties"]["subperguntas"]["maxItems"], 6)
         self.assertIn('"Tokio"', chamadas[0]["prompt"])
 
+    def test_prompt_comeca_com_a_data_de_hoje(self):
+        prompts = []
+        with mock.patch.object(researcher, "ollama_generate_json",
+                               lambda p, **k: prompts.append(p) or {"subperguntas": ["a", "b", "c"]}):
+            researcher._plano("Quem ganhou a eleição?", "")
+        self.assertTrue(prompts[0].startswith(f"Hoje é {datetime.now():%d/%m/%Y}.\n"), prompts[0][:40])
+
     def test_llm_fora_ou_lixo_pesquisa_o_tema(self):
         for resposta in (None, [], {"subperguntas": "não é lista"}, {"outra": ["x"]}):
             with mock.patch.object(researcher, "ollama_generate_json", lambda *a, r=resposta, **k: r):
@@ -157,6 +165,63 @@ class TestPlano(_Base):
         with mock.patch.object(researcher, "_config_pesquisa", lambda: {}):
             self.assertEqual(researcher._modelo("notas"), "gemma4:e4b")
             self.assertIsNone(researcher._modelo("sintese"))             # None → MODEL_CHAT
+
+
+# ══════════════════════════════════════════════════════════════
+#  1b. Busca: general, com volta para news,it quando vem vazio
+# ══════════════════════════════════════════════════════════════
+
+class TestBusca(_Base):
+    def _searxng(self, respostas):
+        """searxng_search falso: `respostas` por categoria; guarda (consulta, categoria, max_results)."""
+        chamadas = []
+
+        def buscar(q, categories="news,it", max_results=10):
+            chamadas.append((q, categories, max_results))
+            return [dict(r) for r in respostas.get(categories, [])]
+
+        p = mock.patch.object(researcher, "searxng_search", buscar)
+        p.start()
+        self.addCleanup(p.stop)
+        return chamadas
+
+    def test_general_vazio_repete_em_news_it(self):
+        chamadas = self._searxng({"news,it": [{"url": "https://n.example/", "title": "n"}]})
+        self.assertEqual(researcher._buscar("eleição 2026", 8), [{"url": "https://n.example/", "title": "n"}])
+        self.assertEqual(chamadas, [("eleição 2026", "general", 8), ("eleição 2026", "news,it", 8)])
+
+    def test_general_com_resultado_nao_repete(self):
+        chamadas = self._searxng({"general": [{"url": "https://g.example/", "title": "g"}],
+                                  "news,it": [{"url": "https://n.example/", "title": "n"}]})
+        self.assertEqual([r["url"] for r in researcher._buscar("systemd Restart=", 5)], ["https://g.example/"])
+        self.assertEqual(chamadas, [("systemd Restart=", "general", 5)])
+
+    def test_os_dois_vazios_devolve_vazio(self):
+        chamadas = self._searxng({})
+        self.assertEqual(researcher._buscar("nada", 8), [])
+        self.assertEqual([c[1] for c in chamadas], ["general", "news,it"])
+
+    def test_categoria_vem_do_perfis(self):
+        chamadas = self._searxng({})
+        with mock.patch.object(researcher, "_config_pesquisa", lambda: {"categorias": "general,science"}):
+            researcher._buscar("x", 8)
+        self.assertEqual([c[1] for c in chamadas], ["general,science", "news,it"])
+        chamadas.clear()
+        with mock.patch.object(researcher, "_config_pesquisa", lambda: {"categorias": "news,it"}):
+            researcher._buscar("x", 8)
+        self.assertEqual([c[1] for c in chamadas], ["news,it"])       # já é a reserva: não repete igual
+        chamadas.clear()
+        with mock.patch.object(researcher, "_config_pesquisa", lambda: {"categorias": "  "}):
+            researcher._buscar("x", 8)
+        self.assertEqual(chamadas[0][1], "general")
+
+    def test_candidatos_do_profundo_usam_a_volta(self):
+        chamadas = self._searxng({"news,it": [{"url": "https://tokio.example/", "title": "Tokio runtime Rust",
+                                               "snippet": "runtime async"}]})
+        job = {"contagem": {"resultados": 0, "relevantes": 0}}
+        relevantes = researcher._candidatos(job, "O que é o runtime Tokio em Rust?", 8, set())
+        self.assertEqual([r["url"] for r in relevantes], ["https://tokio.example/"])
+        self.assertEqual([c[1] for c in chamadas], ["general", "news,it"])
 
 
 # ══════════════════════════════════════════════════════════════
@@ -348,6 +413,7 @@ class TestFluxoProfundo(_Base):
         self.vault.mkdir()
         self.jobs = self.dir / "jobs"
         self.chamadas_llm = []
+        self.buscas = []
         self.relatorio = RELATORIO
         for p in (
             mock.patch.object(researcher, "VAULT_ALFRED", self.vault),
@@ -355,7 +421,7 @@ class TestFluxoProfundo(_Base):
             mock.patch.object(researcher, "TOKEN", "tk"),
             mock.patch.object(researcher, "indexar_local", mock.Mock()),
             mock.patch.object(researcher, "_get_chroma", lambda: None),
-            mock.patch.object(researcher, "searxng_search", lambda q, max_results=8: [dict(r) for r in RESULTADOS]),
+            mock.patch.object(researcher, "searxng_search", self._searxng),
             mock.patch.object(researcher, "ollama_generate_json", self._llm_json),
             mock.patch.object(researcher, "ollama_generate", self._llm_texto),
         ):
@@ -373,6 +439,10 @@ class TestFluxoProfundo(_Base):
         self.cliente = TestClient(researcher.app)
         self.h = {"Authorization": "Bearer tk"}
 
+    def _searxng(self, q, categories="news,it", max_results=8):
+        self.buscas.append((q, categories))
+        return [dict(r) for r in RESULTADOS]
+
     def _llm_json(self, prompt, model=None, timeout=120, schema=None, options=None):
         self.chamadas_llm.append(("json", model, schema, options))
         if schema is researcher.SCHEMA_PLANO:
@@ -382,7 +452,7 @@ class TestFluxoProfundo(_Base):
 
     def _llm_texto(self, prompt, model=None, timeout=180, options=None, **k):
         self.chamadas_llm.append(("texto", model, prompt, options))
-        if prompt.startswith("Gere "):                     # modo antigo: geração de consultas
+        if "consultas de pesquisa variadas" in prompt:     # modo antigo: geração de consultas
             return '["rust async"]'
         return self.relatorio
 
@@ -452,6 +522,9 @@ class TestFluxoProfundo(_Base):
         # estado gravado de forma atômica: só o JSON final, nenhum temporário largado
         self.assertEqual([p.name for p in self.jobs.iterdir()], [f"{corpo['job_id']}.json"])
         self.assertEqual(json.loads((self.jobs / f"{corpo['job_id']}.json").read_text())["status"], "done")
+
+        # busca na categoria general, uma vez por subpergunta (o SearXNG falso nunca vem vazio)
+        self.assertEqual(self.buscas, [(s, "general") for s in SUBS])
 
         # pedido profundo de novo: agora é cache exato (síntese profunda), síncrono
         r2 = self._post()
@@ -537,6 +610,31 @@ class TestFluxoProfundo(_Base):
         self.assertEqual(self.transporte.pedidos, [])
         sintese = (self.vault / "research" / "rust-async" / "synthesis.md").read_text(encoding="utf-8")
         self.assertNotIn("modo: profundo", sintese)
+        self.assertEqual(self.buscas, [("rust async", "general")])
+        consultas = next(c[2] for c in self.chamadas_llm if c[0] == "texto" and "consultas de pesquisa" in c[2])
+        self.assertTrue(consultas.startswith(f"Hoje é {datetime.now():%d/%m/%Y}.\n"), consultas[:40])
+
+    def test_modo_rapido_volta_para_news_it_quando_general_vem_vazio(self):
+        def searxng(q, categories="news,it", max_results=8):
+            self.buscas.append((q, categories))
+            return [] if categories == "general" else [dict(r) for r in RESULTADOS]
+
+        with mock.patch.object(researcher, "searxng_search", searxng):
+            r = self.cliente.post("/research", headers=self.h, json={"topic": "Rust async", "num_queries": 1})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["sources_found"], 5)
+        self.assertEqual(self.buscas, [("rust async", "general"), ("rust async", "news,it")])
+
+    def test_modo_profundo_volta_para_news_it_quando_general_vem_vazio(self):
+        def searxng(q, categories="news,it", max_results=8):
+            self.buscas.append((q, categories))
+            return [] if categories == "general" else [dict(r) for r in RESULTADOS]
+
+        with mock.patch.object(researcher, "searxng_search", searxng):
+            job = self._esperar(self._post().json()["job_id"])
+        self.assertEqual(job["status"], "done", job.get("erro"))
+        self.assertEqual(job["contagem"]["lidas"], 3)
+        self.assertEqual(self.buscas, [(s, c) for s in SUBS for c in ("general", "news,it")])
 
 
 class TestUtilitarios(unittest.TestCase):

@@ -222,7 +222,8 @@ class TestResearcher(unittest.TestCase):
             mock.patch.object(researcher, "indexar_local", self.indexar),
             mock.patch.object(researcher, "_get_chroma", lambda: None),
             mock.patch.object(researcher, "searxng_search",
-                              lambda q, max_results=8: [{"url": f"http://x/{q}", "title": q, "snippet": "s"}]),
+                              lambda q, categories="news,it", max_results=8:
+                              [{"url": f"http://x/{q}", "title": q, "snippet": "s"}]),
         ]
         for p in self.patches:
             p.start()

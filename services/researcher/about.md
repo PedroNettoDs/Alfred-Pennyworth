@@ -118,8 +118,8 @@ slugify(topic) → slug
         → SIM: retorna síntese do doc mais próximo (cache_type: "semantic")
     ↓
 [Nova pesquisa]
-    → gera N queries via Ollama (num_queries)
-    → busca cada query no SearXNG (results_per_query resultados cada)
+    → gera N queries via Ollama (num_queries; o prompt começa com "Hoje é DD/MM/AAAA.")
+    → busca cada query no SearXNG em `general` (results_per_query resultados cada; vazio → repete em `news,it`)
     → deduplica resultados por URL/título
     → monta contexto e chama Ollama para síntese final (vazia → HTTP 503, nada gravado)
     ↓
@@ -140,9 +140,10 @@ notas desta pesquisa vão ao Ollama. Sem ChromaDB, atualiza só o FTS5. O resear
 por vez** — dois modelos grandes na mesma GPU só ficariam trocando de lugar, então o segundo espera em `fila`):
 
 ```
-1. Plano       modelo leve + JSON Schema (ollama_generate_json) → 3 a 6 subperguntas
-               (LLM fora / resposta inútil → o próprio tema vira a única subpergunta)
-2. Busca       por subpergunta: searxng_search → deduplicate_by_url_and_title → tira URLs já tentadas
+1. Plano       modelo leve + JSON Schema (ollama_generate_json) → 3 a 6 subperguntas; o prompt começa com
+               "Hoje é DD/MM/AAAA." (LLM fora / resposta inútil → o próprio tema vira a única subpergunta)
+2. Busca       por subpergunta: _buscar (SearXNG general, vazio → news,it) → deduplicate_by_url_and_title
+               → tira URLs já tentadas
                → _relevante(subpergunta, resultado) — filtro barato ANTES de baixar
 3. Leitura     até paginas_por_subpergunta páginas por subpergunta, na ordem do SearXNG (falhou → tenta o próximo)
                httpx → texto (BeautifulSoup) → nota de máquina com o modelo leve: {"url", "titulo", "fatos": [...]}
@@ -184,10 +185,27 @@ pesquisa:
   modelo_notas: "gemma4:e4b"          # plano e notas de cada página
   modelo_sintese: "qwen3.6:35b-a3b"   # só o relatório final (vazio = MODEL_CHAT)
   relevancia_minima: 0.5
+  categorias: "general"               # categoria do SearXNG nos dois modos (ver "Busca e data" abaixo)
 ```
 
 `RESEARCH_MODEL_NOTAS` / `RESEARCH_MODEL_SINTESE` no `.env` passam por cima (máquina sem o qwen, por exemplo). A
 síntese pede `num_ctx` 16384 ao Ollama: as notas de 6 subperguntas × 3 páginas passam de 8k tokens.
+
+## Busca e data
+
+Os dois modos buscam pelo `_buscar(consulta, max_results)`: SearXNG na categoria `pesquisa.categorias` do
+`perfis.yml` (padrão `general`) e, se vier **lista vazia**, a mesma consulta de novo em `news,it` (o log diz
+`SearXNG vazio em 'general' ... repetindo em 'news,it'`). Até a versão 3.2 era só `news,it` (o padrão de
+`searxng_search`), que mandava perguntas técnicas para MDN, Hackage e StackOverflow: lixo em 3 de 5 perguntas. A
+avaliação em `docs/avaliacoes/pesquisa.md` mediu a troca para `general`: cobertura do profundo de 45% para 85% e
+citações sustentadas do rápido de 47% para 90%.
+
+A volta para `news,it` existe porque a instância só tem 3 motores web em `general` (duckduckgo, google cse, brave), e
+eles suspendem sob carga ("too many requests" por 1 h; duckduckgo "CAPTCHA" por 24 h). Ela cobre o resultado vazio,
+não o resultado ruim. Mais motores em `general` é configuração do SearXNG, fora daqui.
+
+O prompt do plano (profundo) e o de consultas (rápido) começam com `Hoje é DD/MM/AAAA.`: sem a data, a pergunta de
+notícia virava subpergunta no futuro ("quem tem chances", "tendências").
 
 ## Cache em dois níveis
 
@@ -255,9 +273,10 @@ cd services/researcher
 venv/bin/python -m unittest tests.test_profundo -v
 ```
 
-Offline (Ollama, SearXNG, DNS e httpx trocados por funções locais): plano, filtro, leitura (página grande, timeout,
-servidor que pinga devagar, URL privada, redirect para IP privado, PDF), síntese com citações, cache por modo,
-progresso/`interrompido` e o modo rápido. Os testes antigos do researcher continuam em
+Offline (Ollama, SearXNG, DNS e httpx trocados por funções locais): plano (com a data de hoje), busca (`general` e a
+volta para `news,it` nos dois modos), filtro, leitura (página grande, timeout, servidor que pinga devagar, URL
+privada, redirect para IP privado, PDF), síntese com citações, cache por modo, progresso/`interrompido` e o modo
+rápido. Os testes antigos do researcher continuam em
 `services/inbox/tests/test_servicos.py` (rodam no venv do inbox, que não tem `beautifulsoup4`).
 
 ## Variáveis de ambiente
