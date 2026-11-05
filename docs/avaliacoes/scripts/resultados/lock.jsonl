@@ -3,3 +3,8 @@
 {"modo": "iterativo", "pergunta": "produtos", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 11900, "swap_usado_mb": 8191}
 {"modo": "rapido-general", "pergunta": "produtos", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 9122, "swap_usado_mb": 8158}
 {"modo": "profundo-general", "pergunta": "produtos", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 11274, "swap_usado_mb": 8156}
+{"modo": "rapido", "pergunta": "academico", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 12460, "swap_usado_mb": 8191}
+{"modo": "profundo", "pergunta": "academico", "espera_lock_s": 0.0, "status": 1, "mem_disponivel_mb": 10083, "swap_usado_mb": 8190}
+{"modo": "iterativo", "pergunta": "academico", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 8870, "swap_usado_mb": 8116}
+{"modo": "rapido-general", "pergunta": "academico", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 8969, "swap_usado_mb": 8088}
+{"modo": "profundo-general", "pergunta": "academico", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 10761, "swap_usado_mb": 8046}

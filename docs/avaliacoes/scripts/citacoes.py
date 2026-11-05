@@ -70,7 +70,9 @@ def main() -> int:
         citadas = [f for f in frases if re.search(r"\]\(https?://|Descoberta \d", f)]
         janela = max(0, len(fontes) - 10)
     else:
-        citadas = [f for f in frases if re.search(r"\d|[A-Z][a-z]+[A-Z]|=", f)] or frases
+        citadas = [f for f in frases if re.search(r"\d|[A-Z][a-z]+[A-Z]|=", f)]
+        if len(citadas) < AMOSTRA:
+            citadas = frases
 
     print(f"# {run['modo']} / {run['pergunta']} — {len(citadas)} frases candidatas de {len(frases)}\n")
     for i, frase in enumerate(_espacadas(citadas, AMOSTRA), 1):

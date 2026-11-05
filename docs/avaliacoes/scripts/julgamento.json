@@ -301,5 +301,104 @@
     ],
     "alucinacoes": 0,
     "obs": "general: 37 de 40 resultados relevantes, 12 páginas lidas; números conferidos nas páginas; erro herdado da fonte [2] (diz que o Orange Pi 5 usa RK3566 e saiu em 2021 — é RK3588S) e o relatório aponta a divergência entre fontes; consumo só de Pi 4 e Orange Pi Zero 3"
+  },
+  "rapido-academico": {
+    "citacoes": [
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N"
+    ],
+    "cobertura": [
+      1,
+      1,
+      0,
+      0
+    ],
+    "alucinacoes": 0,
+    "obs": "news,it: os 12 trechos são MDN (Math.E, <em>, do...while) e Hackage; texto vem da memória do modelo, correto no geral, sem números de evidência nem críticas"
+  },
+  "profundo-academico": {
+    "citacoes": [],
+    "cobertura": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "alucinacoes": 0,
+    "obs": "falhou: news,it devolveu 24 URLs de MDN/Hackage, o filtro de relevância barrou todas e o job terminou em ErroPesquisa — Pedro receberia só o erro"
+  },
+  "iterativo-academico": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "N",
+      "P",
+      "N",
+      "P",
+      "P",
+      "P"
+    ],
+    "cobertura": [
+      0.5,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 1,
+    "obs": "general+en acha arXiv, LessWrong e Raschka; 7 fontes < 10, então a numeração [Descoberta n] é direta, mas 4 das 10 citam a fonte errada para algo que outra fonte diz; 'navega sem ficar preso em mínimos locais de sobreajuste' não está em nenhuma; não cita Frankle e Carbin"
+  },
+  "rapido-general-academico": {
+    "citacoes": [
+      "S",
+      "S",
+      "P",
+      "S",
+      "S",
+      "P",
+      "S",
+      "P",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      0.5,
+      0.5
+    ],
+    "alucinacoes": 0,
+    "obs": "general: trechos do arXiv 1803.03635, PMLR (Malach 2020), OpenReview e textos em português; 2 trechos fora do tema (USP psicologia, crítica de voto); '>90%' do resumo do artigo vale para poda em geral, não para a LTH"
+  },
+  "profundo-general-academico": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "P",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "general: 26 de 33 resultados relevantes, 8 páginas (arXiv, survey, Wikipedia-like); números conferidos (10–20%, 97% em SNN); IMP com máscara e reinicialização em θ0 e rewinding; único relatório com os 4 aspectos e Frankle et al. ICLR 2019"
   }
 }

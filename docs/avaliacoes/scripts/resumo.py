@@ -49,24 +49,28 @@ def main() -> int:
               f"{m['tokens_saida']} | {_modelos(r)} | {m['carga_modelo_s']} | {'' if espera.get(chave) is None else espera[chave]} | "
               f"{m['palavras_relatorio']} |")
 
-    print("\n### Médias por modo (só execuções ok)\n")
-    print("| modo | n | tempo (s) | URLs buscadas | páginas lidas | fontes | tokens entrada | tokens saída | "
-          "citações sustentadas | cobertura | alucinações / 10 |")
+    print("\n### Médias por modo\n")
+    print("Custo (tempo, URLs, páginas, tokens): média das execuções ok. Qualidade: todas as execuções julgadas — uma "
+          "falha conta cobertura 0 e não entra nas citações.\n")
+    print("| modo | ok / total | tempo (s) | URLs buscadas | páginas lidas | fontes | tokens entrada | tokens saída | "
+          "citações sustentadas | cobertura | alucinações por relatório |")
     print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for modo in MODOS:
-        ok = [r for k, r in runs.items() if r["modo"] == modo and r["status"] == "ok"]
-        if not ok:
+        todas = [r for r in runs.values() if r["modo"] == modo]
+        ok = [r for r in todas if r["status"] == "ok"]
+        if not todas:
             continue
-        med = lambda f: round(sum(f(r) for r in ok) / len(ok), 1)
-        js = [julg[f"{modo}-{r['pergunta']}"] for r in ok if f"{modo}-{r['pergunta']}" in julg]
+        med = lambda f: round(sum(f(r) for r in ok) / len(ok), 1) if ok else "—"
+        js = [julg[f"{modo}-{r['pergunta']}"] for r in todas if f"{modo}-{r['pergunta']}" in julg]
         if js:
             letras = "".join("".join(j["citacoes"]) for j in js)
-            sust = f"{round(100 * (letras.count('S') + 0.5 * letras.count('P')) / len(letras))}% ({len(letras)})"
-            cob = f"{round(100 * sum(sum(j['cobertura']) for j in js) / (4 * len(js)))}%"
+            sust = (f"{round(100 * (letras.count('S') + 0.5 * letras.count('P')) / len(letras))}% ({len(letras)})"
+                    if letras else "—")
+            cob = f"{round(100 * sum(sum(j['cobertura']) for j in js) / (4 * len(js)))}% ({len(js)})"
             aluc = round(sum(j["alucinacoes"] for j in js) / len(js), 1)
         else:
             sust = cob = aluc = "—"
-        print(f"| {modo} | {len(ok)} | {med(lambda r: r['tempo_total_s'])} | "
+        print(f"| {modo} | {len(ok)} / {len(todas)} | {med(lambda r: r['tempo_total_s'])} | "
               f"{med(lambda r: r['medidas']['urls_buscadas'])} | {med(lambda r: r['medidas']['paginas_baixadas'])} | "
               f"{med(lambda r: r['medidas']['fontes_usadas'])} | {med(lambda r: r['medidas']['tokens_prompt'])} | "
               f"{med(lambda r: r['medidas']['tokens_saida'])} | {sust} | {cob} | {aluc} |")
