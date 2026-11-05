@@ -1,0 +1,14 @@
+{"t": 1793855072.1, "carga": 7.041015625, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 8, "vram_mib": 6834}
+{"t": 1793855074.2, "carga": 7.041015625, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 96, "vram_mib": 6867}
+{"t": 1793855076.2, "carga": 7.041015625, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 100, "vram_mib": 6866}
+{"t": 1793855078.2, "carga": 7.9990234375, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 86, "vram_mib": 6978}
+{"t": 1793855080.3, "carga": 7.9990234375, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 100, "vram_mib": 6967}
+{"t": 1793855082.3, "carga": 8.15966796875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 89, "vram_mib": 6979}
+{"t": 1793855084.3, "carga": 8.15966796875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 84, "vram_mib": 6975}
+{"t": 1793855086.4, "carga": 8.15966796875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 79, "vram_mib": 6975}
+{"t": 1793855088.4, "carga": 8.146484375, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 95, "vram_mib": 6988}
+{"t": 1793855090.4, "carga": 8.146484375, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 100, "vram_mib": 6990}
+{"t": 1793855092.4, "carga": 8.294921875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 86, "vram_mib": 6991}
+{"t": 1793855094.5, "carga": 8.294921875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 93, "vram_mib": 6955}
+{"t": 1793855096.5, "carga": 8.294921875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 89, "vram_mib": 6955}
+{"t": 1793855098.5, "carga": 8.51171875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 100, "vram_mib": 6955}

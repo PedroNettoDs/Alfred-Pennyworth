@@ -1,0 +1,218 @@
+{
+ "sistema": "odysseus",
+ "modelo": "gemma4:e4b",
+ "variante": "completo",
+ "rodadas": [
+  {
+   "inicio": 1793855072.8286898,
+   "trechos": {
+    "c01": {
+     "fatos": [],
+     "segundos": 1.021
+    },
+    "c02": {
+     "fatos": [],
+     "segundos": 0.65
+    },
+    "c03": {
+     "fatos": [],
+     "segundos": 0.577
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.203
+    },
+    "c05": {
+     "fatos": [],
+     "segundos": 0.585
+    },
+    "c06": {
+     "fatos": [],
+     "segundos": 0.526
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 0.471
+    },
+    "c08": {
+     "fatos": [],
+     "segundos": 1.05
+    },
+    "c09": {
+     "fatos": [],
+     "segundos": 0.566
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.277
+    },
+    "c11": {
+     "fatos": [],
+     "segundos": 0.938
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.2
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.21
+    },
+    "c14": {
+     "fatos": [],
+     "segundos": 0.625
+    },
+    "c15": {
+     "fatos": [],
+     "segundos": 0.624
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.452
+    }
+   },
+   "fim": 1793855081.810484
+  },
+  {
+   "inicio": 1793855081.810489,
+   "trechos": {
+    "c01": {
+     "fatos": [],
+     "segundos": 1.018
+    },
+    "c02": {
+     "fatos": [],
+     "segundos": 0.682
+    },
+    "c03": {
+     "fatos": [],
+     "segundos": 0.61
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.212
+    },
+    "c05": {
+     "fatos": [],
+     "segundos": 0.618
+    },
+    "c06": {
+     "fatos": [],
+     "segundos": 0.54
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 0.443
+    },
+    "c08": {
+     "fatos": [],
+     "segundos": 1.04
+    },
+    "c09": {
+     "fatos": [],
+     "segundos": 0.596
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.265
+    },
+    "c11": {
+     "fatos": [],
+     "segundos": 0.963
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.235
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.224
+    },
+    "c14": {
+     "fatos": [],
+     "segundos": 0.622
+    },
+    "c15": {
+     "fatos": [],
+     "segundos": 0.597
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.436
+    }
+   },
+   "fim": 1793855090.916915
+  },
+  {
+   "inicio": 1793855090.916918,
+   "trechos": {
+    "c01": {
+     "fatos": [],
+     "segundos": 0.996
+    },
+    "c02": {
+     "fatos": [],
+     "segundos": 0.703
+    },
+    "c03": {
+     "fatos": [],
+     "segundos": 0.608
+    },
+    "c04": {
+     "fatos": [],
+     "segundos": 0.204
+    },
+    "c05": {
+     "fatos": [],
+     "segundos": 0.578
+    },
+    "c06": {
+     "fatos": [],
+     "segundos": 0.491
+    },
+    "c07": {
+     "fatos": [],
+     "segundos": 0.419
+    },
+    "c08": {
+     "fatos": [],
+     "segundos": 0.983
+    },
+    "c09": {
+     "fatos": [],
+     "segundos": 0.542
+    },
+    "c10": {
+     "fatos": [],
+     "segundos": 0.636
+    },
+    "c11": {
+     "fatos": [],
+     "segundos": 0.902
+    },
+    "c12": {
+     "fatos": [],
+     "segundos": 0.2
+    },
+    "c13": {
+     "fatos": [],
+     "segundos": 0.202
+    },
+    "c14": {
+     "fatos": [],
+     "segundos": 0.624
+    },
+    "c15": {
+     "fatos": [],
+     "segundos": 0.608
+    },
+    "c16": {
+     "fatos": [],
+     "segundos": 0.429
+    }
+   },
+   "fim": 1793855100.0463824
+  }
+ ],
+ "aquecimento_s": 0.67
+}

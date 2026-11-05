@@ -1,0 +1,48 @@
+== extração, 30 trechos, sujeito estrito
+sistema | modelo | variante | trechos | P | R | F1 | FP | graves | FP em trecho sem fato | sujeito errado | s/trecho (mediana) | p90
+alfred | gemma4:12b | lib_memoria.extrair | 30 | 1.00 (1.00–1.00) | 0.97 (0.97–0.97) | 0.98 | 0.0 | 0.0 | 0.0 | 0.0 | 1.36 | 2.28
+alfred | gemma4:e4b | lib_memoria.extrair | 30 | 0.92 (0.92–0.93) | 0.81 (0.79–0.82) | 0.86 | 2.0 | 1.0 | 1.0 | 1.0 | 0.60 | 0.89
+== extração, 16 conversas, só texto
+sistema | modelo | variante | trechos | P | R | F1 | FP | graves | FP em trecho sem fato | sujeito errado | s/trecho (mediana) | p90
+alfred | gemma4:12b | lib_memoria.extrair | 16 | 1.00 (1.00–1.00) | 1.00 (1.00–1.00) | 1.00 | 0.0 | 0.0 | 0.0 | 0.0 | 1.35 | 2.28
+alfred | gemma4:e4b | lib_memoria.extrair | 16 | 1.00 (1.00–1.00) | 0.88 (0.84–0.89) | 0.93 | 0.0 | 0.0 | 0.0 | 0.0 | 0.47 | 0.74
+odysseus | gemma4:12b | completo | 16 | 1.00 (1.00–1.00) | 0.00 (0.00–0.00) | 0.00 | 0.0 | 0.0 | 0.0 | 0.0 | 1.71 | 1.90
+odysseus | gemma4:12b | so_llm | 16 | 0.94 (0.94–0.94) | 0.89 (0.89–0.89) | 0.92 | 1.0 | 0.0 | 1.0 | 0.0 | 1.71 | 1.90
+odysseus | gemma4:e4b | completo | 16 | 1.00 (1.00–1.00) | 0.00 (0.00–0.00) | 0.00 | 0.0 | 0.0 | 0.0 | 0.0 | 0.59 | 0.93
+odysseus | gemma4:e4b | so_llm | 16 | 0.85 (0.81–0.87) | 0.74 (0.74–0.74) | 0.79 | 2.3 | 0.3 | 2.3 | 0.0 | 0.59 | 0.93
+== dedup/auditoria
+alfred gemma4:12b entrada: {"eliminar_esperado": 10, "eliminados_certos": 6, "perdas_id": 1, "perdas_info": 0, "perdas_info_ids": [], "fusoes_sem_perda": 1, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 0, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 32} segundos=11.07 chamadas_llm=6
+alfred gemma4:12b auditoria: {"eliminar_esperado": 10, "eliminados_certos": 10, "perdas_id": 1, "perdas_info": 0, "perdas_info_ids": [], "fusoes_sem_perda": 1, "contradicoes": 2, "contradicoes_ok": 2, "vagos": 4, "vagos_removidos": 2, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 4, "vencidos": 2, "vencidos_removidos": 2, "sobreviventes": 20} segundos=17.09 chamadas_llm=-
+alfred gemma4:e4b entrada: {"eliminar_esperado": 10, "eliminados_certos": 6, "perdas_id": 1, "perdas_info": 1, "perdas_info_ids": ["g08"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 0, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 32} segundos=3.86 chamadas_llm=6
+alfred gemma4:e4b auditoria: {"eliminar_esperado": 10, "eliminados_certos": 8, "perdas_id": 1, "perdas_info": 1, "perdas_info_ids": ["g08"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 1, "vagos": 4, "vagos_removidos": 2, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 4, "vencidos": 2, "vencidos_removidos": 2, "sobreviventes": 22} segundos=9.84 chamadas_llm=-
+odysseus gemma4:12b limiar=0.72 entrada: {"eliminar_esperado": 10, "eliminados_certos": 9, "perdas_id": 5, "perdas_info": 6, "perdas_info_ids": ["g04", "g08", "g09", "g10", "g15", "g17"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 3, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 22} segundos=3.11 chamadas_llm=0
+odysseus gemma4:12b limiar=0.72 auditoria: {"eliminar_esperado": 10, "eliminados_certos": 9, "perdas_id": 5, "perdas_info": 6, "perdas_info_ids": ["g04", "g08", "g09", "g10", "g15", "g17"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 3, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 22} segundos=24.93 chamadas_llm=1
+odysseus gemma4:12b limiar=0.85 entrada: {"eliminar_esperado": 10, "eliminados_certos": 7, "perdas_id": 1, "perdas_info": 1, "perdas_info_ids": ["g09"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 0, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 31} segundos=3.11 chamadas_llm=0
+odysseus gemma4:12b limiar=0.85 auditoria: {"eliminar_esperado": 10, "eliminados_certos": 7, "perdas_id": 1, "perdas_info": 1, "perdas_info_ids": ["g09"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 0, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 31} segundos=35.74 chamadas_llm=1
+odysseus gemma4:e4b limiar=0.72 entrada: {"eliminar_esperado": 10, "eliminados_certos": 9, "perdas_id": 5, "perdas_info": 6, "perdas_info_ids": ["g04", "g08", "g09", "g10", "g15", "g17"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 3, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 22} segundos=2.86 chamadas_llm=0
+odysseus gemma4:e4b limiar=0.72 auditoria: {"eliminar_esperado": 10, "eliminados_certos": 9, "perdas_id": 5, "perdas_info": 6, "perdas_info_ids": ["g04", "g08", "g09", "g10", "g15", "g17"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 3, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 22} segundos=10.83 chamadas_llm=1
+odysseus gemma4:e4b limiar=0.85 entrada: {"eliminar_esperado": 10, "eliminados_certos": 7, "perdas_id": 1, "perdas_info": 1, "perdas_info_ids": ["g09"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 0, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 31} segundos=3.37 chamadas_llm=0
+odysseus gemma4:e4b limiar=0.85 auditoria: {"eliminar_esperado": 10, "eliminados_certos": 7, "perdas_id": 1, "perdas_info": 1, "perdas_info_ids": ["g09"], "fusoes_sem_perda": 0, "contradicoes": 2, "contradicoes_ok": 0, "vagos": 4, "vagos_removidos": 0, "vagos_reescritos": 0, "lixo": 4, "lixo_removido": 0, "vencidos": 2, "vencidos_removidos": 0, "sobreviventes": 31} segundos=14.86 chamadas_llm=1
+== aquecimento
+alfred_12b 11.81
+alfred_e4b 27.44
+odysseus_12b_completo 3.08
+odysseus_e4b_completo 0.67
+alfred_dedup_12b 0.35
+alfred_dedup_e4b 0.18
+== GPU por rodada
+alfred_12b [45.3, 44.7, 44.6] fatos [36, 36, 36]
+alfred_e4b [17.9, 17.6, 17.3] fatos [30, 31, 31]
+odysseus_12b_so_llm [21.2, 21.2, 21.2] fatos [20, 20, 20]
+odysseus_e4b_so_llm [9.0, 9.1, 9.1] fatos [15, 15, 16]
+== ruído
+alfred_extracao_12b {"amostras": 73, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 7.44384765625, "vram_max_mib": 10720}
+odysseus_extracao_12b {"amostras": 33, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 5.64208984375, "vram_max_mib": 10700}
+alfred_dedup_12b {"amostras": 16, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 5.6875, "vram_max_mib": 10693}
+odysseus_dedup_12b {"amostras": 15, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 7.3212890625, "vram_max_mib": 10693}
+odysseus_dedup085_12b {"amostras": 21, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 7.3251953125, "vram_max_mib": 10727}
+alfred_extracao_e4b {"amostras": 40, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 6.455078125, "vram_max_mib": 10689}
+odysseus_extracao_e4b {"amostras": 14, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 8.15966796875, "vram_max_mib": 6991}
+alfred_dedup_e4b {"amostras": 8, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 8.51171875, "vram_max_mib": 7002}
+odysseus_dedup_e4b {"amostras": 8, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 7.73095703125, "vram_max_mib": 7006}
+odysseus_dedup085_e4b {"amostras": 10, "com_modelo_alheio": 0, "modelos_alheios": [], "carga_cpu_mediana": 7.60791015625, "vram_max_mib": 6995}

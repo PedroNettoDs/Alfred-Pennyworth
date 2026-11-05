@@ -1,0 +1,8 @@
+{"t": 1793855100.7, "carga": 8.51171875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 7, "vram_mib": 6951}
+{"t": 1793855102.7, "carga": 8.71142578125, "modelos": ["bge-m3:latest", "gemma4:e4b"], "gpu_pct": 15, "vram_mib": 6951}
+{"t": 1793855104.7, "carga": 8.71142578125, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 90, "vram_mib": 6951}
+{"t": 1793855106.8, "carga": 8.71142578125, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 68, "vram_mib": 6951}
+{"t": 1793855108.8, "carga": 8.25390625, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 87, "vram_mib": 7001}
+{"t": 1793855110.8, "carga": 8.25390625, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 86, "vram_mib": 7002}
+{"t": 1793855112.9, "carga": 8.39404296875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 86, "vram_mib": 7001}
+{"t": 1793855114.9, "carga": 8.39404296875, "modelos": ["gemma4:e4b", "bge-m3:latest"], "gpu_pct": 53, "vram_mib": 6968}

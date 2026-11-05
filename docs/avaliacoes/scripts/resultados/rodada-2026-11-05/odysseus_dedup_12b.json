@@ -1,0 +1,239 @@
+{
+ "sistema": "odysseus",
+ "modelo": "gemma4:12b limiar=0.72",
+ "fases": {
+  "entrada": {
+   "vivos": {
+    "8a4e2e06-44d6-444d-9b01-0d84bd0b6dd6": {
+     "texto": "Pedro é vegetariano",
+     "criado_por": "a01"
+    },
+    "eb0cb819-b6c9-4750-b965-fd6b9df71b29": {
+     "texto": "Pedro trabalha na Vortex como analista de BI",
+     "criado_por": "a02"
+    },
+    "fe36f830-8655-4166-bcc6-b40bf094f79e": {
+     "texto": "Pedro treina jiu-jitsu às terças e quintas à noite",
+     "criado_por": "a03"
+    },
+    "9129bba6-6ace-4fd6-b182-bf3ccedf36de": {
+     "texto": "Pedro prefere receber os resumos pelo WhatsApp",
+     "criado_por": "a05"
+    },
+    "1f54462e-6233-4fcc-8060-6d9df77f004d": {
+     "texto": "Pedro está montando um homelab com Proxmox",
+     "criado_por": "a06"
+    },
+    "9a202003-5bbf-41c3-85ff-d50d5d753c8c": {
+     "texto": "Pedro evita compromissos antes das 9h",
+     "criado_por": "a07"
+    },
+    "ab0727b5-19c3-40d9-a1f2-9c8a8cb73c35": {
+     "texto": "Pedro toma chá verde à noite",
+     "criado_por": "a11"
+    },
+    "0ed08caa-25f4-4ae0-8951-10d1c89ee848": {
+     "texto": "Pedro tem uma irmã chamada Camila",
+     "criado_por": "a12"
+    },
+    "067a9db1-8133-4ab8-9503-4d20cc645d8e": {
+     "texto": "Camila passou no concurso do TRT",
+     "criado_por": "a13"
+    },
+    "368eeedc-26fd-4a96-a241-e3c3dc4f6027": {
+     "texto": "Juliana Prado é vegana",
+     "criado_por": "a14"
+    },
+    "0b521fef-c795-4aea-b289-620e3e4da023": {
+     "texto": "Rafael Moreira mora em São Paulo",
+     "criado_por": "a15"
+    },
+    "3b841448-3b1a-46dd-8295-cd9e0bf18add": {
+     "texto": "Marcos Vieira prefere mensagens de texto em vez de áudio",
+     "criado_por": "a16"
+    },
+    "3a99b042-7bb9-4699-b995-5a2eea9f680e": {
+     "texto": "Helena é professora de biologia",
+     "criado_por": "a18"
+    },
+    "91c08bcf-78a3-481f-89b9-8b93232d949e": {
+     "texto": "Pedro é casado com Helena",
+     "criado_por": "a19"
+    },
+    "7172a192-63ba-4c4a-8c18-a7d33eeb9878": {
+     "texto": "Pedro gosta de coisas",
+     "criado_por": "v01"
+    },
+    "dedfd6a3-ac49-44d6-aefd-4deca758ddc9": {
+     "texto": "Pedro perguntou sobre a previsão do tempo",
+     "criado_por": "l01"
+    },
+    "93fbed5c-37dc-491f-8996-dde807eb22f2": {
+     "texto": "Pedro disse bom dia ao Alfred",
+     "criado_por": "l02"
+    },
+    "0c4f4962-2602-4560-bb3f-5327350c4e13": {
+     "texto": "Pedro Alfred respondeu que há 3 e-mails novos",
+     "criado_por": "l03"
+    },
+    "ebba4e61-3136-4bee-987f-cfb311752b41": {
+     "texto": "Pedro pediu para criar um lembrete",
+     "criado_por": "l04"
+    },
+    "213fee8f-f04e-404a-a4db-ba3ba1e571e4": {
+     "texto": "Tiago Lemos está de licença paternidade até 2026-10-15",
+     "criado_por": "x01"
+    },
+    "54e2c41f-7713-4869-93c8-7b2f3bb01e59": {
+     "texto": "Pedro está em Lisboa a trabalho até 2026-10-20",
+     "criado_por": "x02"
+    },
+    "185d1d49-0609-43f3-ab20-b03694eedbce": {
+     "texto": "Pedro é engenheiro de dados na Lumen",
+     "criado_por": "d09"
+    }
+   },
+   "segundos": 3.11,
+   "chamadas_llm": 0,
+   "acoes": {
+    "a01": "novo",
+    "a02": "novo",
+    "a03": "novo",
+    "a04": "descartado_vetor",
+    "a05": "novo",
+    "a06": "novo",
+    "a07": "novo",
+    "a08": "descartado_vetor",
+    "a09": "descartado_vetor",
+    "a10": "descartado_vetor",
+    "a11": "novo",
+    "a12": "novo",
+    "a13": "novo",
+    "a14": "novo",
+    "a15": "novo",
+    "a16": "novo",
+    "a17": "descartado_vetor",
+    "a18": "novo",
+    "a19": "novo",
+    "v01": "novo",
+    "v02": "descartado_vetor",
+    "v03": "descartado_vetor",
+    "v04": "descartado_vetor",
+    "l01": "novo",
+    "l02": "novo",
+    "l03": "novo",
+    "l04": "novo",
+    "x01": "novo",
+    "x02": "novo",
+    "d01": "descartado_vetor",
+    "d02": "descartado_vetor",
+    "d03": "descartado_vetor",
+    "d04": "descartado_vetor",
+    "d05": "descartado_vetor",
+    "d06": "descartado_vetor",
+    "d07": "descartado_vetor",
+    "d08": "descartado_vetor",
+    "d09": "novo",
+    "d10": "descartado_vetor"
+   }
+  },
+  "auditoria": {
+   "vivos": {
+    "8a4e2e06-44d6-444d-9b01-0d84bd0b6dd6": {
+     "texto": "Pedro é vegetariano",
+     "criado_por": "a01"
+    },
+    "eb0cb819-b6c9-4750-b965-fd6b9df71b29": {
+     "texto": "Pedro trabalha na Vortex como analista de BI",
+     "criado_por": "a02"
+    },
+    "fe36f830-8655-4166-bcc6-b40bf094f79e": {
+     "texto": "Pedro treina jiu-jitsu às terças e quintas à noite",
+     "criado_por": "a03"
+    },
+    "9129bba6-6ace-4fd6-b182-bf3ccedf36de": {
+     "texto": "Pedro prefere receber os resumos pelo WhatsApp",
+     "criado_por": "a05"
+    },
+    "1f54462e-6233-4fcc-8060-6d9df77f004d": {
+     "texto": "Pedro está montando um homelab com Proxmox",
+     "criado_por": "a06"
+    },
+    "9a202003-5bbf-41c3-85ff-d50d5d753c8c": {
+     "texto": "Pedro evita compromissos antes das 9h",
+     "criado_por": "a07"
+    },
+    "ab0727b5-19c3-40d9-a1f2-9c8a8cb73c35": {
+     "texto": "Pedro toma chá verde à noite",
+     "criado_por": "a11"
+    },
+    "0ed08caa-25f4-4ae0-8951-10d1c89ee848": {
+     "texto": "Pedro tem uma irmã chamada Camila",
+     "criado_por": "a12"
+    },
+    "067a9db1-8133-4ab8-9503-4d20cc645d8e": {
+     "texto": "Camila passou no concurso do TRT",
+     "criado_por": "a13"
+    },
+    "368eeedc-26fd-4a96-a241-e3c3dc4f6027": {
+     "texto": "Juliana Prado é vegana",
+     "criado_por": "a14"
+    },
+    "0b521fef-c795-4aea-b289-620e3e4da023": {
+     "texto": "Rafael Moreira mora em São Paulo",
+     "criado_por": "a15"
+    },
+    "3b841448-3b1a-46dd-8295-cd9e0bf18add": {
+     "texto": "Marcos Vieira prefere mensagens de texto em vez de áudio",
+     "criado_por": "a16"
+    },
+    "3a99b042-7bb9-4699-b995-5a2eea9f680e": {
+     "texto": "Helena é professora de biologia",
+     "criado_por": "a18"
+    },
+    "91c08bcf-78a3-481f-89b9-8b93232d949e": {
+     "texto": "Pedro é casado com Helena",
+     "criado_por": "a19"
+    },
+    "7172a192-63ba-4c4a-8c18-a7d33eeb9878": {
+     "texto": "Pedro gosta de coisas",
+     "criado_por": "v01"
+    },
+    "dedfd6a3-ac49-44d6-aefd-4deca758ddc9": {
+     "texto": "Pedro perguntou sobre a previsão do tempo",
+     "criado_por": "l01"
+    },
+    "93fbed5c-37dc-491f-8996-dde807eb22f2": {
+     "texto": "Pedro disse bom dia ao Alfred",
+     "criado_por": "l02"
+    },
+    "0c4f4962-2602-4560-bb3f-5327350c4e13": {
+     "texto": "Pedro Alfred respondeu que há 3 e-mails novos",
+     "criado_por": "l03"
+    },
+    "ebba4e61-3136-4bee-987f-cfb311752b41": {
+     "texto": "Pedro pediu para criar um lembrete",
+     "criado_por": "l04"
+    },
+    "213fee8f-f04e-404a-a4db-ba3ba1e571e4": {
+     "texto": "Tiago Lemos está de licença paternidade até 2026-10-15",
+     "criado_por": "x01"
+    },
+    "54e2c41f-7713-4869-93c8-7b2f3bb01e59": {
+     "texto": "Pedro está em Lisboa a trabalho até 2026-10-20",
+     "criado_por": "x02"
+    },
+    "185d1d49-0609-43f3-ab20-b03694eedbce": {
+     "texto": "Pedro é engenheiro de dados na Lumen",
+     "criado_por": "d09"
+    }
+   },
+   "segundos": 24.93,
+   "resultado": {
+    "before": 22,
+    "after": 22
+   },
+   "chamadas_llm": 1
+  }
+ }
+}
