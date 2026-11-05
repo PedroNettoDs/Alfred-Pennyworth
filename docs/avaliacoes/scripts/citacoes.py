@@ -67,7 +67,7 @@ def main() -> int:
     elif run["modo"] == "iterativo":
         # o modelo às vezes cita "[Descoberta 3]" em vez da URL: o número é da janela das últimas 10 descobertas
         # que a síntese recebeu (a lista não sai no relatório), então mapeia pela última janela
-        citadas = [f for f in frases if re.search(r"\]\(https?://|Descoberta \d", f)]
+        citadas = [f for f in frases if re.search(r"\]\(https?://|Descoberta \d|\[\d+(?:, ?\d+)*\](?!\()", f)]
         janela = max(0, len(fontes) - 10)
     else:
         citadas = [f for f in frases if re.search(r"\d|[A-Z][a-z]+[A-Z]|=", f)]
@@ -81,7 +81,8 @@ def main() -> int:
             refs = [por_n.get(int(n)) for n in dict.fromkeys(re.findall(r"\[(\d+)\](?!\()", frase))]
         elif run["modo"] == "iterativo":
             refs = [por_url.get(u.rstrip(").,")) for u in dict.fromkeys(re.findall(r"\]\((https?://[^)\s]+)\)", frase))]
-            for grupo in re.findall(r"Descobertas? ([\d ,e]+)", frase):
+            for grupo in re.findall(r"Descobertas? ([\d ,e]+)|\[(\d+(?:, ?\d+)*)\](?!\()", frase):
+                grupo = "".join(grupo)
                 refs += [por_n.get(janela + int(k)) for k in re.findall(r"\d+", grupo)]
         else:
             refs = fontes
