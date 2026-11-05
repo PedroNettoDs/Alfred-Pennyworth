@@ -6,9 +6,11 @@ O OpenNotebook guarda a pesquisa para conversar, anotar e gerar podcast (ele nã
                                  profundo: 202 + job_id, 4–5 min em segundo plano)
     andamento(job_id)          → GET /research/{job_id} (o Painel consulta no polling)
     recentes() / obter(slug)   → o que o researcher gravou em VAULT_ALFRED/research/<slug>/ (index, synthesis, sources)
-    abrir_notebook(slug)       → OpenNotebook (API em 127.0.0.1:5055, sem auth e só em localhost): um notebook com
-                                 cada URL de sources.md + o relatório do Alfred; o id vai para o frontmatter do
-                                 index.md (`opennotebook:`), e o mesmo botão reabre o mesmo notebook
+    notebooks()                → os notebooks do OpenNotebook (API em 127.0.0.1:5055, sem auth e só em localhost)
+    abrir_notebook(slug, destino=None)
+                               → manda cada URL de sources.md + o relatório do Alfred para um notebook novo
+                                 (destino None) ou para um que já existe ("Buscar mais fontes"); o id vai para o
+                                 frontmatter do index.md (`opennotebook:`), e a pesquisa reabre o mesmo notebook
 
 Falhas que a tela mostra → ErroPesquisa (mensagem na voz do Alfred). O token do researcher fica só no cabeçalho.
 """
@@ -29,10 +31,12 @@ from _shared.lib_alfred import gravar_atomico, log
 
 TIMEOUT_RAPIDO = 300       # s — o researcher: ~60 s de consultas + buscas + até 180 s de síntese
 TIMEOUT_CURTO = 60         # s — início do profundo (o cache semântico embute o tema), andamento, OpenNotebook
+TIMEOUT_LISTA = 3          # s — lista de notebooks na tela: OpenNotebook fora não pode segurar a página
 RECENTES_MAX = 20
 OPENNOTEBOOK_API = "http://127.0.0.1:5055"
 OPENNOTEBOOK_UI = "http://127.0.0.1:8502"
 CHAVE_NOTEBOOK = "opennotebook"        # chave do frontmatter do index.md com o id do notebook
+ID_NOTEBOOK = re.compile(r"notebook:[\w-]{1,64}")   # id do SurrealDB do OpenNotebook
 
 _transporte: Optional[httpx.BaseTransport] = None   # os testes trocam por httpx.MockTransport
 _dns = None                                          # idem: resolver falso para lib_web.url_publica
@@ -222,12 +226,15 @@ def url_notebook(notebook_id: str) -> str:
     return f"{OPENNOTEBOOK_UI}/notebooks/{quote(notebook_id, safe='')}"
 
 
-def _json(r: httpx.Response) -> dict:
+def id_valido(notebook_id) -> bool:
+    return isinstance(notebook_id, str) and bool(ID_NOTEBOOK.fullmatch(notebook_id))
+
+
+def _json(r: httpx.Response):
     try:
-        d = r.json()
+        return r.json()
     except ValueError:
-        return {}
-    return d if isinstance(d, dict) else {}
+        return None
 
 
 def _on(c: httpx.Client, metodo: str, caminho: str, **kw) -> httpx.Response:
@@ -237,12 +244,40 @@ def _on(c: httpx.Client, metodo: str, caminho: str, **kw) -> httpx.Response:
         raise ErroPesquisa(f"O OpenNotebook não respondeu em {OPENNOTEBOOK_API} ({type(e).__name__}). Ele está no ar?")
 
 
-def abrir_notebook(slug: str) -> dict:
-    """Notebook da pesquisa no OpenNotebook → {"url", "criado", "fontes" (enviadas), "falhas" (URLs/títulos)}.
+def notebooks() -> list[dict]:
+    """Notebooks não arquivados, do mais recente para o mais antigo → [{id, nome, fontes, url}]."""
+    with _cliente(TIMEOUT_LISTA) as c:
+        r = _on(c, "GET", "/api/notebooks", params={"archived": "false", "order_by": "updated desc"})
+    dados = _json(r) if r.status_code == 200 else None
+    if not isinstance(dados, list):
+        raise ErroPesquisa(f"O OpenNotebook não devolveu a lista de notebooks (HTTP {r.status_code}).")
+    return [{"id": n["id"], "nome": n.get("name") or n["id"], "fontes": n.get("source_count") or 0,
+             "url": url_notebook(n["id"])}
+            for n in dados if isinstance(n, dict) and id_valido(n.get("id")) and not n.get("archived")]
 
-    Já tem id no index.md e o notebook ainda existe com fontes → só devolve o link (existe sem nenhuma fonte, porque
-    o envio falhou da outra vez → manda as fontes de novo). Senão: cria o notebook, grava o id na hora (repetir não
-    cria outro), manda cada URL de sources.md como fonte "link" e o relatório como fonte "text".
+
+def _urls_no_notebook(c: httpx.Client, nid: str) -> set[str]:
+    """URLs que o notebook já tem (as 100 fontes mais recentes), para "Buscar mais fontes" não repetir página.
+    Sem resposta → conjunto vazio: no pior caso uma página entra duas vezes."""
+    try:
+        r = _on(c, "GET", "/api/sources", params={"notebook_id": nid, "limit": 100})
+    except ErroPesquisa:
+        return set()
+    dados = _json(r) if r.status_code == 200 else None
+    if not isinstance(dados, list):
+        return set()
+    return {u for f in dados if isinstance(f, dict) and (u := (f.get("asset") or {}).get("url"))}
+
+
+def abrir_notebook(slug: str, destino: Optional[str] = None) -> dict:
+    """Leva a pesquisa ao OpenNotebook → {"url", "id", "criado", "fontes" (enviadas), "repetidas", "falhas"}.
+
+    destino None ("Abrir um notebook sobre isso"): a pesquisa já tem notebook com fontes → só devolve o link; tem
+    notebook sem nenhuma fonte (o envio falhou antes) → manda de novo para ele; não tem (ou foi apagado lá) → cria
+    um com o título da pesquisa e grava o id na hora (repetir não cria outro).
+    destino = id ("Buscar mais fontes" / "Adicionar a outro notebook"): o notebook precisa existir; a pesquisa que já
+    foi para ele não vai de novo; URLs que ele já tem ficam de fora (`repetidas`); o id vai para o index.md depois
+    que alguma fonte entra.
     Só vai URL http/https de host público: o OpenNotebook baixa a página e roda com a rede do host. O processamento
     das fontes é assíncrono lá; uma fonte recusada entra em `falhas` e não para as outras. Slug desconhecido → KeyError."""
     with _LOCK_NOTEBOOK:
@@ -250,37 +285,54 @@ def abrir_notebook(slug: str) -> dict:
         if not p:
             raise KeyError(slug)
         with _cliente(TIMEOUT_CURTO) as c:
-            nid, criado = p["notebook"], False
-            if nid:
-                r = _on(c, "GET", f"/api/notebooks/{quote(nid, safe='')}")
-                if r.status_code == 200 and _json(r).get("source_count"):
-                    return {"url": url_notebook(nid), "criado": False, "fontes": 0, "falhas": []}
+            criado, relatorio = False, "Relatório do Alfred"
+            if destino:
+                if p["notebook"] == destino:
+                    return {"url": url_notebook(destino), "id": destino, "criado": False, "fontes": 0,
+                            "repetidas": 0, "falhas": []}
+                r = _on(c, "GET", f"/api/notebooks/{quote(destino, safe='')}")
                 if r.status_code == 404:
-                    log(f"[pesquisa] notebook {nid} não existe mais no OpenNotebook — criando outro para {slug}")
-                    nid = ""
-                elif r.status_code != 200:
+                    raise ErroPesquisa("Esse notebook não existe mais no OpenNotebook. Recarregue a página.")
+                if r.status_code != 200:
                     raise ErroPesquisa(f"O OpenNotebook respondeu HTTP {r.status_code} ao procurar o notebook.")
+                nid, relatorio = destino, f"Relatório do Alfred — {p['titulo']}"
+            else:
+                nid = p["notebook"]
+                if nid:
+                    r = _on(c, "GET", f"/api/notebooks/{quote(nid, safe='')}")
+                    dados = _json(r) if r.status_code == 200 else None
+                    if isinstance(dados, dict) and dados.get("source_count"):
+                        return {"url": url_notebook(nid), "id": nid, "criado": False, "fontes": 0,
+                                "repetidas": 0, "falhas": []}
+                    if r.status_code == 404:
+                        log(f"[pesquisa] notebook {nid} não existe mais no OpenNotebook — criando outro para {slug}")
+                        nid = ""
+                    elif r.status_code != 200:
+                        raise ErroPesquisa(f"O OpenNotebook respondeu HTTP {r.status_code} ao procurar o notebook.")
+                if not nid:
+                    modo = "profunda" if p["modo"] == "profundo" else "rápida"
+                    r = _on(c, "POST", "/api/notebooks", json={
+                        "name": p["titulo"],
+                        "description": f"Pesquisa {modo} do Alfred — research/{slug}/ no cofre ({len(p['fontes'])} fontes)",
+                    })
+                    dados = _json(r) if r.status_code in (200, 201) else None
+                    nid = dados.get("id") if isinstance(dados, dict) else None
+                    if not id_valido(nid):
+                        raise ErroPesquisa(f"O OpenNotebook não criou o notebook (HTTP {r.status_code}). Nada foi gravado.")
+                    _gravar_notebook(slug, nid)
+                    criado = True
+                    log(f"[pesquisa] notebook {nid} criado para research/{slug}/")
 
-            if not nid:
-                modo = "profunda" if p["modo"] == "profundo" else "rápida"
-                r = _on(c, "POST", "/api/notebooks", json={
-                    "name": p["titulo"],
-                    "description": f"Pesquisa {modo} do Alfred — research/{slug}/ no cofre ({len(p['fontes'])} fontes)",
-                })
-                nid = _json(r).get("id") if r.status_code in (200, 201) else None
-                if not isinstance(nid, str) or not nid:
-                    raise ErroPesquisa(f"O OpenNotebook não criou o notebook (HTTP {r.status_code}). Nada foi gravado.")
-                _gravar_notebook(slug, nid)
-                criado = True
-                log(f"[pesquisa] notebook {nid} criado para research/{slug}/")
-
-            falhas, fontes = [], []
+            ja_tem = set() if criado else _urls_no_notebook(c, nid)
+            falhas, fontes, repetidas = [], [], 0
             for f in p["fontes"]:
-                if lib_web.url_publica(f["url"], dns=_dns):
+                if f["url"] in ja_tem:
+                    repetidas += 1
+                elif lib_web.url_publica(f["url"], dns=_dns):
                     fontes.append({"type": "link", "url": f["url"], "title": f["titulo"]})
                 else:
                     falhas.append(f["url"])
-            fontes.append({"type": "text", "content": p["sintese_completa"], "title": "Relatório do Alfred"})
+            fontes.append({"type": "text", "content": p["sintese_completa"], "title": relatorio})
             enviadas = 0
             for fonte in fontes:
                 nome = fonte.get("url") or fonte["title"]
@@ -296,6 +348,10 @@ def abrir_notebook(slug: str) -> dict:
                 else:
                     falhas.append(nome)
                     log(f"[pesquisa] OpenNotebook recusou a fonte {nome} ({motivo})")
-    if not enviadas:
-        raise ErroPesquisa("O OpenNotebook não aceitou nenhuma fonte. Tente de novo: o mesmo notebook é usado.")
-    return {"url": url_notebook(nid), "criado": criado, "fontes": enviadas, "falhas": falhas}
+            if not enviadas:
+                raise ErroPesquisa("O OpenNotebook não aceitou nenhuma fonte. Tente de novo: o mesmo notebook é usado.")
+            if destino:
+                _gravar_notebook(slug, nid)
+                log(f"[pesquisa] research/{slug}/ enviada ao notebook {nid} ({enviadas} fontes, {repetidas} repetidas)")
+    return {"url": url_notebook(nid), "id": nid, "criado": criado, "fontes": enviadas, "repetidas": repetidas,
+            "falhas": falhas}

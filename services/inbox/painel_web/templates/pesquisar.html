@@ -1,8 +1,11 @@
 {#
   Aba Pesquisar. Vars de painel.tela_pesquisar(): modos ([(valor, rótulo)]), recentes (lista de
-  painel._pesquisas_recentes(): titulo, url, modo, notebook (bool), quando, relativo, iso).
+  painel._pesquisas_recentes(): titulo, url, modo, notebook (bool), quando, relativo, iso), notebooks
+  (pesquisa.notebooks(): id, nome, fontes, url), erro_notebooks (OpenNotebook fora do ar), destinos
+  ([(id, rótulo)] do select), destino (o notebook de "?notebook=<id>", ou None).
   O form chama POST /painel/api/pesquisar; a resposta traz `url` (resultado do rápido ou andamento do profundo)
-  e o painel.js vai para lá (data-apos-sucesso="ir-resposta").
+  e o painel.js vai para lá (data-apos-sucesso="ir-resposta"). "Buscar mais fontes" de um notebook é só um link
+  para esta página com ?notebook=<id>: o formulário já vem com ele escolhido.
 #}
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
@@ -13,13 +16,41 @@
   <section class="cartao" aria-labelledby="c-nova">
     <h2 class="cartao__titulo" id="c-nova">Nova pesquisa</h2>
     <form class="pilha--curta" data-acao="/painel/api/pesquisar" data-apos-sucesso="ir-resposta">
-      {{ m.campo("tema", "Tema", obrigatorio=true, attrs={"maxlength": "300", "autocomplete": "off"},
+      {%- if destino %}
+      {{ m.aviso("neutro", "Buscando mais fontes para o notebook " ~ destino.nome ~ ": o que o Alfred achar entra nele.") }}
+      {%- endif %}
+      {{ m.campo("tema", "Tema", obrigatorio=true, attrs={"maxlength": "300", "autocomplete": "off", "autofocus": "autofocus"} if destino else {"maxlength": "300", "autocomplete": "off"},
                  ajuda="Ex.: systemd Restart= e StartLimitBurst · resultado da eleição de 2026 · Ollama vs llama.cpp") }}
       {{ m.selecao("modo", "Modo", modos, "rapido") }}
-      <p class="pequeno suave">O rápido espera a resposta aqui mesmo. O profundo roda em segundo plano: pode sair da página e voltar pelo histórico abaixo quando terminar.</p>
+      {{ m.selecao("notebook", "Enviar as fontes para", destinos, destino.id if destino else "") }}
+      <p class="pequeno suave">O rápido espera a resposta aqui mesmo. O profundo roda em segundo plano: deixe a página de andamento aberta até o fim para as fontes irem ao notebook escolhido (senão, use o botão na página da pesquisa).</p>
       <div class="acoes">{{ m.botao("Pesquisar", "primario", nome_icone="busca", attrs={"data-texto-ocupado": "Pesquisando…"}) }}</div>
       {{ m.resultado() }}
     </form>
+  </section>
+
+  <section aria-labelledby="c-notebooks">
+    <h2 class="secao-titulo" id="c-notebooks">Notebooks no OpenNotebook</h2>
+    {%- if erro_notebooks %}
+    {{ m.aviso("aguardando", erro_notebooks) }}
+    {%- elif notebooks %}
+    <ul class="lista">
+      {%- for n in notebooks %}
+      <li class="agenda-item">
+        <span class="agenda-item__quando">{{ n.fontes }} fonte{{ "" if n.fontes == 1 else "s" }}</span>
+        <div>
+          <p class="agenda-item__titulo"><a href="{{ n.url }}" target="_blank" rel="noopener noreferrer">{{ n.nome }}<span class="sr-only"> (abre em nova aba)</span></a></p>
+        </div>
+        {{ m.botao("Abrir", pequeno=true, nome_icone="externo", href=n.url,
+                   attrs={"target": "_blank", "rel": "noopener noreferrer", "aria-label": "Abrir " ~ n.nome ~ " no OpenNotebook (nova aba)"}) }}
+        {{ m.botao("Buscar mais fontes", pequeno=true, nome_icone="busca", href="/painel/pesquisar?notebook=" ~ n.id|urlencode ~ "#c-nova",
+                   attrs={"aria-label": "Buscar mais fontes para " ~ n.nome}) }}
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- else %}
+    {{ m.vazio("Nenhum notebook no OpenNotebook ainda. Abra um a partir de uma pesquisa.", "info", compacto=true) }}
+    {%- endif %}
   </section>
 
   <section aria-labelledby="c-recentes">

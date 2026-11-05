@@ -1,9 +1,12 @@
 {#
   Resultado de uma pesquisa (VAULT_ALFRED/research/<slug>/synthesis.md). Vars de painel.tela_pesquisa():
   p (pesquisa.obter: titulo, slug, modo, fontes [{titulo, url}], notebook (id ou ""); None = não encontrada),
-  sintese (Markup do _markdown_seguro), modo (rótulo), quando.
-  "Abrir um notebook sobre isso" → POST /painel/api/pesquisar/<slug>/notebook; o painel.js vai para o `url` da
-  resposta (o notebook no OpenNotebook, 127.0.0.1:8502).
+  sintese (Markup do _markdown_seguro), modo (rótulo), quando, vinculado (a pesquisa está num notebook que tem
+  fontes), notebook_atual ({id, nome, fontes} ou None), url_notebook, destinos ([(id, rótulo)]; "" = notebook novo),
+  erro_notebooks (OpenNotebook fora do ar), falhou (?notebook=falhou).
+  "Abrir um notebook sobre isso" / "Adicionar" → POST /painel/api/pesquisar/<slug>/notebook {notebook}; o painel.js
+  abre o `url` da resposta (o notebook, 127.0.0.1:8502) numa aba nova e recarrega esta (data-apos-sucesso="nova-aba").
+  Já vinculado: link direto, também em nova aba.
 #}
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
@@ -29,16 +32,32 @@
     <div class="detalhe__lateral">
       <section class="cartao" aria-labelledby="c-notebook">
         <h2 class="cartao__titulo" id="c-notebook">OpenNotebook</h2>
-        {%- if p.notebook %}
-        <p class="pequeno suave">Esta pesquisa já tem um notebook: o botão abre o mesmo.</p>
-        {%- else %}
-        <p class="pequeno suave">Leva as fontes e este relatório para um notebook novo, onde dá para conversar, anotar e gerar podcast. As páginas são lidas lá, em segundo plano.</p>
+        {%- if falhou %}
+        {{ m.aviso("erro", "A pesquisa ficou pronta, mas as fontes não entraram no notebook escolhido (OpenNotebook fora do ar ou recusou). Tente pelo botão abaixo.") }}
         {%- endif %}
-        <form data-acao="/painel/api/pesquisar/{{ p.slug|urlencode }}/notebook" data-apos-sucesso="ir-resposta">
-          {{ m.botao("Abrir o notebook" if p.notebook else "Abrir um notebook sobre isso", "primario", nome_icone="externo",
-                     attrs={"data-texto-ocupado": "Abrindo…" if p.notebook else "Criando o notebook…"}) }}
+        {%- if erro_notebooks %}<p class="pequeno suave">{{ erro_notebooks }}</p>{% endif %}
+        {%- if vinculado %}
+        <p class="pequeno">Está no notebook <strong>{{ notebook_atual.nome if notebook_atual else p.notebook }}</strong>{% if notebook_atual %} · {{ notebook_atual.fontes }} fontes{% endif %}.</p>
+        <div class="acoes">{{ m.botao("Abrir o notebook", "primario", nome_icone="externo", href=url_notebook,
+                                     attrs={"target": "_blank", "rel": "noopener noreferrer", "aria-label": "Abrir o notebook no OpenNotebook (nova aba)"}) }}</div>
+        {%- if destinos %}
+        <form class="pilha--curta" data-acao="/painel/api/pesquisar/{{ p.slug|urlencode }}/notebook" data-apos-sucesso="nova-aba">
+          {{ m.selecao("notebook", "Adicionar também a outro notebook", destinos, destinos[0][0]) }}
+          {{ m.botao("Adicionar", pequeno=true, attrs={"data-texto-ocupado": "Enviando…"}) }}
           {{ m.resultado() }}
         </form>
+        {%- endif %}
+        {%- else %}
+        <p class="pequeno suave">Leva as fontes e este relatório para o OpenNotebook, onde dá para conversar, anotar e gerar podcast. Abre numa aba nova; as páginas são lidas lá, em segundo plano.</p>
+        <form class="pilha--curta" data-acao="/painel/api/pesquisar/{{ p.slug|urlencode }}/notebook" data-apos-sucesso="nova-aba">
+          {%- if destinos|length > 1 %}
+          {{ m.selecao("notebook", "Para onde", destinos, "") }}
+          {%- endif %}
+          <div class="acoes">{{ m.botao("Abrir um notebook sobre isso", "primario", nome_icone="externo",
+                                       attrs={"data-texto-ocupado": "Enviando ao OpenNotebook…"}) }}</div>
+          {{ m.resultado() }}
+        </form>
+        {%- endif %}
       </section>
       <section class="cartao" aria-labelledby="c-fontes">
         <h2 class="cartao__titulo" id="c-fontes">Fontes ({{ p.fontes|length }})</h2>

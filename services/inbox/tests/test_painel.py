@@ -96,6 +96,11 @@ def _fake_tts(texto, voice, path):
     return True
 
 
+def _sem_rede(request):
+    """Transporte padrão de pesquisa.py nos testes: nada chega ao researcher nem ao OpenNotebook de verdade."""
+    raise httpx.ConnectError("sem rede nos testes", request=request)
+
+
 def _cfg_de_teste(nome=None):
     n, cfg = _CARREGAR_CFG(nome)
     return n, {**cfg, "atraso_minutos": ESTADO["atraso"]}
@@ -121,6 +126,7 @@ class Base(unittest.TestCase):
             mock.patch.object(core, "tts_save", _fake_tts),
             mock.patch.object(painel, "_arquivo_desligado", lambda: TMP / "alfred_desligado"),
             mock.patch.object(painel, "ATRASO_LOGIN_FALHO", 0.01),
+            mock.patch.object(pesquisa, "_transporte", httpx.MockTransport(_sem_rede)),
         ]
         for p in cls.patches:
             p.start()
@@ -1259,6 +1265,7 @@ class TestPesquisar(_ComPesquisa):
 class TestNotebook(_ComPesquisa):
     NID = "notebook:abc123"
     URL = "http://127.0.0.1:8502/notebooks/notebook%3Aabc123"
+    OUTRO = "notebook:outro789"
 
     def setUp(self):
         super().setUp()
@@ -1266,20 +1273,33 @@ class TestNotebook(_ComPesquisa):
                               (["127.0.0.1"] if host == "127.0.0.1" else ["93.184.216.34"]))
         p.start()
         self.addCleanup(p.stop)
+        self.lista = []        # o que GET /api/notebooks devolve
+        self.no_outro = []     # fontes que o notebook OUTRO já tem (GET /api/sources)
 
     def servico(self, notebook=None, fonte=None, criar=None):
         ids = iter([self.NID, "notebook:novo456"])
+
+        def fontes(req):
+            return httpx.Response(200, json=[{"id": f"source:{i}", "asset": {"url": u}} for i, u in enumerate(self.no_outro)]
+                                  if req.url.params.get("notebook_id") == self.OUTRO else [])
+
         return self.opennotebook({
             ("POST", "/api/notebooks"): criar or (lambda req: httpx.Response(200, json={
                 "id": next(ids), "name": json.loads(req.content)["name"], "description": "", "archived": False,
                 "created": "", "updated": "", "source_count": 0, "note_count": 0})),
+            ("GET", "/api/notebooks"): lambda req: httpx.Response(200, json=self.lista),
             ("GET", "/api/notebooks/notebook:abc123"): notebook or httpx.Response(404, json={"detail": "Notebook not found"}),
+            ("GET", f"/api/notebooks/{self.OUTRO}"): httpx.Response(200, json={"id": self.OUTRO, "source_count": 2}),
+            ("GET", "/api/sources"): fontes,
             ("POST", "/api/sources/json"): fonte or httpx.Response(200, json={"id": "source:1", "title": "x"}),
         })
 
-    def botao(self, cli=None, slug="tokio-runtime"):
+    def notebook_na_lista(self, nid, nome, fontes, archived=False):
+        self.lista.append({"id": nid, "name": nome, "source_count": fontes, "archived": archived})
+
+    def botao(self, cli=None, slug="tokio-runtime", notebook=None):
         cli = cli or self.entrar()
-        return self.acao(cli, f"/painel/api/pesquisar/{slug}/notebook")
+        return self.acao(cli, f"/painel/api/pesquisar/{slug}/notebook", {"notebook": notebook} if notebook else {})
 
     def corpos(self, servico, metodo, caminho):
         return [json.loads(r.content) for r in servico.pedidos if (r.method, r.url.path) == (metodo, caminho)]
@@ -1288,8 +1308,9 @@ class TestNotebook(_ComPesquisa):
         on = self.servico()
         cli = self.entrar()
         html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text
-        self.assertIn('data-acao="/painel/api/pesquisar/tokio-runtime/notebook" data-apos-sucesso="ir-resposta"', html)
+        self.assertIn('data-acao="/painel/api/pesquisar/tokio-runtime/notebook" data-apos-sucesso="nova-aba"', html)
         self.assertIn("Abrir um notebook sobre isso", html)
+        self.assertNotIn('name="notebook"', html)                     # sem outros notebooks, não há o que escolher
 
         r = self.botao(cli)
         self.assertEqual(r.status_code, 200, r.text)
@@ -1315,7 +1336,12 @@ class TestNotebook(_ComPesquisa):
         indice = (self.dir / "index.md").read_text(encoding="utf-8")
         self.assertTrue(indice.startswith('---\ntitle: "Tokio: runtime"\ndate: 2026-11-05\nmodo: profundo\n'
                                           'opennotebook: "notebook:abc123"\n---\n\n# Tokio: runtime\n'), indice)
-        self.assertIn("Abrir o notebook", self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text)
+        # vinculado: link direto em nova aba, sem sair do Alfred
+        self.notebook_na_lista(self.NID, "Tokio: runtime", 3)
+        html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text
+        self.assertIn(f'href="{self.URL}" target="_blank" rel="noopener noreferrer"', html)
+        self.assertIn("Está no notebook <strong>Tokio: runtime</strong> · 3 fontes.", html)
+        self.assertNotIn("Abrir um notebook sobre isso", html)
         self.assertIn("no OpenNotebook", self.guardar(cli.get("/painel/pesquisar")).text)
 
     def test_reabre_o_mesmo_notebook(self):
@@ -1334,6 +1360,8 @@ class TestNotebook(_ComPesquisa):
         self.servico()
         cli = self.entrar()
         self.botao(cli)
+        # apagado lá: some da lista → a página volta a oferecer o botão
+        self.assertIn("Abrir um notebook sobre isso", self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text)
         on = self.servico(criar=lambda req: httpx.Response(200, json={"id": "notebook:novo456"}))
         r = self.botao(cli)
         self.assertEqual(r.json()["url"], "http://127.0.0.1:8502/notebooks/notebook%3Anovo456")
@@ -1350,6 +1378,9 @@ class TestNotebook(_ComPesquisa):
         self.assertIn("não aceitou nenhuma fonte", r.json()["erro"])
         self.assertTrue(r.json()["pode_tentar_de_novo"])
         self.assertIn('opennotebook: "notebook:abc123"', (self.dir / "index.md").read_text(encoding="utf-8"))
+        # na tela, o notebook vazio não conta como vinculado: o botão continua
+        self.notebook_na_lista(self.NID, "Tokio: runtime", 0)
+        self.assertIn("Abrir um notebook sobre isso", self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text)
         # Tentar de novo: o notebook existe, vazio → as fontes vão para ele (nenhum notebook novo)
         on = self.servico(notebook=httpx.Response(200, json={"id": self.NID, "source_count": 0}))
         r = self.botao(cli)
@@ -1372,26 +1403,133 @@ class TestNotebook(_ComPesquisa):
         self.assertEqual(enviadas, ["https://tokio.example/guia", "https://async.example/livro", None])
 
     def test_opennotebook_fora_do_ar(self):
-        def recusa(request):
-            raise httpx.ConnectError("conexão recusada", request=request)
-
-        self.servico(criar=recusa)
         antes = (self.dir / "index.md").read_text(encoding="utf-8")
-        cli = self.entrar()
+        cli = self.entrar()                                  # transporte padrão dos testes: conexão recusada
         r = self.botao(cli)
         self.assertEqual(r.status_code, 502)
         self.assertIn("O OpenNotebook não respondeu em http://127.0.0.1:5055", r.json()["erro"])
         self.assertTrue(r.json()["pode_tentar_de_novo"])
         self.assertEqual((self.dir / "index.md").read_text(encoding="utf-8"), antes)   # nada gravado
-        self.assertEqual(self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).status_code, 200)   # a aba não quebra
+        for url in ("/painel/pesquisar/tokio-runtime", "/painel/pesquisar"):        # a aba não quebra
+            html = self.guardar(cli.get(url))
+            self.assertEqual(html.status_code, 200, url)
+            self.assertIn("O OpenNotebook não respondeu", html.text, url)
 
-    def test_pesquisa_desconhecida_e_csrf(self):
+    def test_pesquisa_desconhecida_csrf_e_notebook_invalido(self):
         on = self.servico()
         cli = self.entrar()
         self.assertEqual(self.botao(cli, "nao-existe").status_code, 404)
         r = self.acao(cli, "/painel/api/pesquisar/tokio-runtime/notebook", csrf="errado")
         self.assertEqual(r.status_code, 403)
+        r = self.botao(cli, notebook="../api/x")
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "notebook"))
         self.assertEqual(on.pedidos, [])
+
+    # ── notebooks disponíveis e "Buscar mais fontes" ──
+
+    def test_aba_lista_os_notebooks(self):
+        self.notebook_na_lista(self.OUTRO, "SelfHost <Ddtank>", 9)
+        self.notebook_na_lista("notebook:velho1", "Arquivado", 4, archived=True)
+        self.notebook_na_lista("nao-e-id", "Lixo", 1)
+        on = self.servico()
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/pesquisar")).text
+        self.assertEqual(dict(on.pedidos[0].url.params), {"archived": "false", "order_by": "updated desc"})
+        self.assertIn("Notebooks no OpenNotebook", html)
+        self.assertIn("SelfHost &lt;Ddtank&gt;", html)                # autoescape
+        self.assertIn("9 fontes", html)
+        self.assertNotIn("Arquivado", html)
+        self.assertNotIn("Lixo", html)
+        self.assertIn('href="http://127.0.0.1:8502/notebooks/notebook%3Aoutro789" target="_blank" rel="noopener noreferrer"', html)
+        self.assertIn('href="/painel/pesquisar?notebook=notebook%3Aoutro789#c-nova"', html)
+        self.assertIn('<option value="notebook:outro789">SelfHost &lt;Ddtank&gt; (9 fontes)</option>', html)
+        self.assertNotIn("Buscando mais fontes", html)
+        # "Buscar mais fontes": o formulário já vem com o notebook escolhido
+        html = self.guardar(cli.get("/painel/pesquisar?notebook=notebook:outro789")).text
+        self.assertIn('<option value="notebook:outro789" selected>', html)
+        self.assertIn("Buscando mais fontes para o notebook SelfHost &lt;Ddtank&gt;", html)
+        self.assertIn("autofocus", html)
+
+    def test_rapido_com_notebook_manda_as_fontes_novas(self):
+        self.no_outro = ["https://tokio.example/guia"]       # o notebook já tem esta página
+        self.notebook_na_lista(self.OUTRO, "Rust", 2)
+        on = self.servico()
+        on.respostas[("POST", "/research")] = httpx.Response(200, json={"status": "success", "slug": "tokio-runtime"})
+        cli = self.entrar()
+        r = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio", "modo": "rapido", "notebook": self.OUTRO})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["url"], "/painel/pesquisar/tokio-runtime")      # fica no Alfred
+        self.assertEqual(self.corpos(on, "POST", "/api/notebooks"), [])            # não cria notebook
+        fontes = self.corpos(on, "POST", "/api/sources/json")
+        self.assertEqual([f.get("url") for f in fontes], ["https://async.example/livro", None])   # sem a repetida
+        self.assertEqual(fontes[-1]["title"], "Relatório do Alfred — Tokio: runtime")
+        self.assertEqual({tuple(f["notebooks"]) for f in fontes}, {(self.OUTRO,)})
+        self.assertIn(f'opennotebook: "{self.OUTRO}"', (self.dir / "index.md").read_text(encoding="utf-8"))
+        # de novo para o mesmo notebook: não manda nada
+        n = len(on.pedidos)
+        r = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio", "modo": "rapido", "notebook": self.OUTRO})
+        self.assertEqual(r.json()["url"], "/painel/pesquisar/tokio-runtime")
+        self.assertEqual([x.url.path for x in on.pedidos[n:]], ["/research"])
+
+    def test_rapido_com_notebook_e_opennotebook_fora(self):
+        self.researcher({("POST", "/research"): httpx.Response(200, json={"status": "success", "slug": "tokio-runtime"})})
+        cli = self.entrar()
+        r = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio", "modo": "rapido", "notebook": self.OUTRO})
+        self.assertEqual(r.status_code, 200, r.text)                               # a pesquisa deu certo
+        self.assertEqual(r.json()["url"], "/painel/pesquisar/tokio-runtime?notebook=falhou")
+        html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime?notebook=falhou")).text
+        self.assertIn("as fontes não entraram no notebook escolhido", html)
+        r = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio", "notebook": "x"})
+        self.assertEqual((r.status_code, r.json()["campo"]), (400, "notebook"))
+
+    def test_profundo_com_notebook_manda_ao_terminar(self):
+        estado = {"job": {"id": "0123456789ab", "topic": "Tokio: runtime", "slug": "tokio-runtime",
+                          "status": "running", "etapa": "plano"}}
+        on = self.servico()
+        on.respostas[("POST", "/research")] = httpx.Response(202, json={"status": "running", "job_id": "0123456789ab"})
+        on.respostas[("GET", "/research/0123456789ab")] = lambda req: httpx.Response(200, json=estado["job"])
+        cli = self.entrar()
+        r = self.acao(cli, "/painel/api/pesquisar", {"tema": "Tokio", "modo": "profundo", "notebook": self.OUTRO})
+        url = r.json()["url"]
+        self.assertEqual(url, "/painel/pesquisar/andamento/0123456789ab?notebook=notebook%3Aoutro789")
+        html = self.guardar(cli.get(url)).text
+        self.assertIn('data-poll-url="/painel/parcial/pesquisa?job=0123456789ab&amp;notebook=notebook%3Aoutro789"', html)
+        self.assertIn("as fontes vão para o notebook escolhido", html)
+        self.assertEqual(self.corpos(on, "POST", "/api/sources/json"), [])        # ainda rodando: nada enviado
+        estado["job"] = {**estado["job"], "status": "done", "etapa": "concluido", "resultado": {"slug": "tokio-runtime"}}
+        parcial = "/painel/parcial/pesquisa?job=0123456789ab&notebook=notebook%3Aoutro789"
+        self.assertIn('data-ir-para="/painel/pesquisar/tokio-runtime"', self.guardar(cli.get(parcial)).text)
+        self.assertEqual(len(self.corpos(on, "POST", "/api/sources/json")), 3)
+        self.guardar(cli.get(parcial))                                             # polling e página chegam juntos
+        pagina = self.guardar(cli.get(url, follow_redirects=False))
+        self.assertEqual(pagina.headers["location"], "/painel/pesquisar/tokio-runtime")
+        self.assertEqual(len(self.corpos(on, "POST", "/api/sources/json")), 3)    # uma vez só
+        self.assertEqual(self.guardar(cli.get("/painel/parcial/pesquisa?job=0123456789ab&notebook=x")).status_code, 404)
+
+    def test_adicionar_a_outro_notebook_pela_pagina_da_pesquisa(self):
+        self.notebook_na_lista(self.NID, "Tokio: runtime", 3)
+        self.notebook_na_lista(self.OUTRO, "Rust", 2)
+        on = self.servico()
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text
+        self.assertIn('<option value="" selected>Notebook novo: Tokio: runtime</option>', html)
+        self.assertIn('<option value="notebook:outro789">Rust (2 fontes)</option>', html)
+        r = self.botao(cli, notebook=self.OUTRO)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["url"], "http://127.0.0.1:8502/notebooks/notebook%3Aoutro789")
+        self.assertIn("Enviada ao notebook com 3 fonte(s).", r.json()["mensagem"])
+        self.assertEqual(self.corpos(on, "POST", "/api/notebooks"), [])
+        # agora vinculado ao OUTRO: link direto e "Adicionar também a outro notebook" só com os demais
+        self.lista[1]["source_count"] = 5
+        html = self.guardar(cli.get("/painel/pesquisar/tokio-runtime")).text
+        self.assertIn('href="http://127.0.0.1:8502/notebooks/notebook%3Aoutro789" target="_blank"', html)
+        self.assertIn("Adicionar também a outro notebook", html)
+        self.assertIn('<option value="notebook:abc123" selected>Tokio: runtime (3 fontes)</option>', html)
+        self.assertNotIn('<option value="notebook:outro789"', html)
+        # notebook que não existe mais lá
+        r = self.botao(cli, notebook="notebook:sumiu")
+        self.assertEqual(r.status_code, 502)
+        self.assertIn("não existe mais", r.json()["erro"])
 
 
 class TestCabecalhos(Base):

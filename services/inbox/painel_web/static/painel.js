@@ -11,7 +11,7 @@
  *   2. cliente de ações  — form[data-acao] → POST JSON (+ <dialog> de confirmação opcional)
  *   3. polling (15 s)    — [data-poll-url], [data-contador], [data-estado-url]
  *   4. pequenos extras   — filtros que se enviam sozinhos (mouse/Enter), marcação de "texto sendo editado",
- *                          ir para a URL da resposta / do parcial (Pesquisar)
+ *                          ir para a URL da resposta / do parcial, ou abri-la numa aba nova (Pesquisar)
  */
 (function () {
   "use strict";
@@ -222,6 +222,23 @@
     return null;
   }
 
+  /*
+   * "nova-aba": a aba é aberta JÁ, ainda dentro do clique — depois da resposta o navegador bloquearia o pop-up.
+   * Fica em branco com um aviso até a resposta; sem opener (a página aberta não alcança o painel). Pop-up
+   * bloqueado → null, e a página recarregada mostra o link.
+   */
+  function abrirAbaReservada() {
+    var aba = null;
+    try { aba = window.open("", "_blank"); } catch (e) { aba = null; }
+    if (!aba) return null;
+    try {
+      aba.opener = null;
+      aba.document.title = "Abrindo o OpenNotebook…";
+      aba.document.body.textContent = "O Alfred está enviando a pesquisa ao OpenNotebook…";
+    } catch (e) { /* sem acesso ao documento: a aba só fica em branco até a resposta */ }
+    return aba;
+  }
+
   // Link do Google Agenda só se for mesmo do Google Agenda (o resto vira texto).
   function linkAgenda(url) {
     if (typeof url === "string" && url.indexOf("https://calendar.google.com/") === 0) {
@@ -395,16 +412,29 @@
     ocupar(escopo, botao, true);
     form.setAttribute("data-estado", "ocupado");
     mostrarResultado(form, null);
+    var aba = atributo(form, botao, "data-apos-sucesso") === "nova-aba" ? abrirAbaReservada() : null;
 
     return postJSON(url, corpoDe(form, botao)).then(function (r) {
       ocupar(escopo, botao, false);
-      if (r.ok && r.dados.ok !== false) sucesso(form, botao, r.dados);
-      else falha(form, botao, r);
+      if (r.ok && r.dados.ok !== false) {
+        sucesso(form, botao, r.dados, aba);
+      } else {
+        if (aba) aba.close();
+        falha(form, botao, r);
+      }
     });
   }
 
-  function sucesso(form, botao, dados) {
+  function sucesso(form, botao, dados, aba) {
     var apos = atributo(form, botao, "data-apos-sucesso") || "manter";
+    // "nova-aba": a URL da resposta vai para a aba reservada no clique e esta página recarrega (mostra o estado novo)
+    if (apos === "nova-aba") {
+      var alvo = destinoSeguro(dados && dados.url);
+      if (aba && alvo) aba.location.replace(alvo);
+      else if (aba) aba.close();
+      location.reload();
+      return;
+    }
     if (apos.indexOf("ir:") === 0) {
       location.assign(apos.slice(3));
       return;

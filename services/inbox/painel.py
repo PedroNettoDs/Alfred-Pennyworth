@@ -869,16 +869,45 @@ def _pesquisas_recentes() -> list[dict]:
             for i in pesquisa.recentes()]
 
 
-def _dados_andamento(job_id: str) -> Optional[dict]:
+def _notebooks() -> tuple[list[dict], str]:
+    """Notebooks do OpenNotebook para a tela, ou ([], aviso) quando ele não responde: a aba não quebra por ele."""
+    try:
+        return pesquisa.notebooks(), ""
+    except pesquisa.ErroPesquisa as e:
+        return [], str(e)
+
+
+def _destino_valido(valor) -> Optional[str]:
+    """Campo `notebook` do pedido: "" (nenhum) ou id do OpenNotebook. Outra coisa → None (400)."""
+    v = str(valor or "").strip()
+    return v if not v or pesquisa.id_valido(v) else None
+
+
+def _enviar_ao_notebook(slug: str, destino: str) -> str:
+    """Pesquisa pronta + notebook escolhido ("Buscar mais fontes") → manda as fontes e o relatório para ele.
+    → URL do resultado; com `?notebook=falhou` quando não deu (a tela avisa e oferece o botão)."""
+    url = _url_pesquisa(slug)
+    if destino:
+        try:
+            pesquisa.abrir_notebook(slug, destino)
+        except (pesquisa.ErroPesquisa, KeyError):
+            return url + "?notebook=falhou"
+    return url
+
+
+def _dados_andamento(job_id: str, destino: str = "") -> Optional[dict]:
     """Pesquisa profunda em andamento (página e parcial do polling). None = job desconhecido. Pronta → `pronto`
-    com a URL do resultado (o painel.js vai para lá sozinho)."""
+    com a URL do resultado (o painel.js vai para lá sozinho), depois de mandar ao notebook `destino`, se houver
+    (abrir_notebook não manda a mesma pesquisa duas vezes ao mesmo notebook: página e polling podem chegar juntos)."""
+    poll = "/painel/parcial/pesquisa?" + urlencode({"job": job_id, **({"notebook": destino} if destino else {})})
     try:
         j = pesquisa.andamento(job_id)
     except KeyError:
         return None
     except pesquisa.ErroPesquisa as e:   # researcher fora no meio: a tela continua consultando
         return {"job_id": job_id, "tema": "", "estado": "running", "etapa": "", "mensagem": "", "subperguntas": [],
-                "contagem": {}, "erro": "", "erro_conexao": str(e), "pronto": ""}
+                "contagem": {}, "erro": "", "erro_conexao": str(e), "pronto": "", "poll_url": poll,
+                "notebook": destino}
     st = j.get("status")
     erro = j.get("erro") or ""
     if st == "interrompido":
@@ -888,7 +917,7 @@ def _dados_andamento(job_id: str) -> Optional[dict]:
             "etapa": ROTULO_ETAPA.get(j.get("etapa"), j.get("etapa") or ""), "mensagem": j.get("mensagem") or "",
             "subperguntas": j.get("subperguntas") or [], "contagem": j.get("contagem") or {},
             "erro": erro if st in ("error", "interrompido") else "", "erro_conexao": "",
-            "pronto": _url_pesquisa(slug) if slug else ""}
+            "pronto": _enviar_ao_notebook(slug, destino) if slug else "", "poll_url": poll, "notebook": destino}
 
 
 # ── Detalhe da pendência ──
@@ -1152,17 +1181,25 @@ def tela_whatsapp(request: Request):
 
 
 @router.get("/pesquisar")
-def tela_pesquisar(request: Request):
+def tela_pesquisar(request: Request, notebook: Optional[str] = None):
+    """`?notebook=<id>` ("Buscar mais fontes" de um notebook) já escolhe o destino no formulário."""
     if not _nonce_da_sessao(request):
         return _para_login(request)
-    return _pagina(request, "pesquisar.html", "pesquisar", modos=MODOS_PESQUISA, recentes=_pesquisas_recentes())
+    nbs, erro_on = _notebooks()
+    destino = next((n for n in nbs if n["id"] == notebook), None)
+    destinos = [("", "Nenhum: só o cofre")] + [(n["id"], f"{n['nome']} ({n['fontes']} fontes)") for n in nbs]
+    return _pagina(request, "pesquisar.html", "pesquisar", modos=MODOS_PESQUISA, recentes=_pesquisas_recentes(),
+                   notebooks=nbs, erro_notebooks=erro_on, destinos=destinos, destino=destino)
 
 
 @router.get("/pesquisar/andamento/{job_id}")
-def tela_pesquisa_andamento(request: Request, job_id: str):
+def tela_pesquisa_andamento(request: Request, job_id: str, notebook: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _para_login(request)
-    dados = _dados_andamento(job_id)
+    destino = _destino_valido(notebook)
+    if destino is None:
+        return _pagina(request, "pesquisa.html", "pesquisar", status=404, p=None)
+    dados = _dados_andamento(job_id, destino)
     if dados is None:
         return _pagina(request, "pesquisa.html", "pesquisar", status=404, p=None)
     if dados["pronto"]:
@@ -1171,21 +1208,33 @@ def tela_pesquisa_andamento(request: Request, job_id: str):
 
 
 @router.get("/pesquisar/{slug}")
-def tela_pesquisa(request: Request, slug: str):
+def tela_pesquisa(request: Request, slug: str, notebook: Optional[str] = None):
+    """`?notebook=falhou`: a pesquisa foi pedida para um notebook e as fontes não entraram (a tela avisa)."""
     if not _nonce_da_sessao(request):
         return _para_login(request)
     p = pesquisa.obter(slug)
     if not p:
         return _pagina(request, "pesquisa.html", "pesquisar", status=404, p=None)
+    nbs, erro_on = _notebooks()
+    atual = next((n for n in nbs if n["id"] == p["notebook"]), None) if p["notebook"] else None
+    # vinculado = abre direto (link, nova aba). Gravado no index.md mas sem fontes lá (o envio falhou) ou apagado
+    # lá → volta a oferecer o envio; OpenNotebook fora do ar → o link fica (não dá para conferir)
+    vinculado = bool(p["notebook"]) and (bool(atual and atual["fontes"]) or bool(erro_on))
+    if vinculado:
+        destinos = [(n["id"], f"{n['nome']} ({n['fontes']} fontes)") for n in nbs if n["id"] != p["notebook"]]
+    else:
+        destinos = [("", f"Notebook novo: {p['titulo']}")] + [(n["id"], f"{n['nome']} ({n['fontes']} fontes)") for n in nbs]
     return _pagina(request, "pesquisa.html", "pesquisar", p=p, sintese=_markdown_seguro(p["sintese"]),
-                   modo=ROTULO_MODO.get(p["modo"], p["modo"]), quando=fmt_data(p["quando"]))
+                   modo=ROTULO_MODO.get(p["modo"], p["modo"]), quando=fmt_data(p["quando"]),
+                   vinculado=vinculado, notebook_atual=atual, url_notebook=pesquisa.url_notebook(p["notebook"]),
+                   destinos=destinos, erro_notebooks=erro_on, falhou=notebook == "falhou")
 
 
 # ── Fragmentos do polling (mesmos parciais das páginas) ──
 
 @router.get("/parcial/{nome}")
 def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None,
-            job: Optional[str] = None):
+            job: Optional[str] = None, notebook: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _erro(401, MSG_SESSAO)
     if nome == "pendencias":
@@ -1203,7 +1252,8 @@ def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Option
     elif nome == "sistema":
         html = _render("_sistema.html", **_dados_sistema())
     elif nome == "pesquisa":
-        dados = _dados_andamento(job or "")
+        destino = _destino_valido(notebook)
+        dados = _dados_andamento(job or "", destino) if destino is not None else None
         if dados is None:
             return _erro(404, "Pesquisa não encontrada.")
         html = _render("_pesquisa_andamento.html", **dados)
@@ -1434,34 +1484,45 @@ async def acao_pesquisar(request: Request):
         return _erro(400, "Tema longo demais: resuma em até 300 caracteres.", campo="tema")
     if modo not in ("rapido", "profundo"):
         return _erro(400, "Modo inválido: use Rápido ou Profundo.", campo="modo")
+    destino = _destino_valido(corpo.get("notebook"))
+    if destino is None:
+        return _erro(400, "Notebook inválido. Recarregue a página e escolha de novo.", campo="notebook")
     try:
         # o rápido segura a resposta por ~45 s: fora do laço do servidor
         r = await run_in_threadpool(pesquisa.pesquisar, tema, modo == "profundo")
     except pesquisa.ErroPesquisa as e:
         return _erro(502, str(e), pode_tentar_de_novo=True)
     if r.get("job_id"):
-        return JSONResponse({"ok": True, "url": f"/painel/pesquisar/andamento/{r['job_id']}",
-                             "mensagem": "Pesquisa profunda iniciada. Acompanhe o andamento."})
+        url = f"/painel/pesquisar/andamento/{r['job_id']}" + (f"?{urlencode({'notebook': destino})}" if destino else "")
+        return JSONResponse({"ok": True, "url": url, "mensagem": "Pesquisa profunda iniciada. Acompanhe o andamento."})
     slug = pesquisa.slug_resultado(r)
     if not slug:
         return _erro(502, "O researcher respondeu sem a pasta da pesquisa.", pode_tentar_de_novo=True)
     # cache semântico: a pasta é a do tema parecido (a tela mostra o título dele)
-    return JSONResponse({"ok": True, "url": _url_pesquisa(slug), "mensagem": "Pesquisa pronta."})
+    url = await run_in_threadpool(_enviar_ao_notebook, slug, destino)
+    return JSONResponse({"ok": True, "url": url, "mensagem": "Pesquisa pronta."})
 
 
 @router.post("/api/pesquisar/{slug}/notebook")
 async def acao_notebook(request: Request, slug: str):
-    """"Abrir um notebook sobre isso": cria (ou reabre) o notebook no OpenNotebook; o JS vai para o `url`."""
+    """"Abrir um notebook sobre isso" (`notebook` vazio: cria ou reabre o da pesquisa) ou "Adicionar a outro
+    notebook" (`notebook` = id). O painel.js abre o `url` numa aba nova e recarrega esta página."""
     if recusa := _checar_post(request):
         return recusa
+    destino = _destino_valido((await _corpo_json(request)).get("notebook"))
+    if destino is None:
+        return _erro(400, "Notebook inválido. Recarregue a página e escolha de novo.", campo="notebook")
     try:
-        r = await run_in_threadpool(pesquisa.abrir_notebook, slug)
+        r = await run_in_threadpool(pesquisa.abrir_notebook, slug, destino or None)
     except KeyError:
         return _erro(404, "Pesquisa não encontrada.")
     except pesquisa.ErroPesquisa as e:
         return _erro(502, str(e), pode_tentar_de_novo=True)
     if r["fontes"]:
-        msg = f"{'Notebook criado' if r['criado'] else 'Notebook completado'} com {r['fontes']} fonte(s)."
+        acao = "Notebook criado" if r["criado"] else ("Enviada ao notebook" if destino else "Notebook completado")
+        msg = f"{acao} com {r['fontes']} fonte(s)."
+        if r["repetidas"]:
+            msg += f" {r['repetidas']} já estavam lá."
         if r["falhas"]:
             msg += f" {len(r['falhas'])} ficaram de fora."
     else:

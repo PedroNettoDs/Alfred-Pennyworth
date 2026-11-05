@@ -89,7 +89,7 @@ começa com `/painel` e não com `//`). O campo `token` é `type=password` e nun
 | `data-confirmar="<id do dialog>"` | form ou botão | Abre o `<dialog>` antes; só executa no `[data-confirmar-ok]` |
 | `data-dialogo-<nome>="texto"` | form ou botão | Texto que vai para `[data-preencher="<nome>"]` do diálogo |
 | `data-preencher-campo="<name>"` | dentro do dialog | Recebe o valor **atual** do campo `<name>` do form (texto final) |
-| `data-apos-sucesso` | form ou botão | `manter` (padrão: form continua usável), `encerrar` (desabilita o escopo e mantém o texto), `recarregar`, `ir:/caminho`, `ir-resposta` (vai para o `url` da resposta; só caminhos `/painel/…` ou `http://127.0.0.1:8502/notebooks/…`, o OpenNotebook — senão mostra a `mensagem`) |
+| `data-apos-sucesso` | form ou botão | `manter` (padrão: form continua usável), `encerrar` (desabilita o escopo e mantém o texto), `recarregar`, `ir:/caminho`, `ir-resposta` (vai para o `url` da resposta; só caminhos `/painel/…` ou `http://127.0.0.1:8502/notebooks/…`, o OpenNotebook — senão mostra a `mensagem`), `nova-aba` (abre uma aba em branco **no clique** — depois da resposta o navegador bloquearia —, manda o `url` da resposta para ela, sem `opener`, e recarrega esta página; falha fecha a aba) |
 | `data-texto-ocupado="Enviando…"` | botão | Texto do botão durante a requisição |
 | `data-acoes` | contêiner | **Escopo de trava**: enquanto um form dentro dele roda, todos os botões dele ficam desabilitados (duplo clique, "Autorizar" + "Não enviar" juntos). Sem ele, o escopo é o próprio form |
 | `data-resultado` | dentro do form (ou `data-resultado="<id>"` no form) | Onde aparece a mensagem (macro `m.resultado()`). Sem ele, o JS cria um no fim do form |
@@ -360,8 +360,11 @@ Vazia: `m.vazio("Nenhum lote de limpeza, senhor.", "limpeza")`.
 <ul class="lista"><li class="agenda-item">{{ m.tempo(…, "agenda-item__quando") }}<div><p class="agenda-item__titulo"><a …></a></p>…</div><span></span><span></span></li></ul>
 ```
 Resultado (`/painel/pesquisar/{slug}`, `pesquisa.html`): `div.detalhe` com a síntese em `div.prosa` (markdown seguro) e,
-na lateral, o cartão OpenNotebook (`form data-acao="/painel/api/pesquisar/<slug>/notebook" data-apos-sucesso="ir-resposta"`,
-botão primário "Abrir um notebook sobre isso" / "Abrir o notebook") e as fontes. Andamento (`/painel/pesquisar/andamento/{job_id}`): `div[data-poll-url="/painel/parcial/pesquisa?job=…"]`
+na lateral, o cartão OpenNotebook — vinculado: `m.botao("Abrir o notebook", "primario", href=…, attrs={"target": "_blank",
+"rel": "noopener noreferrer"})` + form "Adicionar também a outro notebook"; senão: `form data-acao="/painel/api/pesquisar/<slug>/notebook"
+data-apos-sucesso="nova-aba"` com `m.selecao("notebook", "Para onde", …)` e o botão primário "Abrir um notebook sobre isso" —
+e as fontes. A aba Pesquisar tem ainda `h2.secao-titulo` "Notebooks no OpenNotebook" (`ul.lista > li.agenda-item`: fontes,
+nome com link em nova aba, botões-link **Abrir** e **Buscar mais fontes** → `/painel/pesquisar?notebook=<id>#c-nova`). Andamento (`/painel/pesquisar/andamento/{job_id}`): `div[data-poll-url="/painel/parcial/pesquisa?job=…"]`
 com `_pesquisa_andamento.html` (pronto: `m.aviso("sucesso")` + `<a data-ir-para>`; erro: `m.aviso("erro")`).
 Vazia: `m.vazio("Nenhuma pesquisa no cofre ainda, senhor.", "busca")`.
 
