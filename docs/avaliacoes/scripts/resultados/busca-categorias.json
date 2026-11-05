@@ -1,0 +1,246 @@
+{
+ "data": "2026-11-03 ~05:00",
+ "origem": "saída de busca_categorias.py (transcrição)",
+ "linhas": [
+  {
+   "pergunta": "tecnico",
+   "consulta": "pt",
+   "config": "alfred",
+   "resultados": 45,
+   "relevantes_top10": 0,
+   "dominios_relevantes": 0
+  },
+  {
+   "pergunta": "tecnico",
+   "consulta": "pt",
+   "config": "general",
+   "resultados": 11,
+   "relevantes_top10": 9,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "tecnico",
+   "consulta": "pt",
+   "config": "odysseus",
+   "resultados": 11,
+   "relevantes_top10": 9,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "tecnico",
+   "consulta": "en",
+   "config": "alfred",
+   "resultados": 41,
+   "relevantes_top10": 2,
+   "dominios_relevantes": 2
+  },
+  {
+   "pergunta": "tecnico",
+   "consulta": "en",
+   "config": "general",
+   "resultados": 27,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 10
+  },
+  {
+   "pergunta": "tecnico",
+   "consulta": "en",
+   "config": "odysseus",
+   "resultados": 27,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 10
+  },
+  {
+   "pergunta": "noticia",
+   "consulta": "pt",
+   "config": "alfred",
+   "resultados": 63,
+   "relevantes_top10": 3,
+   "dominios_relevantes": 3
+  },
+  {
+   "pergunta": "noticia",
+   "consulta": "pt",
+   "config": "general",
+   "resultados": 27,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 7
+  },
+  {
+   "pergunta": "noticia",
+   "consulta": "pt",
+   "config": "odysseus",
+   "resultados": 29,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 7
+  },
+  {
+   "pergunta": "noticia",
+   "consulta": "en",
+   "config": "alfred",
+   "resultados": 56,
+   "relevantes_top10": 8,
+   "dominios_relevantes": 5
+  },
+  {
+   "pergunta": "noticia",
+   "consulta": "en",
+   "config": "general",
+   "resultados": 20,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 10
+  },
+  {
+   "pergunta": "noticia",
+   "consulta": "en",
+   "config": "odysseus",
+   "resultados": 29,
+   "relevantes_top10": 9,
+   "dominios_relevantes": 9
+  },
+  {
+   "pergunta": "produtos",
+   "consulta": "pt",
+   "config": "alfred",
+   "resultados": 51,
+   "relevantes_top10": 3,
+   "dominios_relevantes": 3
+  },
+  {
+   "pergunta": "produtos",
+   "consulta": "pt",
+   "config": "general",
+   "resultados": 30,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "produtos",
+   "consulta": "pt",
+   "config": "odysseus",
+   "resultados": 30,
+   "relevantes_top10": 9,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "produtos",
+   "consulta": "en",
+   "config": "alfred",
+   "resultados": 28,
+   "relevantes_top10": 7,
+   "dominios_relevantes": 3
+  },
+  {
+   "pergunta": "produtos",
+   "consulta": "en",
+   "config": "general",
+   "resultados": 29,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 9
+  },
+  {
+   "pergunta": "produtos",
+   "consulta": "en",
+   "config": "odysseus",
+   "resultados": 29,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 9
+  },
+  {
+   "pergunta": "academico",
+   "consulta": "pt",
+   "config": "alfred",
+   "resultados": 45,
+   "relevantes_top10": 0,
+   "dominios_relevantes": 0
+  },
+  {
+   "pergunta": "academico",
+   "consulta": "pt",
+   "config": "general",
+   "resultados": 7,
+   "relevantes_top10": 2,
+   "dominios_relevantes": 2
+  },
+  {
+   "pergunta": "academico",
+   "consulta": "pt",
+   "config": "odysseus",
+   "resultados": 14,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 9
+  },
+  {
+   "pergunta": "academico",
+   "consulta": "en",
+   "config": "alfred",
+   "resultados": 22,
+   "relevantes_top10": 0,
+   "dominios_relevantes": 0
+  },
+  {
+   "pergunta": "academico",
+   "consulta": "en",
+   "config": "general",
+   "resultados": 28,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "academico",
+   "consulta": "en",
+   "config": "odysseus",
+   "resultados": 27,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "brasil",
+   "consulta": "pt",
+   "config": "alfred",
+   "resultados": 78,
+   "relevantes_top10": 7,
+   "dominios_relevantes": 7
+  },
+  {
+   "pergunta": "brasil",
+   "consulta": "pt",
+   "config": "general",
+   "resultados": 26,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 8
+  },
+  {
+   "pergunta": "brasil",
+   "consulta": "pt",
+   "config": "odysseus",
+   "resultados": 27,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 10
+  },
+  {
+   "pergunta": "brasil",
+   "consulta": "en",
+   "config": "alfred",
+   "resultados": 55,
+   "relevantes_top10": 4,
+   "dominios_relevantes": 4
+  },
+  {
+   "pergunta": "brasil",
+   "consulta": "en",
+   "config": "general",
+   "resultados": 20,
+   "relevantes_top10": 9,
+   "dominios_relevantes": 6
+  },
+  {
+   "pergunta": "brasil",
+   "consulta": "en",
+   "config": "odysseus",
+   "resultados": 28,
+   "relevantes_top10": 10,
+   "dominios_relevantes": 7
+  }
+ ]
+}

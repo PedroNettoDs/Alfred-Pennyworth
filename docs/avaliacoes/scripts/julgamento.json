@@ -1,0 +1,195 @@
+{
+  "_sobre": "Conferência feita à mão (Claude, 03/11/2026) sobre a saída de citacoes.py. Ver legenda em resumo.py.",
+  "rapido-tecnico": {
+    "citacoes": [
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N",
+      "N"
+    ],
+    "cobertura": [
+      0.5,
+      1,
+      1,
+      0
+    ],
+    "alucinacoes": 1,
+    "obs": "os 12 trechos são MDN/Hackage (news,it); texto inteiro vem da memória do modelo; exemplo RestartSec=5s + StartLimitBurst=5 'tenta 5 vezes' é falso com o StartLimitIntervalSec padrão de 10 s"
+  },
+  "profundo-tecnico": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "alucinacoes": 0,
+    "obs": "só 6 frases citam; 1 nota (MDN onRestartRequired) passou no filtro de cosseno; o relatório diz com honestidade que as fontes não cobrem systemd — citação certa, conteúdo inútil"
+  },
+  "rapido-general-tecnico": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      0.5,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "trechos reais (Red Hat, ServerFault, SUSE); o modelo numerou citações sem o prompt pedir; exemplo de unit [Unit]/[Service] tirado do trecho 10"
+  },
+  "iterativo-tecnico": {
+    "citacoes": [
+      "S",
+      "F",
+      "S",
+      "N",
+      "S",
+      "P",
+      "S",
+      "N",
+      "N",
+      "N"
+    ],
+    "cobertura": [
+      1,
+      1,
+      1,
+      0
+    ],
+    "alucinacoes": 2,
+    "obs": "cita '[Descoberta n]' (número da janela de 10, sem URL nem lista no relatório); falsos: padrão 5 e 30 s (o próprio selivan diz 10 s) e 'RestartSec < 100 ms é ignorado para proteger o kernel'; sem exemplo de unit apesar de 3 fontes trazerem"
+  },
+  "profundo-general-tecnico": {
+    "citacoes": [
+      "N",
+      "S",
+      "P",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 1,
+    "obs": "relevância 14/14 com general; 'padrão é on-failure' atribuído a [1][3] mas vem da nota do Plesk (padrão do Plesk, não do systemd) e [1] diz o contrário; resto fiel às notas e às páginas"
+  },
+  "rapido-noticia": {
+    "citacoes": [
+      "S",
+      "S",
+      "P",
+      "S",
+      "P",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      0,
+      0,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "news,it funciona para notícia: 12 trechos relevantes; sem percentuais nacionais nem datas (só votos de 2 municípios); fiel aos trechos"
+  },
+  "rapido-general-noticia": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "N",
+      "P",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "general também acha notícia (Agência Brasil, TSE, Reuters); traz total nacional de votos e a data do 2º turno, que o news,it não trouxe"
+  },
+  "profundo-noticia": {
+    "citacoes": [
+      "S",
+      "P",
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "números conferidos nas páginas (51,79/48,21 e 47,03/45,16); plano sem data de hoje gerou subperguntas no futuro (tendências, fatores que 'influenciarão'), então metade do relatório é pré-eleição; 'coalizão Nordeste' vem de manchete de link relacionado de 05/10"
+  },
+  "iterativo-noticia": {
+    "citacoes": [
+      "S",
+      "S",
+      "S",
+      "S",
+      "S",
+      "P",
+      "S",
+      "S"
+    ],
+    "cobertura": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "alucinacoes": 0,
+    "obs": "só 8 frases citam; números conferidos nas páginas (apuração 1º e 2º turno, diferença calculada certa); de novo '[Descoberta n]' sem URL no texto; rodadas 2 e 3 vazias por SearXNG suspenso"
+  }
+}

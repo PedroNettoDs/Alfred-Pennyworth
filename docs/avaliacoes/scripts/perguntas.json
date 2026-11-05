@@ -1,0 +1,55 @@
+{
+  "_sobre": "5 perguntas fixas da avaliação de Pesquisa (docs/avaliacoes/pesquisa.md). 'aspectos' é o gabarito de cobertura, fixado ANTES de rodar: o relatório cobre o aspecto se responde a ele com pelo menos um fato concreto.",
+  "perguntas": [
+    {
+      "id": "tecnico",
+      "tema": "Como funcionam as diretivas Restart=, RestartSec= e StartLimitBurst= do systemd para reiniciar serviços que falham?",
+      "aspectos": [
+        "valores de Restart= (no, on-failure, always...) e quando cada um reinicia",
+        "RestartSec= e o intervalo entre tentativas",
+        "StartLimitIntervalSec=/StartLimitBurst= e o limite de reinícios (e em que seção ficam)",
+        "como aplicar e conferir (daemon-reload, systemctl status/reset-failed ou exemplo de unit)"
+      ]
+    },
+    {
+      "id": "noticia",
+      "tema": "Qual foi o resultado da eleição presidencial de 2026 no Brasil?",
+      "aspectos": [
+        "quem venceu",
+        "percentuais ou número de votos",
+        "datas do primeiro e/ou segundo turno",
+        "contexto adicional (abstenção, outros candidatos, posse)"
+      ]
+    },
+    {
+      "id": "produtos",
+      "tema": "Raspberry Pi 5 ou Orange Pi 5 para servidor doméstico: desempenho, consumo de energia e preço",
+      "aspectos": [
+        "desempenho de CPU (benchmarks ou especificação)",
+        "consumo de energia",
+        "preço",
+        "adequação a servidor doméstico (armazenamento NVMe/SATA, suporte de software, comunidade)"
+      ]
+    },
+    {
+      "id": "academico",
+      "tema": "O que é a hipótese do bilhete de loteria (lottery ticket hypothesis) em redes neurais e quais evidências a sustentam?",
+      "aspectos": [
+        "definição e origem (Frankle e Carbin, 2018/2019)",
+        "método: poda iterativa por magnitude e reinicialização dos pesos (rewinding)",
+        "evidências e resultados experimentais",
+        "limitações ou críticas (escala, late resetting, custo de encontrar o bilhete)"
+      ]
+    },
+    {
+      "id": "brasil",
+      "tema": "Como funciona o Pix Automático do Banco Central e quais são as regras para pagamentos recorrentes?",
+      "aspectos": [
+        "o que é e para que serve",
+        "como funciona a autorização do pagador (jornada, cancelamento)",
+        "regras e limites (valor máximo, aviso prévio, prazos)",
+        "data de lançamento e quem pode usar (empresas, instituições)"
+      ]
+    }
+  ]
+}
