@@ -1,16 +1,15 @@
 """
-Testes de regressão da trilha "serviços": shell executor, researcher, briefing, sync-knowledge e tools do Open WebUI.
+Testes de regressão da trilha "serviços": shell executor, researcher e briefing.
 
     cd services/inbox
     venv/bin/python -m unittest tests.test_servicos -v
 
 Tudo offline: nada de LLM, TTS, rede ou serviço real. Os módulos são carregados pelo caminho (importlib),
-vault/logs em pastas temporárias, `requests` trocado por um módulo falso quando o venv não o tem.
+vault/logs em pastas temporárias.
 """
 
 import importlib.util
 import inspect
-import os
 import subprocess
 import sys
 import tempfile
@@ -18,36 +17,14 @@ import threading
 import time
 import types
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
-
-import yaml
 
 AQUI = Path(__file__).parent
 REPO = AQUI.parent.parent.parent
 SERVICES = REPO / "services"
-TOOLS = REPO / "tools"
 sys.path.insert(0, str(SERVICES))
-
-
-def _requests_falso():
-    """Módulo `requests` mínimo para importar as tools (o venv do inbox não tem requests)."""
-    if "requests" in sys.modules:
-        return sys.modules["requests"]
-    try:
-        import requests  # noqa: F401
-        return requests
-    except ImportError:
-        pass
-    m = types.ModuleType("requests")
-    exc = types.SimpleNamespace(ConnectionError=type("ConnectionError", (Exception,), {}),
-                                Timeout=type("Timeout", (Exception,), {}))
-    m.exceptions = exc
-    m.ConnectionError, m.Timeout = exc.ConnectionError, exc.Timeout
-    m.post = m.get = lambda *a, **k: (_ for _ in ()).throw(AssertionError("rede no teste"))
-    sys.modules["requests"] = m
-    return m
 
 
 def carregar(caminho: Path, nome: str):
@@ -55,18 +32,6 @@ def carregar(caminho: Path, nome: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-class RespostaFalsa:
-    def __init__(self, status=200, dados=None):
-        self.status_code, self._dados = status, dados or {}
-
-    def json(self):
-        return self._dados
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -78,7 +43,7 @@ executor = carregar(SERVICES / "shell-executor" / "main.py", "alfred_executor_ma
 
 class TestExecutorWhitelist(unittest.TestCase):
     PERMITIDOS = [
-        # o que as tools mandam (alfred_system_monitor / alfred_briefing / alfred_shell_executor)
+        # o que as ferramentas da conversa mandam (relatorio_sistema / gerar_briefing / executar_comando)
         "lscpu | grep -E 'Model name|CPU\\(s\\)|MHz' | head -5",
         "uptime", "free -h", "df -h / /home", "nvidia-smi",
         "nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader",
@@ -203,7 +168,7 @@ class TestExecutorExecucao(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════
-#  Researcher + sync-knowledge
+#  Researcher
 # ══════════════════════════════════════════════════════════════
 
 researcher = carregar(SERVICES / "researcher" / "main.py", "alfred_researcher_main")
@@ -278,21 +243,6 @@ class TestResearcher(unittest.TestCase):
             INDEXAR_LOCAL()
             self.assertTrue(pronto.wait(5))
         self.assertEqual(chamadas, [(self.vault, "alfred", False)])
-
-
-class TestSyncKnowledge(unittest.TestCase):
-    def test_sem_token_mensagem_clara(self):
-        env = {k: v for k, v in os.environ.items() if k != "WEBUI_API_TOKEN"}
-        r = subprocess.run([sys.executable, str(SERVICES / "scripts" / "sync-knowledge.py")],
-                           capture_output=True, text=True, env=env, timeout=30)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("WEBUI_API_TOKEN não definido", r.stderr)
-        self.assertNotIn("Traceback", r.stderr)
-
-    def test_nao_usa_requests(self):
-        fonte = (SERVICES / "scripts" / "sync-knowledge.py").read_text()
-        self.assertNotIn("import requests", fonte)
-        self.assertIn("httpx", fonte)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -394,261 +344,6 @@ class TestBriefing(unittest.TestCase):
                 mock.patch.object(sys, "argv", ["x", "protocolo QUIC"]):
             briefing.main()
         adhoc.assert_called_once_with("protocolo QUIC")
-
-
-# ══════════════════════════════════════════════════════════════
-#  Tools do Open WebUI
-# ══════════════════════════════════════════════════════════════
-
-_requests_falso()
-
-
-class TestToolResearcher(unittest.TestCase):
-    def setUp(self):
-        self.mod = carregar(TOOLS / "alfred_researcher.py", "tool_alfred_researcher")
-        self.tool = self.mod.Tools()
-
-    def _com_resposta(self, dados):
-        with mock.patch.object(self.mod.requests, "post", lambda *a, **k: RespostaFalsa(200, dados)):
-            return self.tool.research_topic("protocolo QUIC")
-
-    def test_cache_exato(self):
-        out = self._com_resposta({"status": "success", "topic": "protocolo QUIC", "slug": "protocolo-quic",
-                                  "vault_path": "/v/research/protocolo-quic", "cached": True, "cache_type": "exact",
-                                  "synthesis": "# protocolo QUIC\nSÍNTESE", "files": ["index.md"]})
-        self.assertIn("do cache", out)
-        self.assertIn("SÍNTESE", out)
-        self.assertNotIn("Erro", out)
-
-    def test_cache_semantico(self):
-        out = self._com_resposta({"topic": "Protocolo QUIC!", "slug": "protocolo-quic", "cached": True,
-                                  "cache_type": "semantic", "matched_topic": "protocolo QUIC",
-                                  "matched_slug": "protocolo-quic", "similarity": 0.93, "vault_path": "/v",
-                                  "synthesis": "SÍNTESE", "files": ["index.md"]})
-        self.assertIn("semântico", out)
-        self.assertNotIn("Erro", out)
-
-    def test_pesquisa_nova(self):
-        out = self._com_resposta({"topic": "t", "slug": "t", "vault_path": "/v", "cached": False,
-                                  "queries_used": ["a", "b"], "sources_found": 7, "files": ["index.md"]})
-        self.assertIn("Fontes encontradas: 7", out)
-        self.assertIn("a; b", out)
-
-
-class TestToolShellExecutor(unittest.TestCase):
-    def test_timeout_none(self):
-        mod = carregar(TOOLS / "alfred_shell_executor.py", "tool_alfred_shell_executor")
-        enviado = {}
-
-        def post(url, headers=None, json=None, timeout=None):
-            enviado.update(json=json, timeout=timeout)
-            return RespostaFalsa(200, {"stdout": "ok", "stderr": "", "returncode": 0})
-        with mock.patch.object(mod.requests, "post", post):
-            self.assertEqual(mod.Tools().execute_command("date", None), "ok")
-        self.assertEqual(enviado["json"]["timeout"], 15)
-
-
-
-class _ComVault(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.vault = Path(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-
-class TestToolTasks(_ComVault):
-    def setUp(self):
-        super().setUp()
-        self.mod = carregar(TOOLS / "alfred_tasks.py", "tool_alfred_tasks")
-        self.tool = self.mod.Tools()
-        self.tool.valves.vault_path = str(self.vault)
-
-    def test_arquivo_ilegivel_nao_e_sobrescrito(self):
-        self.tool.add_task("Uma")
-        self.tool.add_task("Duas")
-        f = self.vault / "tasks.yml"
-        quebrado = f.read_text().replace("title: Duas", "title: Duas: revisar: [x")
-        f.write_text(quebrado)
-        self.assertIn("erro de YAML", self.tool.list_tasks("all"))
-        r = self.tool.add_task("Nova após edição manual")
-        self.assertIn("não criada", r)
-        self.assertEqual(f.read_text(), quebrado)
-        self.assertIn("Erro", self.tool.complete_task(1))
-        self.assertIn("Erro", self.tool.list_overdue())
-        self.assertEqual(f.read_text(), quebrado)
-        f.write_text("- só uma lista\n")
-        self.assertIn("não criada", self.tool.add_task("x"))
-        self.assertEqual(f.read_text(), "- só uma lista\n")
-
-    def test_due_date_validada_e_normalizada(self):
-        self.assertIn("vence em 2026-10-01", self.tool.add_task("Boleto", "2026-10-1"))
-        self.assertIn("vence em 2026-10-27", self.tool.add_task("BR", "27/10/2026"))
-        self.assertIn("inválida", self.tool.add_task("Sexta", "sexta"))
-        dados = yaml.safe_load((self.vault / "tasks.yml").read_text())
-        self.assertEqual([t["due_date"] for t in dados["tasks"]], ["2026-10-01", "2026-10-27"])
-
-    def test_data_invalida_no_arquivo_nao_quebra(self):
-        ontem = (date.today() - timedelta(days=1)).isoformat()
-        (self.vault / "tasks.yml").write_text(yaml.safe_dump({"tasks": [
-            {"id": 1, "title": "Torta", "status": "open", "due_date": "2026-10-1"},
-            {"id": 2, "title": "Texto", "status": "open", "due_date": "sexta"},
-            {"id": 3, "title": "Ontem", "status": "open", "due_date": ontem},
-        ]}, allow_unicode=True) + "- id: 4\n  title: SemAspas\n  status: open\n  due_date: 2020-01-02\n")
-        venc = self.tool.list_overdue()
-        self.assertIn("Ontem", venc)
-        self.assertIn("Torta", venc)          # 2026-10-1 normalizada
-        self.assertIn("SemAspas", venc)       # date do YAML
-        self.assertIn("inválida", venc)       # "sexta"
-        lst = self.tool.list_tasks("all")
-        self.assertIn("data inválida", lst)
-
-
-class TestToolPendenciasTasks(_ComVault):
-    def test_add_task_nao_sobrescreve_ilegivel(self):
-        mod = carregar(TOOLS / "alfred_pendencias.py", "tool_alfred_pendencias")
-        tool = mod.Tools()
-        tool.valves.vault_path = str(self.vault)
-        f = self.vault / "tasks.yml"
-        f.write_text("tasks:\n- id: 7\n  title: a: b: [\n")
-        self.assertIsNone(tool._add_task("Ir: banca", "2026-10-31", ["pendencia"]))
-        self.assertIn("ilegível", tool._erro_tasks)
-        self.assertEqual(f.read_text(), "tasks:\n- id: 7\n  title: a: b: [\n")
-        f.unlink()
-        self.assertEqual(tool._add_task("Ir: banca", "2026-10-31", ["pendencia"]), 1)
-
-
-class TestToolMemory(_ComVault):
-    def setUp(self):
-        super().setUp()
-        self.mod = carregar(TOOLS / "alfred_memory.py", "tool_alfred_memory")
-        self.tool = self.mod.Tools()
-        self.tool.valves.vault_path = str(self.vault)
-
-    def test_expira_com_fuso_e_formato_br(self):
-        self.tool.remember("tz", "com fuso", "2020-10-20T10:00:00-03:00")
-        self.assertIn("expirou", self.tool.recall("tz"))
-        self.tool.remember("br", "formato br", "01/01/2020")
-        self.assertIn("expirou", self.tool.recall("br"))
-        self.tool.remember("futuro", "ainda vale", "31/12/2099")
-        self.assertEqual(self.tool.recall("futuro"), "futuro: ainda vale")
-        self.assertIn("inválida", self.tool.remember("x", "y", "semana que vem"))
-        todas = self.tool.recall_all()
-        self.assertIn("futuro", todas)
-        self.assertNotIn("com fuso", todas)
-
-    def test_arquivo_ilegivel_nao_e_sobrescrito(self):
-        f = self.vault / "memory.yml"
-        f.write_text("memories:\n- key: a\n  value: b: c: [\n")
-        self.assertIn("Erro", self.tool.remember("k", "v"))
-        self.assertIn("Erro", self.tool.forget("a"))
-        self.assertIn("Erro", self.tool.recall_all())
-        self.assertEqual(f.read_text(), "memories:\n- key: a\n  value: b: c: [\n")
-
-
-class TestToolDailyDigest(_ComVault):
-    def test_days_back_none(self):
-        mod = carregar(TOOLS / "alfred_daily_digest.py", "tool_alfred_daily_digest")
-        tool = mod.Tools()
-        tool.valves.vault_path = str(self.vault)
-        (self.vault / "tasks.yml").write_text("tasks:\n- id: 1\n  title: SemAspas\n  status: open\n"
-                                              "  due_date: 2020-01-02\n")
-        r = tool.daily_digest(None)
-        self.assertIn("SemAspas", r)
-
-
-
-class TestToolBriefing(_ComVault):
-    def setUp(self):
-        super().setUp()
-        self.mod = carregar(TOOLS / "alfred_briefing.py", "tool_alfred_briefing")
-        self.tool = self.mod.Tools()
-        self.tool.valves.vault_path = str(self.vault / "container")
-        self.tool.valves.vault_alfred_host = str(self.vault / "host")
-        self.pasta = self.vault / "container" / "briefings"
-        self.pasta.mkdir(parents=True)
-        antigo = self.pasta / "2026-10-26_ti-para-meepp.md"            # nome antigo, maior em ordem alfabética
-        antigo.write_text("---\ntitle: \"Antigo\"\n---\nBRIEFING ANTIGO")
-        os.utime(antigo, (time.time() - 3600, time.time() - 3600))
-
-    def _gerar(self, stdout, rc):
-        resp = RespostaFalsa(200, {"stdout": stdout, "stderr": "", "returncode": rc})
-        with mock.patch.object(self.mod.requests, "post", lambda *a, **k: resp):
-            return self.tool.gerar_briefing()
-
-    def test_falha_nao_mostra_briefing_antigo(self):
-        out = self._gerar("[ollama_generate] Erro: Connection refused\n[ERRO] Ollama não retornou síntese.", 1)
-        self.assertIn("Falha ao gerar o briefing", out)
-        self.assertIn("Ollama não retornou", out)
-        self.assertNotIn("BRIEFING ANTIGO", out)
-
-    def test_converte_pela_valve_vault_path(self):
-        novo = self.pasta / "2026-10-26_1855_matinal_tech_anthropic.md"
-        novo.write_text("---\ntitle: \"Novo\"\n---\nBRIEFING NOVO")
-        host = self.vault / "host" / "briefings" / novo.name
-        out = self._gerar(f"[x] ok\nBRIEFING_FILE={host}\n", 0)
-        self.assertIn("BRIEFING NOVO", out)
-        self.assertNotIn("BRIEFING ANTIGO", out)
-
-    def test_ver_briefings_por_mtime_e_audio_vazio(self):
-        novo = self.pasta / "2026-10-26_1855_matinal_tech_anthropic.md"
-        novo.write_text("---\ntitle: \"Novo\"\n---\nx")
-        novo.with_suffix(".mp3").write_bytes(b"")
-        out = self.tool.ver_briefings(5)
-        self.assertLess(out.index("Novo"), out.index("Antigo"))
-        self.assertNotIn("com áudio", out)
-
-    def test_ler_briefing_fora_da_pasta(self):
-        (self.vault / "container" / "segredo.md").write_text("SEGREDO")
-        self.assertNotIn("SEGREDO", self.tool.ler_briefing("../segredo.md"))
-        self.assertNotIn("SEGREDO", self.tool.ler_briefing(str(self.vault / "container" / "segredo.md")))
-        self.assertIn("BRIEFING ANTIGO", self.tool.ler_briefing("2026-10-26_ti-para-meepp"))
-
-
-class TestToolsVault(_ComVault):
-    def setUp(self):
-        super().setUp()
-        self.leitor = carregar(TOOLS / "alfred_vault_reader.py", "tool_alfred_vault_reader").Tools()
-        self.escritor = carregar(TOOLS / "alfred_vault_writer.py", "tool_alfred_vault_writer").Tools()
-        (self.vault / "pedro" / "projetos").mkdir(parents=True)
-        (self.vault / "pedro" / "projetos" / "quic.md").write_text("notas sobre QUIC")
-        (self.vault / "alfred").mkdir()
-        (self.vault / "alfred" / "tasks.yml").write_text("SEGREDO-ALFRED QUIC")
-        (self.vault / "fora.md").write_text("SEGREDO-FORA QUIC")
-        self.leitor.valves.vault_path = str(self.vault / "pedro")
-        self.escritor.valves.vault_path = str(self.vault / "alfred")
-
-    def test_reader_nao_sai_do_vault(self):
-        self.assertIn("notas sobre QUIC", self.leitor.read_note("projetos/quic.md"))
-        for caminho in ("../alfred/tasks.yml", str(self.vault / "fora.md"), "/etc/hostname"):
-            with self.subTest(caminho=caminho):
-                self.assertIn("fora do vault", self.leitor.read_note(caminho))
-        self.assertIn("fora do vault", self.leitor.search_vault("QUIC", "../alfred"))
-        self.assertIn("quic.md", self.leitor.search_vault("QUIC"))
-
-    def test_writer_nao_sai_do_vault(self):
-        r = self.escritor.save_to_vault("fora do vault", "x", str(self.vault / "outra"))
-        self.assertIn("fora do vault", r)
-        self.assertFalse((self.vault / "outra").exists())
-        self.assertIn("fora do vault", self.escritor.save_to_vault("t", "x", "../pedro"))
-        self.assertIn("fora do vault", self.escritor.list_vault("../pedro"))
-        self.assertIn("fora do vault", self.escritor.search_vault("QUIC", ".."))
-
-    def test_writer_frontmatter_titulo_com_dois_pontos_e_sem_sobrescrever(self):
-        r1 = self.escritor.save_to_vault("Decisão: usar QUIC", "conteudo 1", "decisions")
-        r2 = self.escritor.save_to_vault("Decisão: usar QUIC", "conteudo 2", "decisions")
-        self.assertNotEqual(r1, r2)
-        notas = sorted((self.vault / "alfred" / "decisions").glob("*.md"))
-        self.assertEqual(len(notas), 2)
-        corpos = {n.read_text().split("---\n", 2)[2].strip() for n in notas}
-        self.assertEqual(corpos, {"conteudo 1", "conteudo 2"})
-        meta = yaml.safe_load(notas[0].read_text().split("---\n", 2)[1])
-        self.assertEqual(meta["title"], "Decisão: usar QUIC")
-
-    def test_writer_titulo_vazio(self):
-        r = self.escritor.save_to_vault("???", "sem titulo", "logs")
-        self.assertRegex(r, r"logs/\d{4}-\d{2}-\d{2} nota-\d{6}\.md$")
 
 
 if __name__ == "__main__":

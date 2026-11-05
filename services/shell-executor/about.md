@@ -1,6 +1,6 @@
 # shell-executor — Gateway de comandos do host
 
-API REST mínima que permite ao Open WebUI executar comandos shell no host sob uma whitelist estrita. Resolve o problema de o Open WebUI (Docker) não ter acesso direto ao sistema operacional do host.
+API REST mínima que executa comandos shell no host sob uma whitelist estrita, para as ferramentas da conversa (`_shared/lib_ferramentas.py`, sempre em `127.0.0.1`). Nasceu para o Open WebUI (Docker), que não tinha acesso ao host; o Open WebUI saiu em 05/11/2026.
 
 ## Como rodar
 
@@ -109,13 +109,12 @@ Regras extras:
 
 Para adicionar um comando novo, edite `ALLOWED_PREFIXES` em `main.py`.
 
-## Casos de uso no Open WebUI
+## Quem usa
 
-O Open WebUI usa este serviço via tool calling. Exemplos de tools que chamam o executor:
+As ferramentas da conversa (`_shared/lib_ferramentas.py`):
 
-- **`alfred_system_monitor.py`** — `df -h`, `free -h`, `nvidia-smi`, `uptime` → status do servidor
-- **`alfred_shell_executor.py`** — execução direta de comandos permitidos
-- **`alfred_briefing.py`** (indireto) — dispara `<alfred_dir_host>/services/briefing/run.sh` para gerar briefing sob demanda. A Valve `alfred_dir_host` precisa ser a pasta do repositório (o `instalar.sh` imprime no resumo): com o padrão `/home/netto/Alfred-Pennyworth` numa instalação em outra pasta, o executor recusa o comando (HTTP 403)
+- **`relatorio_sistema`, `status_disco`, `status_gpu`** — `df -h`, `free -h`, `nvidia-smi`, `uptime` → status do servidor
+- **`executar_comando`** ⚠ — execução direta de comandos permitidos, só depois da aprovação de Pedro
 
 ## Segurança
 

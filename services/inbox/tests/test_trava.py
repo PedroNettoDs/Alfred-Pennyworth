@@ -371,51 +371,8 @@ class TestJaResolvida(Base):
         for via, txt in (("celular", "resposta direta pelo celular"), ("WhatsApp", "resposta citada no WhatsApp"),
                          ("API", "API (N8N, chat ou extensão)"), ("terminal", "terminal"),
                          ("notificação no PC", "notificação no PC"), ("painel", "Painel do Alfred"),
-                         ("chat", "chat do Open WebUI"), ("outra coisa", "outra coisa")):
+                         ("chat", "conversa com o Alfred"), ("outra coisa", "outra coisa")):
             self.assertEqual(core.caminho_resolucao({"status": "respondida", "respondido_via": via}), txt)
-
-
-class TestToolsOpenWebUI(Base):
-    """As tools rodam no container (autocontidas) e gravam direto no vault: mesma trava, mesmo .lock."""
-
-    def tool(self, nome: str):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(nome, INBOX.parent.parent / "tools" / f"{nome}.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        t = mod.Tools()
-        t.valves.vault_path = str(self.vault)
-        return t
-
-    def test_tool_e_core_disputam_o_mesmo_lock(self):
-        pend = self.tool("alfred_pendencias")
-        tasks = self.tool("alfred_tasks")
-        f = core.pend_file()
-        with pend._trava(f):
-            with self.assertRaises(TimeoutError):
-                with core.trava_arquivo(f, timeout=0.2):
-                    pass
-        with core.trava_arquivo(self.vault / "tasks.yml"):
-            with self.assertRaises(TimeoutError):
-                with tasks._trava(timeout=0.2):
-                    pass
-        self.assertTrue((self.vault / "pendencias" / ".pendencias.yml.lock").exists())
-        self.assertTrue((self.vault / ".tasks.yml.lock").exists())
-
-    def test_tool_responde_email_com_respondido_via_chat(self):
-        pend = self.tool("alfred_pendencias")
-        tasks = self.tool("alfred_tasks")
-        self.gravar_pendencias([{"id": "p-chat", "tipo": "evento", "status": "aguardando", "titulo": "Meetup",
-                                 "evento": {"data_inicio": "2030-01-01"}, "arquivos": {"md": None, "mp3": None}}])
-        core._add_task("do host", None, ["x"])
-        self.assertIn("Tarefa #2", tasks.add_task("do chat"))
-        self.assertIn("VOU", pend.responder_pendencia("p-chat", "vou"))
-        p = core.obter_pendencia("p-chat")
-        self.assertEqual((p["status"], p["respondido_via"], p["task_id"]), ("vou", "chat", 3))
-        self.assertEqual(core.caminho_resolucao(p), "chat do Open WebUI")
-        self.assertIn("já está com status", pend.responder_pendencia("p-chat", "nao_vou"))
-        self.assertEqual([t["id"] for t in yaml.safe_load((self.vault / "tasks.yml").read_text())["tasks"]], [1, 2, 3])
-        self.assertFalse(list(self.vault.rglob("*.tmp")))
 
 
 if __name__ == "__main__":

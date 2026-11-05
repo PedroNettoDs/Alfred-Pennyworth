@@ -7,7 +7,6 @@ Testes do SQLite + FTS5 (_shared/lib_db.py): índice do cofre, histórico do Wha
 Tudo em diretório temporário; nenhum LLM, rede ou cofre real.
 """
 
-import importlib.util
 import os
 import shutil
 import sys
@@ -204,44 +203,6 @@ class TestCacheClassificacao(Base):
         for _ in range(3):
             lib_db.cache_put("email", "k", self.R)
         self.assertIsNone(lib_db.cache_get("whatsapp", "k"))
-
-
-class TestToolsDoOpenWebUI(Base):
-    """tools/alfred_vault_*.py (rodam no container): FTS5 quando há índice, substring quando não há."""
-
-    @staticmethod
-    def _tool(arquivo, **valves):
-        spec = importlib.util.spec_from_file_location(arquivo, AQUI.parent.parent.parent / "tools" / f"{arquivo}.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        t = mod.Tools()
-        for k, v in valves.items():
-            setattr(t.valves, k, v)
-        return t
-
-    def test_reader_usa_fts_e_cai_no_rglob(self):
-        _nota(self.vault, "projetos/servidor.md", "# Servidor\nOrçamento do rack")
-        lib_db.indexar_cofre(self.vault, "pedro")
-        t = self._tool("alfred_vault_reader", vault_path=str(self.vault), db_path=str(lib_db.db_path()))
-        r = t.search_vault("ORÇAMENTO rack")
-        self.assertIn("projetos/servidor.md", r)
-        self.assertNotIn("...", r)                         # trecho do FTS, não a prévia de 300 caracteres
-        self.assertIn("projetos/servidor.md", t.search_vault("orcamento", folder="projetos"))
-        self.assertIn("Nenhuma nota", t.search_vault("inexistente"))
-        # nota nova, ainda fora do índice: o fallback por substring a encontra
-        _nota(self.vault, "nova.md", "bananada fresca")
-        self.assertIn("nova.md", t.search_vault("bananada"))
-        # sem .db: tudo pelo rglob
-        t2 = self._tool("alfred_vault_reader", vault_path=str(self.vault), db_path=str(TMP / "nao-existe.db"))
-        self.assertIn("projetos/servidor.md", t2.search_vault("rack"))
-
-    def test_writer_so_enxerga_o_proprio_cofre(self):
-        _nota(self.vault, "a.md", "banana")
-        lib_db.indexar_cofre(self.vault, "pedro")          # outro cofre: o writer (cofre "alfred") não pode ler
-        t = self._tool("alfred_vault_writer", vault_path=str(self.vault), db_path=str(lib_db.db_path()))
-        self.assertIn("a.md", t.search_vault("banana"))     # cai no rglob, que enxerga o mesmo diretório
-        lib_db.indexar_cofre(self.vault, "alfred")
-        self.assertIn("score", t.search_vault("banana"))    # agora veio do FTS
 
 
 def tearDownModule():

@@ -1,6 +1,6 @@
 # researcher — Serviço de pesquisa sob demanda
 
-API REST que recebe um tópico, faz pesquisa na web, sintetiza via LLM e salva no vault. Usado como ferramenta pelo Open WebUI (tool calling) e pelo briefing para aprofundamento contextual futuro.
+API REST que recebe um tópico, faz pesquisa na web, sintetiza via LLM e salva no vault. Usado pelas ferramentas `pesquisar` / `andamento_pesquisa` da conversa (`_shared/lib_ferramentas.py`) e pelo briefing para aprofundamento contextual futuro.
 
 Dois modos: o **rápido** (padrão, síncrono — síntese só com os trechos que o SearXNG devolve) e o **profundo**
 (`"profundo": true`, em segundo plano — plano em subperguntas, leitura das páginas, notas por fonte e relatório com
@@ -21,7 +21,7 @@ copie o arquivo direto — ver [README → Setup](../../README.md#4-setup)):
 
 ```bash
 systemctl --user status alfred-researcher
-systemctl --user restart alfred-researcher    # depois de alterar o .env (ex.: WEBUI_API_TOKEN, IDs das KBs)
+systemctl --user restart alfred-researcher    # depois de alterar o .env (ex.: SHELL_EXECUTOR_TOKEN, RESEARCH_MODEL_*)
 journalctl --user -fu alfred-researcher
 ```
 
@@ -132,7 +132,7 @@ indexar_local() → põe as notas novas no RAG local (_shared/lib_rag: FTS5 + ve
 
 O `indexar_local()` roda `lib_rag.indexar_cofre(VAULT_ALFRED, "alfred")` em segundo plano: incremental, então só as
 notas desta pesquisa vão ao Ollama. Sem ChromaDB, atualiza só o FTS5. O researcher não chama mais o
-`sync-knowledge.py` (Knowledge Base do Open WebUI); o script e as variáveis `WEBUI_*` saem junto com o Open WebUI.
+`sync-knowledge.py` (Knowledge Base do Open WebUI); o script e as variáveis `WEBUI_*` saíram com o Open WebUI (05/11/2026).
 
 ## Pesquisa profunda
 
@@ -266,8 +266,6 @@ progresso/`interrompido` e o modo rápido. Os testes antigos do researcher conti
 |----------|-----|
 | `SHELL_EXECUTOR_TOKEN` | Token Bearer de autenticação |
 | `VAULT_ALFRED` | Caminho do vault para salvar pesquisas |
-| `WEBUI_API_TOKEN` | Token para sync da Knowledge Base no Open WebUI |
-| `WEBUI_URL` | URL do Open WebUI (default: `http://localhost:3001`) |
 | `PORT_RESEARCHER` | Porta do serviço (default: `7072`) |
 | `RESEARCH_MODEL_NOTAS` | Modo profundo: modelo do plano e das notas (sobrescreve `pesquisa.modelo_notas`; padrão `gemma4:e4b`) |
 | `RESEARCH_MODEL_SINTESE` | Modo profundo: modelo do relatório (sobrescreve `pesquisa.modelo_sintese`; padrão `MODEL_CHAT`) |

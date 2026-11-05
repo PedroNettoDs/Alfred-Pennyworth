@@ -99,7 +99,7 @@ o 409 "Esta pendência já foi resolvida por <caminho>." usam `core.caminho_reso
 | `WhatsApp` | resposta citando a mensagem do Alfred | resposta citada no WhatsApp |
 | `painel` | Painel do Alfred | Painel do Alfred |
 | `celular` | Pedro respondeu o contato direto no celular (`fromMe`) | resposta direta pelo celular |
-| `chat` | tool `alfred_pendencias` gravando direto no vault (e-mail; WhatsApp com a API fora do ar) | chat do Open WebUI |
+| `chat` | ferramenta `responder_pendencia` da conversa (`_shared/lib_ferramentas.py`) | conversa com o Alfred |
 
 Sem o campo (pendências antigas ou gravadas sem origem): `respondida_manual` → resposta direta pelo celular; `expirada` → expiração automática
 (o evento já passou); `nota` "via X" → X; senão "outro caminho (terminal, notificação ou chat)".
@@ -108,7 +108,7 @@ Sem o campo (pendências antigas ou gravadas sem origem): `respondida_manual` �
 
 `pendencias.yml`, `tasks.yml`, `agenda.yml`, `limpeza.yml` e a fila `logs/whatsapp_fila.json` são gravados por vários
 **processos**: a API (threads do webhook, thread da fila, painel, `/ciclo`), os aguardadores destacados das notificações,
-o CLI, o ciclo do e-mail e o vigia (pelos timers) e, no container, as tools do Open WebUI (pelo bind mount do vault). A trava
+o CLI, o ciclo do e-mail e o vigia (pelos timers) e as ferramentas da conversa. A trava
 antiga (`_LOCK` em `whatsapp.py`, `_lock` em `agenda.py`) só valia entre threads de um processo. O risco era real: numa
 reprodução com o código antigo (4 processos criando 5 pendências cada, LLM simulado), ficaram 5 de 20 pendências no yml
 e 6 de 20 tarefas, com `task_id` repetido — quem gravava por último apagava o que o outro gravou no meio (a criação de
@@ -116,8 +116,8 @@ pendência lia o yml, gastava LLM + TTS e gravava a lista velha + 1).
 
 - `core.trava_arquivo(caminho, timeout=30)`: `fcntl.flock` exclusivo em `.<arquivo>.lock` ao lado do arquivo, reentrante
   na mesma thread e exclusivo também entre threads. Passou do timeout → `TimeoutError` com mensagem legível. O `.lock`
-  é criado com modo 0666 para o host e o root do container do Open WebUI abrirem o mesmo arquivo (mesmo inode pelo bind
-  mount → o flock vale dos dois lados). São arquivos vazios e ocultos: não apague com processos rodando.
+  é criado com modo 0666 (herança do container do Open WebUI, que rodava como root e abria o mesmo arquivo pelo bind
+  mount). São arquivos vazios e ocultos: não apague com processos rodando.
 - Só **gravações** pegam a trava ("ler → mudar → gravar", trecho curto: nada de LLM, TTS ou rede dentro). Leituras não
   pegam — por isso toda gravação é **atômica** (`core.gravar_atomico`, que é o `_shared.lib_alfred.gravar_atomico`:
   temporário oculto e único + fsync + `os.replace`): quem lê vê o arquivo velho inteiro ou o novo inteiro, nunca pela
@@ -126,8 +126,7 @@ pendência lia o yml, gastava LLM + TTS e gravava a lista velha + 1).
 - **Ainda sem gravação atômica** (arquivos em edição por outra sessão em 31/10/2026 — trocar quando liberarem):
   `vigia.py:_salvar_estado` (`logs/vigia_estado.json`, `write_text` direto); `whatsapp.py:_save_fila` e
   `lib_whatsapp` (ids enviados) usam `.tmp` de nome fixo + `replace` — atômico, mas sem fsync e com o `.tmp`
-  compartilhado entre processos; e `tools/alfred_memory.py:_save` (memória no vault, `write_text` direto, roda no
-  container). As notas `.md` (jornal, pendências, lotes, podcast) continuam com `write_text`: são escritas uma vez,
+  compartilhado entre processos. As notas `.md` (jornal, pendências, lotes, podcast) continuam com `write_text`: são escritas uma vez,
   não são estado relido a cada ciclo.
 - Ordem das travas (evita deadlock): `whatsapp._LOCK` → pendências → tasks; agenda → tasks; limpeza sozinha; fila
   sozinha; promessas sozinha (chama a agenda fora dela). Nunca pegar pendências segurando agenda ou tasks.
@@ -138,10 +137,9 @@ pendência lia o yml, gastava LLM + TTS e gravava a lista velha + 1).
   Dois cliques ou dois caminhos ao mesmo tempo, mesmo em processos diferentes, enviam **uma** vez; o segundo recebe
   `core.PendenciaJaResolvida` (subclasse de `ValueError`, mesma mensagem de antes: "Pendência X já está com status 'Y'").
   `core.responder(..., so_se_aguardando=True)` faz o mesmo para vou / não vou (usado pela notificação e pelo painel).
-- **Tools do Open WebUI:** `tools/alfred_pendencias.py` (v1.2.0) e `tools/alfred_tasks.py` (v1.1.0) usam a mesma trava
-  (flock nos mesmos `.lock`) e gravação atômica; `alfred_pendencias` grava `respondido_via: chat` e não sobrescreve uma
-  pendência resolvida por outro caminho. **Reimporte as duas** (Workspace → Tools → abrir a tool → colar o conteúdo novo
-  → salvar): enquanto a versão antiga estiver instalada, o que o chat grava continua sem trava.
+- **Ferramentas da conversa** (`_shared/lib_ferramentas.py`): rodam no mesmo Python e chamam `core` direto (mesma
+  trava, gravação atômica); `responder_pendencia` grava `respondido_via: chat` e não sobrescreve uma pendência
+  resolvida por outro caminho.
 - Fora da trava: `whatsapp_seen.json` e `inbox_seen.json` (no pior caso, reprocessamento ou duplicata rara). Rodar
   `whatsapp processar-fila` com a API no ar ainda pode criar a mesma pendência duas vezes se os dois pegarem o mesmo item
   vencido ao mesmo tempo — a fila em si não perde mais nada. Um `pendencias.yml` realmente corrompido continua sendo lido
@@ -158,7 +156,7 @@ Qualquer caminho atualiza o mesmo `pendencias.yml` (e grava por onde veio em `re
 | Pergunta gráfica (fica ociosa até o clique) | processo destacado por pendência: notificação com botões **Vou / Não vou / Ouvir** (`notificar_dbus.py`, D-Bus direto) → se não houver suporte a ações, `kdialog --yesnocancel` → `zenity`. "Ouvir" toca o áudio e pergunta de novo |
 | Terminal interativo | `./run.sh perguntar [--ouvir]` — Alfred apresenta uma a uma e espera `vou` / `nao` / `ouvir` / `ver` / `pular` |
 | Terminal | `./run.sh responder <id> vou` |
-| Chat (Open WebUI) | tool `tools/alfred_pendencias.py` → "responder pendência <id>: vou" |
+| Conversa | `./run.sh conversa "responder pendência <id>: vou"` → ferramenta `responder_pendencia` (pede aprovação) |
 | N8N | sub-workflow fica em **Wait**; o link `resumeUrl?resposta=vou` chama `POST /pendencias/{id}/responder` |
 
 ## API HTTP (para o N8N)
@@ -241,7 +239,7 @@ resposta, agenda ou limpeza.
 | **Detalhe já resolvido** | "Esta pendência já foi resolvida por <caminho>.", o resultado (status, data, resposta, envio, nota, tarefa) e nenhuma ação |
 | **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
 | **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data e, depois que a extensão passa, o resultado de cada um) recolhível; o resultado agregado da última passada (movidos para a Lixeira, não encontrados, recusados, com erro); **Aprovar**, **Aprovar e limpar** e **Recusar** (nota opcional) nos lotes aguardando; **Limpar** nos lotes aprovados, simulados, parciais ou que falharam (some enquanto a limpeza pedida espera a extensão) |
-| **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-webui`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
+| **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
 
 O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
 enviado pelo WhatsApp, agenda, resolvida e por qual caminho (`respondido_via`), envio ok/simulado/falhou, áudio apagado.
@@ -529,7 +527,7 @@ Com a instância no próprio número, toda conversa passa pelo Alfred — inclus
 | Painel do Alfred | detalhe da pendência: caixa já preenchida com o rascunho → **Autorizar envio** (confirmação com destinatário e texto final) · **Não enviar** · **Agendar** — ver [Painel](#painel-do-alfred) |
 | Notificação no PC | **Enviar** abre o rascunho do Alfred numa caixa para editar e confirmar · **Não enviar** = `ignorar` · **Agenda** · **Ouvir** — ver [abaixo](#notificação-no-pc-enviar--não-enviar--agenda--ouvir) |
 | Terminal | `./run.sh responder-texto <id> "texto"` · `./run.sh perguntar` (modo interativo aceita texto livre nas pendências de WhatsApp) |
-| Chat (Open WebUI) | tool `alfred_pendencias.py` → "responde pro Carlos que mando até quinta" → `responder_pendencia(id, "texto")` chama `POST /responder-texto` (Valves `inbox_api_url` / `inbox_api_token`); sem API no ar, guarda no vault e avisa |
+| Conversa | `./run.sh conversa "responde pro Carlos que mando até quinta"` → ferramenta `responder_pendencia(id, "texto")` (pede aprovação) → `whatsapp.responder_texto` |
 | API / N8N | `POST /pendencias/{id}/responder-texto` |
 
 Sem `EVOLUTION_URL` (ou com `WHATSAPP_DRY_RUN=true`) **nada sai da máquina**: os envios ficam em `logs/whatsapp_enviados.jsonl` e a pendência registra `envio.simulado: true`.
@@ -603,16 +601,15 @@ Os payloads em `tests/payloads/` seguem o formato do evento `messages.upsert` da
 
 ## Busca e histórico — SQLite FTS5 (`_shared/lib_db.py`)
 
-Um arquivo só, `VAULT_ALFRED/.alfred/alfred.db` (o Obsidian ignora a pasta com ponto; o container do Open WebUI enxerga o mesmo arquivo em `/vaults/alfred/.alfred/`; `ALFRED_DB` no `.env` troca o caminho). Os `.md` e o YAML continuam sendo a fonte de verdade; só o histórico do WhatsApp é gravado direto.
+Um arquivo só, `VAULT_ALFRED/.alfred/alfred.db` (o Obsidian ignora a pasta com ponto; `ALFRED_DB` no `.env` troca o caminho). Os `.md` e o YAML continuam sendo a fonte de verdade; só o histórico do WhatsApp é gravado direto.
 
 | Tabela | O que guarda | Quem usa |
 |--------|--------------|----------|
-| `notas` (FTS5, derivada) | os `.md` de `VAULT_ALFRED` e `VAULT_PEDRO`, sem `.obsidian/` e pastas com ponto. Sem acento, prefixo (`pendência` acha `pendências`), bm25 com título pesando 8x | tools `alfred_vault_reader` / `alfred_vault_writer` (`search_vault`), `GET /busca`, `./run.sh buscar` |
+| `notas` (FTS5, derivada) | os `.md` de `VAULT_ALFRED` e `VAULT_PEDRO`, sem `.obsidian/` e pastas com ponto. Sem acento, prefixo (`pendência` acha `pendências`), bm25 com título pesando 8x | ferramenta `buscar_cofre` (via `lib_rag`), `GET /busca`, `./run.sh buscar` |
 | `wa_msgs` + `wa_fts` | texto (ou transcrição) das mensagens de WhatsApp, inclusive as de Pedro a contatos (`from_me`; só desde 04/11/2026 — antes o webhook não gravava; áudio e mídia sem legenda de Pedro ficam como "(audio enviada)"). Pula grupo ignorado, `contatos_ignorar`, reação/figurinha | as 5 últimas da conversa vão no campo `historico` do prompt `pergunta_whatsapp.md`; `GET /whatsapp/buscar`, `./run.sh buscar --whatsapp` |
 | `cache_classif` | e-mail de envio em massa classificado 3x como `promocao`/`transacional`, WhatsApp 3x como `automatico`/`spam` | `core.classificar` e `whatsapp.classificar_whatsapp` pulam o gemma4 (`origem: "cache"`) |
 
 - **Reindexação**: ao fim de cada `ciclo` (07:30 / 18:30), por `./run.sh indexar` ou `POST /indexar`. É incremental por `mtime`; apagar o `.db` reconstrói tudo (menos o histórico do WhatsApp e o cache, que recomeçam do zero). A mesma rotina poda o histórico além de `historico_dias`.
-- **Tools do Open WebUI**: usam o índice quando o `.db` existe (valve `db_path`) e voltam à busca por substring quando não existe ou quando o índice não acha nada (nota recém-salva ainda não indexada).
 - **Cache — por que é conservador**: só categorias não acionáveis, só com confiança ≥ 0,9, só depois de 3 respostas iguais do LLM, com validade de 30 dias (depois, uma resposta do LLM o revalida). Uma categoria diferente zera a contagem. Errar uma promoção custa um item a mais no jornal; errar uma mensagem de gente custaria uma resposta perdida, por isso `profissional`/`pessoal` nunca entram. `cache_classificacao: false` (em `inbox:` e `whatsapp:`) desliga na hora; `origem: "cache"` aparece no log (`[cache] ...`) e no resumo do ciclo, e `GET /health` traz as contagens (`db.cache_usos`).
 - **Privacidade**: o histórico guarda conversas em texto claro, no cofre do Alfred (fora do git). O Postgres da Evolution já guarda o mesmo. Ajuste `historico_dias` ou desligue com `historico: false`.
 - **Fora do escopo (próximo passo)**: o comando "perguntar ao Alfred pelo WhatsApp" (recuperar trechos com `buscar_wa`/`buscar_notas` e deixar o gemma4 só redigir a resposta). A infraestrutura de busca já está pronta; falta tratar a mensagem de Pedro sem `ref:` (`whatsapp.py`, ramo `_eh_pedro`).
@@ -622,7 +619,7 @@ cd services/inbox
 ./run.sh indexar                                  # (re)indexa os cofres e poda o histórico
 ./run.sh buscar orçamento servidor --cofre pedro  # notas
 ./run.sh buscar orçamento --whatsapp              # histórico das conversas
-venv/bin/python -m unittest tests.test_db -v      # índice, histórico, cache e as tools do Open WebUI
+venv/bin/python -m unittest tests.test_db -v      # índice, histórico e cache
 ```
 Os payloads em `tests/payloads/` seguem o formato do evento `messages.upsert` da Evolution API v2 (texto, áudio OGG/Opus em base64 gerado com edge-tts, grupo, resposta de Pedro citando a pergunta, "ignorar", `fromMe`, spam, pessoal sem pedido). Os `evolution_v237_*.json` reproduzem o **formato real capturado na validação** (conteúdo sintético): `data.contextInfo`, áudio sem base64 com `mediaKey` em bytes JSON, resposta citada na conversa "Você", resposta direta citando o contato, grupo com `@lid`. 63 testes em `test_whatsapp`, incluindo a regressão de concorrência, a notificação no PC com a GUI simulada, `respondido_via` / `PendenciaJaResolvida` em `responder_texto` e a fila de espera (`TestFilaAtraso`, relógio mockado em `core._now`: agendada, `fromMe` antes do prazo registrando o item `respondida_manual` com rascunho e resposta, rascunho indisponível (LLM mudo ou com exceção) registrando sem rascunho, falha ao registrar sem derrubar o webhook, eco de envio feito por outro processo (e envio interrompido há mais de 5 min, que não vira eco), ignorados sem registro, webhook repetido = `duplicada`, pendência já criada guardando rascunho + resposta, mensagens seguidas, criação ao vencer, thread da API, CLI). As outras classes rodam com `atraso_minutos: 0` (fluxo imediato). Os testes nunca chamam a Evolution: `EVOLUTION_URL` fica vazio. `test_trava` cobre vários processos gravando pendências, tarefas e agenda sem perder nada, dois processos respondendo a mesma pendência (um envio só), leitor que nunca vê arquivo pela metade, reentrância, timeout e tools disputando o mesmo `.lock`. Os testes do painel estão [na seção dele](#testes-do-painel).
 

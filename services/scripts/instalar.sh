@@ -30,10 +30,10 @@ ENV_FILE="$RAIZ/.env"
 ENV_EXEMPLO="$RAIZ/.env.example"
 UNITS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 FLAG_DESLIGADO="$RAIZ/logs/alfred_desligado"
-CONTAINERS=(open-webui searxng chromadb evolution-postgres evolution-api)
+CONTAINERS=(searxng chromadb evolution-postgres evolution-api)
 SERVICOS_PY=(shell-executor researcher inbox briefing laya)
 UNITS_SERVICO=(alfred-inbox-api.service alfred-executor.service alfred-researcher.service alfred-laya.service)
-OBRIGATORIAS=(SHELL_EXECUTOR_TOKEN WEBUI_SECRET_KEY VAULT_ALFRED VAULT_PEDRO OLLAMA_BASE_URL MODEL_CHAT MODEL_EMBED
+OBRIGATORIAS=(SHELL_EXECUTOR_TOKEN VAULT_ALFRED VAULT_PEDRO OLLAMA_BASE_URL MODEL_CHAT MODEL_EMBED
               EVOLUTION_API_KEY EVOLUTION_POSTGRES_PASSWORD N8N_ENCRYPTION_KEY)
 
 MODELOS=0; CONTAINERS_ON=1; UNITS_ON=1; SO_VERIFICAR=0; FORCAR_UNITS=0
@@ -146,7 +146,7 @@ fi
 # por isso a porta publicada por um container alfred-* conta como do Alfred.
 PUBLICADAS=""
 [[ -n "$DOCKER_MODO" ]] && PUBLICADAS=$(dk ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep '^alfred-')
-for v in PORT_WEBUI:3001 PORT_SEARXNG:8889 PORT_CHROMADB:8001 PORT_SHELL_EXECUTOR:7071 PORT_RESEARCHER:7072 PORT_INBOX:7073 PORT_EVOLUTION:8081; do
+for v in PORT_SEARXNG:8889 PORT_CHROMADB:8001 PORT_SHELL_EXECUTOR:7071 PORT_RESEARCHER:7072 PORT_INBOX:7073 PORT_EVOLUTION:8081; do
     chave=${v%%:*}; porta=$(env_get "$chave"); porta=${porta:-${v##*:}}
     dono=$(ss -tlnpH "sport = :$porta" 2>/dev/null | head -1)
     [[ -z "$dono" ]] && continue
@@ -189,7 +189,7 @@ else
     chat=${ALFRED_MODEL_CHAT:-gemma4:e4b}
     # Os segredos vão por variável de ambiente para o Python — nunca aparecem no terminal.
     ( umask 077
-      A_WEBUI=$(openssl rand -hex 32) A_N8N=$(openssl rand -hex 32) A_N8N_PASS=$(openssl rand -hex 12) \
+      A_N8N=$(openssl rand -hex 32) A_N8N_PASS=$(openssl rand -hex 12) \
       A_TOKEN=$(openssl rand -hex 32) A_EVO=$(openssl rand -hex 16) A_PG=$(openssl rand -hex 12) \
       A_RAIZ="$RAIZ" A_HOST="$host_ip" A_CHAT="$chat" A_TRANS="${ALFRED_MODEL_TRANSCRIBE:-$chat}" \
       A_EMBED="${ALFRED_MODEL_EMBED:-bge-m3}" A_THINK="${ALFRED_OLLAMA_THINK:-false}" A_USER="$USER" \
@@ -204,12 +204,12 @@ valores = {
     "OLLAMA_THINK": e["A_THINK"],
     "VAULT_ALFRED": f"{raiz}/vaults/alfred", "VAULT_PEDRO": f"{raiz}/vaults/pedro",
     "VAULT_NOTICIAS": f"{raiz}/vaults/alfred/Noticias",
-    "WEBUI_SECRET_KEY": e["A_WEBUI"], "N8N_ENCRYPTION_KEY": e["A_N8N"], "N8N_BASIC_AUTH_USER": e["A_USER"],
+    "N8N_ENCRYPTION_KEY": e["A_N8N"], "N8N_BASIC_AUTH_USER": e["A_USER"],
     "N8N_BASIC_AUTH_PASSWORD": e["A_N8N_PASS"], "SHELL_EXECUTOR_TOKEN": e["A_TOKEN"],
     "EVOLUTION_API_KEY": e["A_EVO"], "EVOLUTION_POSTGRES_PASSWORD": e["A_PG"],
     "EVOLUTION_URL": "http://localhost:8081", "WHATSAPP_DRY_RUN": "true", "DOCKER_BIND_IP": "127.0.0.1",
 }
-vazios = [k for k in ("WEBUI_SECRET_KEY", "N8N_ENCRYPTION_KEY", "N8N_BASIC_AUTH_PASSWORD", "SHELL_EXECUTOR_TOKEN",
+vazios = [k for k in ("N8N_ENCRYPTION_KEY", "N8N_BASIC_AUTH_PASSWORD", "SHELL_EXECUTOR_TOKEN",
                       "EVOLUTION_API_KEY", "EVOLUTION_POSTGRES_PASSWORD") if not valores[k]]
 if vazios:
     sys.exit(f"segredos vazios ({', '.join(vazios)}) — o openssl falhou; .env não criado")
@@ -245,7 +245,7 @@ for k in VAULT_ALFRED VAULT_PEDRO VAULT_NOTICIAS; do
     fi
 done
 for d in "$VA" "$VP" "$VN" "${VA:+$VA/research}" "${VA:+$VA/decisions}" "${VA:+$VA/logs}" \
-         "$RAIZ/logs" "$RAIZ/data/open-webui" "$RAIZ/data/chromadb" "$RAIZ/data/evolution/instances" \
+         "$RAIZ/logs" "$RAIZ/data/chromadb" "$RAIZ/data/evolution/instances" \
          "$RAIZ/data/evolution/postgres"; do
     criar_pasta "$d"
 done
@@ -267,7 +267,7 @@ else
 use_default_settings: true
 server:
   secret_key: "$(openssl rand -hex 32)"
-  limiter: false        # o limiter anti-bot bloqueia o Open WebUI e o Researcher (README → Troubleshooting)
+  limiter: false        # o limiter anti-bot bloqueia o Researcher e os briefings (README → Troubleshooting)
   image_proxy: false
 search:
   formats:
@@ -388,7 +388,7 @@ else
     subir=("${CONTAINERS[@]}")
     if [[ -f "$FLAG_DESLIGADO" ]]; then
         # modo jogo: a Evolution foi parada pelo alfred-switch.sh off e só volta com o "on"
-        subir=(open-webui searxng chromadb)
+        subir=(searxng chromadb)
         aviso "modo jogo: Evolution e o banco dela não foram iniciados (alfred-switch.sh on religa)"
     fi
     if dk compose --project-directory "$RAIZ" -f "$RAIZ/docker-compose.yml" up -d "${subir[@]}" >"$LOG_TMP" 2>&1; then
@@ -432,7 +432,7 @@ Próximos passos:
               grep -E '^SHELL_EXECUTOR_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '\\n' | $CLIP
   • Modelos:  $0 --modelos
   • Estado:   systemctl --user list-timers 'alfred-*' · $RAIZ/services/scripts/alfred-switch.sh status
-  • Tool "Alfred Tech Briefing" no Open WebUI — Valves: alfred_dir_host = $RAIZ · vault_alfred_host = $(env_get VAULT_ALFRED)
+  • Conversa: $RAIZ/services/inbox/run.sh conversa "pergunta"
 EOF
 # atalho "liga/desliga" já criado (alfred-switch.sh): reaponta para esta pasta
 if [[ -f "$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")/alfred-switch.desktop" || -f "$HOME/.local/share/applications/alfred-switch.desktop" ]]; then

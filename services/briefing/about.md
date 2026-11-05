@@ -144,9 +144,9 @@ avisa. Se o `alfred-briefing-vespertino.timer` nunca tinha sido copiado para `~/
 `instalar.sh` o instala e habilita como qualquer outro: desligue com o último comando acima. O
 `alfred-switch.sh off` (modo jogo) para os dois briefings e o `on` só religa os timers habilitados.
 
-Sob demanda pelo chat: tool **Alfred Tech Briefing** (`tools/alfred_briefing.py`), que roda
-`<alfred_dir_host>/services/briefing/run.sh` pelo shell executor — Valves `alfred_dir_host` (pasta do repositório)
-e `vault_alfred_host` (`VAULT_ALFRED` do `.env`); ver [README → Tools](../../README.md#configurar-os-tokens-nas-valves).
+Sob demanda pela conversa: ferramenta `gerar_briefing` (`_shared/lib_ferramentas.py`), que roda
+`services/briefing/run.sh` como subprocesso (600 s) e lê o `BRIEFING_FILE=` impresso; `ver_briefings` e `ler_briefing`
+leem `VAULT_ALFRED/briefings/` — ver [README → Ferramentas e Conversa](../../README.md#5-ferramentas-e-conversa).
 
 O podcast do Alfred (`services/inbox`, a cada 3 dias) usa estes briefings como fonte de notícias além das
 newsletters do e-mail (`perfis.yml → inbox.<nome>.podcast.incluir_briefings`).

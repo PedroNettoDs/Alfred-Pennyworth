@@ -649,7 +649,7 @@ def _montar_pendencia_whatsapp(pid: str, msg: dict, cat: dict, cfg: dict, nome: 
         "- Notificação no PC: **Enviar** (abre o rascunho para editar) · **Não enviar** · **Agenda** (tarefa + lembrete + Google Agenda) · **Ouvir**",
         f"- WhatsApp: responda **citando** a mensagem de Alfred (ela termina com `ref: {pid}`)",
         f"- Terminal: `services/inbox/run.sh responder-texto {pid} \"texto da resposta\"`",
-        f"- Chat (Open WebUI, tool Alfred Pendências): \"responder pendência {pid}: <texto>\"",
+        f"- Conversa: `services/inbox/run.sh conversa \"responder pendência {pid}: <texto>\"`",
         f"- Para não responder: `responder-texto {pid} ignorar`",
         f"- Áudio da pergunta: `services/inbox/run.sh ouvir {pid}`",
         "",
