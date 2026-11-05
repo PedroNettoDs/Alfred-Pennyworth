@@ -1,4 +1,8 @@
-/* Alfred — limpeza da caixa: busca lotes aprovados no Alfred a cada N minutos e executa. */
+/*
+ * Alfred — limpeza da caixa: busca lotes aprovados no Alfred a cada N minutos e executa.
+ * A cada minuto avisa o Alfred que está viva (POST /limpeza/extensao/ping, com o último ciclo e o erro dele);
+ * se Pedro clicou "Verificar agora" no Painel, a resposta traz verificar=true e o ciclo roda na hora.
+ */
 "use strict";
 
 const PADRAO = {
@@ -35,7 +39,12 @@ function clienteHttp(cfg) {
 
 async function ciclo() {
   const cfg = await carregarCfg();
-  if (!cfg.token || !cfg.contasPermitidas.length) return { ok: false, erro: "configure token e contas nas opções" };
+  if (!cfg.token || !cfg.contasPermitidas.length) {
+    // gravado para o ping levar ao Painel (com token e sem contas, Pedro vê o erro lá)
+    const erro = "configure token e contas nas opções";
+    await messenger.storage.local.set({ ultimoCiclo: { em: new Date().toISOString(), erro } });
+    return { ok: false, erro };
+  }
   try {
     const relatorio = await AlfredLimpeza.processarFila(messenger, clienteHttp(cfg), cfg);
     await messenger.storage.local.set({ ultimoCiclo: { em: new Date().toISOString(), relatorio } });
@@ -47,13 +56,34 @@ async function ciclo() {
   }
 }
 
+async function ping() {
+  const cfg = await carregarCfg();
+  if (!cfg.token) return;
+  const { ultimoCiclo } = await messenger.storage.local.get("ultimoCiclo");
+  try {
+    const r = await clienteHttp(cfg)("POST", "/limpeza/extensao/ping", {
+      versao: messenger.runtime.getManifest().version,
+      ultimo_ciclo: ultimoCiclo ? { em: ultimoCiclo.em, erro: ultimoCiclo.erro || null } : null,
+    });
+    if (r && r.verificar) await ciclo();
+  } catch (e) {
+    // Alfred fora do ar ou token errado: o Painel mostra "sem contato" pelo tempo desde o último ping
+  }
+}
+
 async function agendar() {
   const { intervaloMin } = await carregarCfg();
   await messenger.alarms.clear("alfred-limpeza");
   messenger.alarms.create("alfred-limpeza", { periodInMinutes: Math.max(1, Number(intervaloMin) || 10) });
+  await messenger.alarms.clear("alfred-ping");
+  messenger.alarms.create("alfred-ping", { periodInMinutes: 1 });
+  ping();
 }
 
-messenger.alarms.onAlarm.addListener((a) => { if (a.name === "alfred-limpeza") ciclo(); });
+messenger.alarms.onAlarm.addListener((a) => {
+  if (a.name === "alfred-limpeza") ciclo();
+  if (a.name === "alfred-ping") ping();
+});
 messenger.runtime.onInstalled.addListener(agendar);
 messenger.runtime.onStartup.addListener(agendar);
 messenger.runtime.onMessage.addListener((msg) => {

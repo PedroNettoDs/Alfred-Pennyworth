@@ -7,7 +7,8 @@
  *   - só contas marcadas pelo usuário na página de opções (vazio = nada é executado);
  *   - modo teste: só mensagens em pastas cujo caminho contém `pastaTeste` (ex.: "Alfred-Teste");
  *   - a mensagem encontrada precisa bater Message-ID E remetente E assunto com o item do lote;
- *   - mensagens com estrela (flagged) ou já na Lixeira são recusadas;
+ *   - mensagens com estrela (flagged) são recusadas; as que só existem na Lixeira voltam como
+ *     ja_na_lixeira (nada a mover);
  *   - com `executarDeVerdade` = false (padrão) nada é movido: o resultado volta como "simulado" —
  *     salvo o lote que Pedro mandou limpar no Painel (botão "Limpar" → `lote.executar === true`);
  *     o modo teste e as demais regras continuam valendo para ele.
@@ -55,7 +56,7 @@ async function acharLixeira(messenger, accountId, cache) {
 
 /**
  * Executa um lote. Retorna [{message_id, status, detalhe}] com status
- * movido | simulado | nao_encontrado | recusado | erro.
+ * movido | ja_na_lixeira | simulado | nao_encontrado | recusado | erro.
  */
 async function executarLote(messenger, lote, cfg) {
   const contas = new Set(cfg.contasPermitidas || []);
@@ -79,7 +80,12 @@ async function executarLote(messenger, lote, cfg) {
       const candidatas = achadas.filter((m) => !ehLixeira(m.folder) &&
         (!cfg.modoTeste || String(m.folder.path || "").includes(cfg.pastaTeste || "Alfred-Teste")));
       if (!candidatas.length) {
-        const motivo = achadas.length ? "só existe na Lixeira ou fora da pasta de teste" : "não encontrada nas contas permitidas";
+        // já na Lixeira (outro lote, ou Pedro apagou à mão): o objetivo foi cumprido, nada a mover
+        if (achadas.length && achadas.every((m) => ehLixeira(m.folder))) {
+          resultados.push({ message_id: mid, status: "ja_na_lixeira", detalhe: "já estava na Lixeira" });
+          continue;
+        }
+        const motivo = achadas.length ? "fora da pasta de teste" : "não encontrada nas contas permitidas";
         resultados.push({ message_id: mid, status: "nao_encontrado", detalhe: motivo });
         continue;
       }

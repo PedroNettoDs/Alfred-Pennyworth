@@ -1,5 +1,46 @@
-{# Miolo da Limpeza (página e /painel/parcial/limpeza). Vars: lotes (de painel._limpeza), erro_limpeza. #}
+{# Miolo da Limpeza (página e /painel/parcial/limpeza). Vars: lotes (de painel._limpeza), erro_limpeza,
+   ext (painel._estado_limpeza: extensão do Thunderbird + "Categorizar e-mails"). #}
 {% import "_macros.html" as m %}
+{%- if ext %}
+<section class="cartao lote" aria-labelledby="limpeza-extensao-titulo">
+  <div class="lote__cabecalho">
+    <h2 class="lote__titulo" id="limpeza-extensao-titulo">Extensão do Thunderbird</h2>
+    {{ m.selo(ext.tom, ext.rotulo) }}
+  </div>
+  <p class="lote__meta">
+    {%- if ext.verificado %}Última verificação: {{ ext.verificado }} ({{ ext.verificado_rel }}){% else %}Nenhuma verificação registrada{% endif %}
+    {%- if ext.contato %} · último contato: {{ ext.contato }}{% endif %}
+    {%- if ext.versao %} · versão {{ ext.versao }}{% endif %}</p>
+  {%- if ext.estado == "nunca" %}
+  {{ m.aviso("aguardando", "O Alfred ainda não recebeu contato da extensão. Carregue-a no Thunderbird (services/inbox/LIMPEZA.md) e confira URL, token e contas nas opções dela.") }}
+  {%- elif ext.estado == "sem_contato" %}
+  {{ m.aviso("erro", "Sem contato desde " ~ ext.contato ~ ". O Thunderbird está aberto com a extensão carregada? A carga temporária some quando o Thunderbird fecha.") }}
+  {%- elif ext.estado == "erro" %}
+  {{ m.aviso("erro", "Erro na última passada (" ~ ext.erro_em ~ "): " ~ ext.erro) }}
+  {%- endif %}
+  {%- if ext.pedido %}<p class="pequeno">Verificação pedida em {{ ext.pedido }}: a extensão faz a passada no próximo contato (até 1 minuto).</p>{% endif %}
+  {%- if ext.cat and ext.cat.rodando %}
+  <p class="pequeno">Categorizando e-mails: {{ ext.cat.feitos }}{% if ext.cat.total is not none %} de {{ ext.cat.total }}{% endif %}…</p>
+  {%- elif ext.cat %}
+  {%- if ext.cat.total is not none %}
+  <p class="pequeno">Categorização terminada em {{ ext.cat.fim }}:
+    {%- if ext.cat.total %} {{ ext.cat.total }} e-mail{{ "s" if ext.cat.total != 1 else "" }} sem categoria{% if ext.cat.categorias %} → {{ ext.cat.categorias }}{% endif %}{% if ext.cat.falhas %}; {{ ext.cat.falhas }} sem resposta do classificador{% endif %}.
+    {%- else %} nenhum e-mail sem categoria.{% endif %}
+    {%- if ext.cat.lote_total %} Lote novo com {{ ext.cat.lote_total }} e-mail{{ "s" if ext.cat.lote_total != 1 else "" }} aguardando aprovação.{% else %} Nenhum lote novo.{% endif %}</p>
+  {%- endif %}
+  {%- if ext.cat.erro %}{{ m.aviso("erro", "Categorização interrompida: " ~ ext.cat.erro) }}{% endif %}
+  {%- endif %}
+  <form class="lote__form" data-acao="" data-acoes>
+    <div class="acoes">
+      {{ m.botao("Verificar agora", attrs={"data-acao": "/painel/api/limpeza/verificar", "data-texto-ocupado": "Pedindo…"}) }}
+      {%- if not (ext.cat and ext.cat.rodando) %}
+      {{ m.botao("Categorizar e-mails", attrs={"data-acao": "/painel/api/limpeza/categorizar", "data-texto-ocupado": "Iniciando…"}) }}
+      {%- endif %}
+    </div>
+    {{ m.resultado() }}
+  </form>
+</section>
+{%- endif %}
 {%- if erro_limpeza %}
 {{ m.aviso("erro", erro_limpeza) }}
 {%- elif not lotes %}
@@ -18,6 +59,7 @@
   {%- if l.nota %}<p class="pequeno">Nota: {{ l.nota }}</p>{% endif %}
   {%- if l.limpar_pedido %}<p class="pequeno">Limpeza pedida em {{ l.limpar_pedido }}: a extensão do Thunderbird move os e-mails para a Lixeira na próxima passada.</p>{% endif %}
   {%- if l.resultado %}<p class="pequeno">Resultado{% if l.executado %} ({{ l.executado }}){% endif %}: {{ l.resultado }}.</p>{% endif %}
+  {%- if l.apagar_em %}<p class="pequeno">Excluído: os e-mails estão na Lixeira da conta. Este registro sai da tela em {{ l.apagar_em }}.</p>{% endif %}
   {%- if l.extensao_antiga %}
   {{ m.aviso("aguardando", "Você pediu Limpar, mas a extensão do Thunderbird só simulou: ela está desatualizada. Recarregue-a no Thunderbird (LIMPEZA.md) e clique em Limpar de novo.") }}
   {%- endif %}

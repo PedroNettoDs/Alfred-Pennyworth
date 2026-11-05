@@ -31,13 +31,44 @@ Painel → Limpar                confirmação "Mover N e-mails para a Lixeira?"
 extensão (a cada 10 min)       GET /limpeza/fila → move cada mensagem p/ Lixeira → POST /limpeza/<id>/resultado
                                (só move de verdade se "Executar de verdade" estiver ligado nela OU o lote
                                vier com executar: true, isto é, Pedro clicou em Limpar; senão, simula)
+extensão (a cada 1 min)        POST /limpeza/extensao/ping {versao, ultimo_ciclo} → {verificar}: estado no
+                               Painel; verificar=true (Painel → "Verificar agora") faz a passada na hora
+Painel → Categorizar e-mails   classifica quem não tem categoria e propõe um lote (ver abaixo)
 ```
 
 Estados do lote: `aguardando` → `aprovado` → `em_execucao` → `concluido` | `simulado` | `parcial` | `falhou`.
 Também existem `recusado` e `expirado` (sem resposta em `expirar_lote_dias`). Se um lote fica
-`em_execucao` por mais de 1h, ele volta para a fila. A extensão é idempotente: o que já está na
-Lixeira vira `nao_encontrado`. Um lote só fica `concluido` quando todos os itens foram `movido`; tudo
-`simulado` dá `simulado`; qualquer mistura com ao menos um movido/simulado dá `parcial`.
+`em_execucao` por mais de 1h, ele volta para a fila. A extensão é idempotente: o que só existe na
+Lixeira vira `ja_na_lixeira` (desde a 1.2.0; antes, `nao_encontrado`). Um lote só fica `concluido` quando
+todos os itens foram `movido` ou `ja_na_lixeira`; tudo `simulado` dá `simulado`; qualquer mistura com ao
+menos um movido/simulado/já na Lixeira dá `parcial`.
+
+No Painel, `concluido` aparece como **Excluído**. `APAGAR_EXCLUIDOS_DIAS` (5) dias depois de
+`executado_em`, o lote sai do `limpeza.yml` e a nota `pendencias/<id>.md` é apagada do cofre
+(`listar_lotes` faz isso a cada consulta). Os e-mails continuam na Lixeira do Thunderbird. Lotes
+`parcial`, `falhou`, `recusado` etc. não saem sozinhos.
+
+### Estado da extensão e "Verificar agora" (Painel → Limpeza)
+
+O cartão "Extensão do Thunderbird" no topo da tela mostra a última verificação (última `GET /limpeza/fila`),
+o último contato, a versão e o erro da última passada, se houve. Fica em `logs/limpeza_extensao.json`:
+
+- a extensão (1.2.0+) faz `POST /limpeza/extensao/ping` a cada minuto com a versão e o último ciclo dela
+  (`{em, erro}`); sem token ou sem contas marcadas, o ciclo grava o erro e o ping o leva ao Painel;
+- **Nunca conectou**: nenhum contato registrado. **Sem contato**: nada há mais de `SEM_CONTATO_MIN` (15) min,
+  o Thunderbird está fechado ou a extensão não está carregada. **Com erro**: o último ciclo dela falhou;
+- **Verificar agora** grava `verificar_pedido_em`; o próximo ping (até 1 min) recebe `verificar: true` e roda
+  o ciclo. Uma `GET /limpeza/fila` normal também atende o pedido (extensão sem ping, 1.1.0).
+
+### "Categorizar e-mails" (Painel → Limpeza)
+
+O ciclo só classifica o que chega na janela dele (`janela_horas`). E-mails mais antigos que o registro
+ficam "sem categoria registrada" e nunca entram na limpeza. O botão roda, numa thread da API (uma por vez),
+o mesmo `core.classificar` do ciclo (heurísticas, cache e Ollama `MODEL_CLASSIFY`) nos e-mails da caixa que
+estão no índice `.msf` e não têm categoria, e grava cada um em `logs/inbox_categorias.json`. Só registra:
+não cria pendência nem jornal. Para depois de `FALHAS_SEGUIDAS_MAX` (3) falhas seguidas do classificador. No
+fim chama `propor(notificar=False)`: os candidatos viram um lote `aguardando`. O andamento aparece no cartão
+pelo polling e fica só na memória da API.
 
 ### Botão "Limpar" (Painel → Limpeza)
 
@@ -103,9 +134,11 @@ limpeza:
 | POST | `/limpeza/{id}/recusar` `{nota?}` | |
 | GET | `/limpeza/fila` | uso da extensão |
 | POST | `/limpeza/{id}/resultado` `{itens:[{message_id,status,detalhe}]}` | uso da extensão |
+| POST | `/limpeza/extensao/ping` `{versao, ultimo_ciclo?}` → `{verificar}` | uso da extensão, a cada minuto |
 
-O botão **Limpar** existe só no Painel (`POST /painel/api/limpeza/{id}/limpar`, sessão + CSRF); não há rota
-Bearer nem ferramenta da conversa para ele.
+Os botões **Limpar**, **Verificar agora** e **Categorizar e-mails** existem só no Painel
+(`POST /painel/api/limpeza/{id}/limpar`, `/painel/api/limpeza/verificar`, `/painel/api/limpeza/categorizar`;
+sessão + CSRF); não há rota Bearer nem ferramenta da conversa para eles.
 
 Ferramentas da conversa (`_shared/lib_ferramentas.py`): `listar_limpezas()` e `responder_limpeza(id, "aprovar"|"recusar")` ⚠ (pede aprovação).
 
@@ -128,7 +161,7 @@ Ferramentas da conversa (`_shared/lib_ferramentas.py`): `listar_limpezas()` e `r
    - **Executar de verdade** vem desligado: ela só relata `simulado` ao Alfred, exceto nos lotes em que
      você clicar em **Limpar** no Painel.
 
-### Recarregar a extensão depois de atualizar (ex.: versão 1.1.0, botão Limpar)
+### Recarregar a extensão depois de atualizar (ex.: 1.1.0 botão Limpar; 1.2.0 ping e "Verificar agora")
 
 Carga temporária some sempre que o Thunderbird fecha. Em 02/11/2026 a extensão não estava instalada (não
 consta no `extensions.json` do perfil), e a última chamada a `/limpeza/fila` foi em 20/10. Por isso o lote
@@ -142,7 +175,8 @@ aprovado em 31/10 nunca saiu de `aprovado`.
    portas (31/10) a 7072 é o researcher. A versão 1.1.0 troca sozinha uma URL salva com `:7072`; as
    anteriores recebiam 404 em `/limpeza/fila`.
 4. Confira as contas marcadas e o modo teste. O modo teste continua valendo mesmo para o Limpar.
-5. Clique em **Verificar agora** e veja o resultado no Painel → Limpeza.
+5. Clique em **Verificar agora** e veja o resultado no Painel → Limpeza. Com a 1.2.0, o cartão "Extensão do
+   Thunderbird" passa a **Conectada** em até 1 minuto.
 
 ### Teste seguro antes da caixa real
 
@@ -166,8 +200,9 @@ node --test tests/test_executor.mjs                    # executor da extensão c
 `test_limpeza.py` monta um perfil do Thunderbird sintético (prefs.js + mbox + `INBOX.msf` com um fantasma),
 um vault, manifestos e um registro temporários. Também cobre o `.msf` ausente/ilegível e um Mork com
 escapes, quebras de linha e grupos de transação. O teste percorre o fluxo inteiro pela API: proposta → revalidação na aprovação →
-fila → resultado da extensão. O teste em node garante que o executor nunca chama `messages.delete`
-e que só move mensagens para a pasta com `specialUse: trash`.
+fila → resultado da extensão. Também cobre `ja_na_lixeira` → Excluído, a remoção do lote 5 dias depois,
+o ping/"Verificar agora" e a categorização (classificador simulado). O teste em node garante que o executor
+nunca chama `messages.delete` e que só move mensagens para a pasta com `specialUse: trash`.
 
 ## Limites conhecidos
 

@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -129,6 +131,7 @@ class BaseLimpeza(unittest.TestCase):
         mock.patch.dict(os.environ, ENV).start()
         self.reg_patch = mock.patch.object(limpeza, "REGISTRO_FILE", TMP / "inbox_categorias.json")
         self.reg_patch.start()
+        mock.patch.object(limpeza, "EXTENSAO_FILE", TMP / "limpeza_extensao.json").start()
         self.notify = mock.patch.object(core, "_notify").start()
         # a fixture conta com a regra de 30 dias, não com o valor em uso no perfis.yml
         nome, cfg = core.carregar_cfg()
@@ -409,6 +412,137 @@ class TestFluxoAprovacao(BaseLimpeza):
         with mock.patch.object(sys, "argv", ["x", "limpeza", "aprovar", lid]):
             self.assertEqual(ia.main(), 0)
         self.assertEqual(limpeza.obter_lote(lid)["status"], "aprovado")
+
+
+class TestExcluidos(BaseLimpeza):
+    def executar(self, status_do_item):
+        lote = limpeza.propor(notificar=False)
+        limpeza.limpar(lote["id"])
+        itens = limpeza.fila_execucao()[0]["itens"]
+        return limpeza.registrar_resultado(lote["id"], [{"message_id": i["message_id"], "status": status_do_item(n)}
+                                                         for n, i in enumerate(itens)])
+
+    def mudar_executado(self, lid, dias):
+        with limpeza._trava():
+            data = limpeza._load_lotes()
+            limpeza._pegar(data, lid)["executado_em"] = (AGORA - timedelta(days=dias)).isoformat(timespec="minutes")
+            limpeza._save_lotes(data)
+
+    def test_ja_na_lixeira_conta_como_excluido(self):
+        res = self.executar(lambda n: "ja_na_lixeira" if n == 0 else "movido")
+        self.assertEqual(res["status"], "concluido")
+        self.assertEqual(sum(res["contagem"].values()), res["total"])
+        self.assertIsNotNone(limpeza.apagar_em(res))
+
+    def test_excluido_some_do_yml_e_do_cofre_depois_de_5_dias(self):
+        lote = self.executar(lambda n: "movido")
+        md = core.vault() / lote["arquivos"]["md"]
+        self.assertTrue(md.is_file())
+        recusado = limpeza.propor(notificar=False)   # os mesmos e-mails de novo: concluido não é lote aberto
+        limpeza.recusar(recusado["id"])
+
+        self.mudar_executado(lote["id"], limpeza.APAGAR_EXCLUIDOS_DIAS - 1)
+        self.assertEqual({l["id"] for l in limpeza.listar_lotes()}, {lote["id"], recusado["id"]})
+        self.mudar_executado(lote["id"], limpeza.APAGAR_EXCLUIDOS_DIAS + 1)
+        self.assertEqual([l["id"] for l in limpeza.listar_lotes()], [recusado["id"]])   # só o Excluído sai
+        self.assertFalse(md.exists())
+        self.assertTrue((core.vault() / recusado["arquivos"]["md"]).is_file())
+
+    def test_parcial_nao_sai(self):
+        lote = self.executar(lambda n: "movido" if n == 0 else "nao_encontrado")
+        self.assertEqual(lote["status"], "parcial")
+        self.assertIsNone(limpeza.apagar_em(lote))
+        self.mudar_executado(lote["id"], 30)
+        self.assertEqual([l["id"] for l in limpeza.listar_lotes()], [lote["id"]])
+
+
+class TestEstadoExtensao(BaseLimpeza):
+    def test_nunca_ok_erro_sem_contato(self):
+        self.assertEqual(limpeza.estado_extensao()["estado"], "nunca")
+        self.assertEqual(limpeza.ping_extensao("1.2.0"), {"verificar": False})
+        e = limpeza.estado_extensao()
+        self.assertEqual((e["estado"], e["versao"], e["erro"]), ("ok", "1.2.0", ""))
+        limpeza.ping_extensao("1.2.0", {"em": "2026-11-05T13:00:00.000Z", "erro": "Alfred respondeu 401 em /limpeza/fila"})
+        e = limpeza.estado_extensao()
+        self.assertEqual((e["estado"], e["erro"]), ("erro", "Alfred respondeu 401 em /limpeza/fila"))
+        self.assertEqual(core._parse_dt(e["erro_em"]), datetime.fromisoformat("2026-11-05T13:00:00+00:00"))
+        limpeza.ping_extensao("1.2.0", {"em": "2026-11-05T13:10:00.000Z", "erro": None})   # passada seguinte deu certo
+        self.assertEqual(limpeza.estado_extensao()["estado"], "ok")
+        depois = limpeza._now() + timedelta(minutes=limpeza.SEM_CONTATO_MIN + 1)
+        self.assertEqual(limpeza.estado_extensao(depois)["estado"], "sem_contato")
+
+    def test_verificar_agora_vai_no_proximo_ping_ou_na_fila(self):
+        limpeza.pedir_verificacao()
+        self.assertTrue(limpeza.estado_extensao()["verificar_pedido_em"])
+        self.assertEqual(limpeza.ping_extensao("1.2.0"), {"verificar": True})
+        self.assertEqual(limpeza.ping_extensao("1.2.0"), {"verificar": False})   # só um ping recebe o pedido
+        limpeza.pedir_verificacao()
+        limpeza.fila_execucao()   # extensão sem ping (1.1.0): a passada normal atende o pedido
+        e = limpeza.estado_extensao()
+        self.assertIsNone(e["verificar_pedido_em"])
+        self.assertTrue(e["ultima_verificacao_em"])
+
+    def test_rota_ping_exige_token(self):
+        from fastapi.testclient import TestClient
+        import main
+        main.TOKEN = "token-de-teste"
+        cli = TestClient(main.app)
+        self.assertEqual(cli.post("/limpeza/extensao/ping", json={"versao": "1.2.0"}).status_code, 401)
+        limpeza.pedir_verificacao()
+        r = cli.post("/limpeza/extensao/ping", json={"versao": "1.2.0", "ultimo_ciclo": None},
+                     headers={"Authorization": "Bearer token-de-teste"})
+        self.assertEqual((r.status_code, r.json()), (200, {"verificar": True}))
+
+
+class TestCategorizar(BaseLimpeza):
+    def test_classifica_quem_nao_tem_categoria_e_propoe(self):
+        cats = {"ignorado-sem-reg@kabum": "ignorado", "sem-reg@desconhecido": "promocao"}
+        vistos, andamento = [], []
+
+        def classificar(m, cfg):
+            vistos.append(m["message_id"])
+            return {"categoria": cats[m["message_id"]], "confianca": 0.9, "resumo": "", "origem": "llm"}
+
+        with mock.patch.object(core, "classificar", classificar):
+            r = limpeza.categorizar(andamento=lambda feitos, total: andamento.append((feitos, total)))
+        self.assertEqual(sorted(vistos), sorted(cats))   # fantasma e quem já tem categoria ficam de fora
+        self.assertEqual((r["total"], r["falhas"], r["contagem"]), (2, 0, {"ignorado": 1, "promocao": 1}))
+        self.assertEqual((andamento[0], andamento[-1]), ((0, 2), (2, 2)))
+        self.assertEqual(limpeza.carregar_registro()["sem-reg@desconhecido"]["categoria"], "promocao")
+        lote = limpeza.obter_lote(r["lote"])
+        self.assertEqual(lote["status"], "aguardando")
+        self.assertIn("sem-reg@desconhecido", {i["message_id"] for i in lote["itens"]})
+        self.notify.assert_not_called()
+
+    def test_classificador_fora_interrompe(self):
+        falhou = {"categoria": "outro", "confianca": 0.0, "falhou": True}
+        with mock.patch.object(core, "classificar", lambda m, cfg: falhou), \
+                mock.patch.object(limpeza, "FALHAS_SEGUIDAS_MAX", 2):
+            r = limpeza.categorizar()
+        self.assertEqual(r["falhas"], 2)
+        self.assertIn("não respondeu 2 vezes", r["interrompido"])
+        self.assertNotIn("sem-reg@desconhecido", limpeza.carregar_registro())
+
+    def test_uma_por_vez_numa_thread(self):
+        solta = threading.Event()
+
+        def categorizar(inbox, andamento):
+            andamento(1, 5)
+            solta.wait(5)
+            return {"total": 5, "contagem": {"promocao": 5}, "falhas": 0, "interrompido": "", "lote": None,
+                    "lote_total": 0}
+
+        with mock.patch.object(limpeza, "categorizar", categorizar):
+            self.assertTrue(limpeza.iniciar_categorizacao())
+            self.assertFalse(limpeza.iniciar_categorizacao())
+            solta.set()
+            for _ in range(100):
+                if not limpeza.andamento_categorizacao()["rodando"]:
+                    break
+                time.sleep(0.02)
+        a = limpeza.andamento_categorizacao()
+        self.assertEqual((a["rodando"], a["total"], a["contagem"]), (False, 5, {"promocao": 5}))
+        self.assertTrue(a["fim"])
 
 
 @unittest.skipUnless(shutil.which("node"), "node não instalado")

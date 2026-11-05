@@ -108,3 +108,16 @@ test("processarFila relata cada lote ao Alfred", async () => {
   assert.equal(posts[0].rota, "/limpeza/limpeza-1/resultado");
   assert.equal(posts[0].corpo.itens.length, 5);
 });
+
+test("mensagem que só existe na Lixeira volta como ja_na_lixeira, sem mover", async () => {
+  const { messenger, chamadas } = caixa();
+  const lixeira = { id: "acc1://Deleted", accountId: "acc1", path: "/Deleted", specialUse: ["trash"] };
+  const query = messenger.messages.query;
+  messenger.messages.query = async ({ headerMessageId }) => (headerMessageId === "z@x"
+    ? { id: null, messages: [{ id: 9, headerMessageId: "z@x", author: "ofertas@loja.com", subject: "Velha", folder: lixeira }] }
+    : query({ headerMessageId }));
+  const r = await executarLote(messenger, { id: "l", acao: "mover_para_lixeira", executar: true,
+    itens: [{ message_id: "z@x", from: "ofertas@loja.com", subject: "Velha" }] }, { contasPermitidas: ["acc1"], modoTeste: false });
+  assert.deepEqual(r, [{ message_id: "z@x", status: "ja_na_lixeira", detalhe: "já estava na Lixeira" }]);
+  assert.equal(chamadas.move.length, 0);
+});

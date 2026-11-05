@@ -450,6 +450,7 @@ def indexar(authorization: Optional[str] = Header(None)):
 # POST /limpeza/{id}/aprovar {nota?}  → confirmação explícita do usuário
 # POST /limpeza/{id}/recusar {nota?}
 # POST /limpeza/{id}/resultado {itens:[{message_id,status,detalhe}], executor?}  ← extensão
+# POST /limpeza/extensao/ping {versao, ultimo_ciclo?} → {verificar}  ← extensão, a cada minuto
 
 import limpeza  # noqa: E402
 
@@ -461,6 +462,11 @@ class LimpezaNotaRequest(BaseModel):
 class LimpezaResultadoRequest(BaseModel):
     itens: list[dict]
     executor: str = "thunderbird-ext"
+
+
+class LimpezaPingRequest(BaseModel):
+    versao: str = ""
+    ultimo_ciclo: Optional[dict] = None   # {em, erro} do último ciclo da extensão
 
 
 def _limpeza_erros(fn, *a):
@@ -495,6 +501,12 @@ def limpeza_lotes(status: Optional[str] = None, authorization: Optional[str] = H
 def limpeza_fila(authorization: Optional[str] = Header(None)):
     check_auth(authorization)
     return {"lotes": limpeza.fila_execucao()}
+
+
+@app.post("/limpeza/extensao/ping")
+def limpeza_extensao_ping(req: LimpezaPingRequest, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    return limpeza.ping_extensao(req.versao, req.ultimo_ciclo)
 
 
 @app.get("/limpeza/{lid}")

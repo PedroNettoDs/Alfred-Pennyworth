@@ -117,6 +117,7 @@ class Base(unittest.TestCase):
             mock.patch.object(lib_whatsapp, "ENVIADOS_FILE", TMP / "whatsapp_enviados.jsonl"),
             mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", TMP / "whatsapp_ids_enviados.json"),
             mock.patch.object(limpeza, "REGISTRO_FILE", TMP / "inbox_categorias.json"),
+            mock.patch.object(limpeza, "EXTENSAO_FILE", TMP / "limpeza_extensao.json"),
             mock.patch.object(core, "_notify", lambda *a, **k: None),
             mock.patch.object(core, "_iniciar_aguardador", lambda comando, pid: None),
             mock.patch.object(whatsapp, "ollama_generate_json", _fake_json),
@@ -143,7 +144,7 @@ class Base(unittest.TestCase):
         shutil.rmtree(TMP / "vault", ignore_errors=True)
         (TMP / "vault").mkdir(parents=True)
         for f in ("whatsapp_seen.json", "whatsapp_enviados.jsonl", "whatsapp_fila.json",
-                  "whatsapp_ids_enviados.json", "alfred_desligado"):
+                  "whatsapp_ids_enviados.json", "alfred_desligado", "limpeza_extensao.json"):
             (TMP / f).unlink(missing_ok=True)
         painel._CACHE_WA.clear()
         painel._REVOGADOS.clear()
@@ -763,7 +764,7 @@ class TestLimpeza(Base):
         self.assertEqual(self.acao(cli, "/painel/api/limpeza/nao-existe/aprovar", {}, csrf=token).status_code, 404)
         html = self.guardar(cli.get("/painel/parcial/limpeza")).text
         self.assertNotIn("/aprovar", html)    # nenhum lote aguardando → sem Aprovar/Recusar
-        self.assertEqual(html.count('class="lote__form"'), 1)    # só o aprovado tem Limpar; o recusado, nada
+        self.assertEqual(html.count('/limpar"'), 1)    # só o aprovado tem Limpar; o recusado, nada
         self.assertIn(f'data-acao="/painel/api/limpeza/{lote["id"]}/limpar"', html)
 
     def test_limpar(self):
@@ -787,7 +788,7 @@ class TestLimpeza(Base):
             self.assertEqual((l["status"], l["limpar"], l["nota"]), ("aprovado", True, "some com isso"))
             html = self.guardar(cli.get("/painel/parcial/limpeza")).text
             self.assertIn("Limpeza pedida em", html)
-            self.assertNotIn('class="lote__form"', html)    # já pedido: sem botão até a extensão relatar
+            self.assertNotIn(f'/{lote["id"]}/limpar"', html)    # já pedido: sem botão até a extensão relatar
 
             fila = limpeza.fila_execucao()
             self.assertTrue(fila[0]["executar"])
@@ -824,6 +825,74 @@ class TestLimpeza(Base):
     def test_vazia(self):
         html = self.guardar(self.entrar().get("/painel/limpeza")).text
         self.assertIn("Nenhum lote de limpeza, senhor.", html)
+
+    def test_extensao_verificar_agora(self):
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/limpeza")).text
+        for trecho in ("Extensão do Thunderbird", "Nunca conectou", "Nenhuma verificação registrada",
+                       'data-acao="/painel/api/limpeza/verificar"', 'data-acao="/painel/api/limpeza/categorizar"'):
+            self.assertIn(trecho, html)
+        token = self.csrf(cli)
+        self.assertEqual(self.acao(cli, "/painel/api/limpeza/verificar", {}, csrf=False).status_code, 403)
+        r = self.acao(cli, "/painel/api/limpeza/verificar", {}, csrf=token)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn("sem contato", r.json()["mensagem"])   # nunca falou com o Alfred: o pedido espera
+        self.assertIn("Verificação pedida em", self.guardar(cli.get("/painel/parcial/limpeza")).text)
+
+        self.assertEqual(limpeza.ping_extensao("1.2.0"), {"verificar": True})
+        limpeza.fila_execucao()
+        html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+        for trecho in ("Conectada", "Última verificação:", "versão 1.2.0"):
+            self.assertIn(trecho, html)
+        self.assertNotIn("Verificação pedida em", html)
+        self.assertIn("até 1 minuto", self.acao(cli, "/painel/api/limpeza/verificar", {}, csrf=token).json()["mensagem"])
+
+        limpeza.ping_extensao("1.2.0", {"em": "2026-11-05T13:00:00Z", "erro": "Alfred respondeu 401 em /limpeza/fila"})
+        html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+        self.assertIn("Com erro", html)
+        self.assertIn("Alfred respondeu 401 em /limpeza/fila", html)
+
+    def test_categorizar(self):
+        cli = self.entrar()
+        token = self.csrf(cli)
+        solta = threading.Event()
+
+        def categorizar(inbox, andamento):
+            andamento(3, 10)
+            solta.wait(5)
+            return {"total": 10, "contagem": {"promocao": 7, "transacional": 2}, "falhas": 1, "interrompido": "",
+                    "lote": "limpeza-x", "lote_total": 9}
+
+        with mock.patch.object(limpeza, "categorizar", categorizar):
+            r = self.acao(cli, "/painel/api/limpeza/categorizar", {}, csrf=token)
+            self.assertEqual(r.status_code, 200, r.text)
+            html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+            self.assertIn("Categorizando e-mails: 3 de 10", html)
+            self.assertNotIn('data-acao="/painel/api/limpeza/categorizar"', html)   # sem segundo clique
+            self.assertEqual(self.acao(cli, "/painel/api/limpeza/categorizar", {}, csrf=token).status_code, 409)
+            solta.set()
+            for _ in range(100):
+                if not limpeza.andamento_categorizacao()["rodando"]:
+                    break
+                time.sleep(0.02)
+        html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+        for trecho in ("Categorização terminada em", "10 e-mails sem categoria → 7 promocao, 2 transacional",
+                       "1 sem resposta do classificador", "Lote novo com 9 e-mails aguardando aprovação.",
+                       'data-acao="/painel/api/limpeza/categorizar"'):
+            self.assertIn(trecho, html)
+
+    def test_excluido(self):
+        lote = self.propor(2)
+        cli = self.entrar()
+        with mock.patch.object(limpeza, "avaliar", lambda m, *a, **k: ("promocao há 85 dias", "")):
+            limpeza.limpar(lote["id"])
+        limpeza.fila_execucao()
+        limpeza.registrar_resultado(lote["id"], [{"message_id": "promo-0@loja.com", "status": "movido"},
+                                                 {"message_id": "promo-1@loja.com", "status": "ja_na_lixeira"}])
+        html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+        for trecho in ("Excluído", "1 movido para a Lixeira, 1 já estava na Lixeira", "Este registro sai da tela em"):
+            self.assertIn(trecho, html)
+        self.assertNotIn(f'/{lote["id"]}/limpar"', html)
 
 
 class TestAgenda(Base):

@@ -424,7 +424,7 @@ ROTULO_STATUS = {
     "vou": "vou", "nao_vou": "não vou", "ignorada": "ignorada", "expirada": "expirada",
     "pendente": "pendente", "no_calendario": "no calendário", "em_execucao": "em execução",
     "desfazer": "remoção pendente", "desfeito": "desfeito", "cancelado": "cancelado", "erro": "erro", "feito": "feito",
-    "aprovado": "aprovado", "recusado": "recusado", "expirado": "expirado", "concluido": "concluído",
+    "aprovado": "aprovado", "recusado": "recusado", "expirado": "expirado", "concluido": "excluído",
     "simulado": "simulado", "parcial": "parcial", "falhou": "falhou",
 }
 
@@ -680,6 +680,7 @@ def _motivo_lote(lote: dict) -> str:
 # resultado de cada item relatado pela extensão (limpeza.registrar_resultado) → (singular, plural)
 ROTULO_RESULTADO = {
     "movido": ("movido para a Lixeira", "movidos para a Lixeira"),
+    "ja_na_lixeira": ("já estava na Lixeira", "já estavam na Lixeira"),
     "simulado": ("simulado", "simulados"),
     "nao_encontrado": ("não encontrado no Thunderbird", "não encontrados no Thunderbird"),
     "recusado": ("recusado pela extensão", "recusados pela extensão"),
@@ -713,7 +714,7 @@ def _limpeza() -> tuple[list[dict], Optional[str]]:
             "criado": fmt_data(l.get("criado_em")), "expira": fmt_data(l.get("expira_em")),
             "motivo": _motivo_lote(l), "nota": l.get("nota"), "_ts": _ts(l.get("criado_em")),
             "pode_limpar": st in limpeza.STATUS_LIMPAR,
-            "a_mover": sum(1 for i in itens if i.get("resultado") != "movido"),
+            "a_mover": sum(1 for i in itens if i.get("resultado") not in limpeza.EXCLUIDOS),
             # Limpar pedido e a extensão ainda não relatou
             "limpar_pedido": fmt_data(l.get("limpar_pedido_em")) if l.get("limpar") and st in ("aprovado", "em_execucao")
                              else None,
@@ -721,6 +722,8 @@ def _limpeza() -> tuple[list[dict], Optional[str]]:
             "extensao_antiga": bool(l.get("limpar")) and executado and bool((l.get("contagem") or {}).get("simulado")),
             "resultado": _resultado_lote(l.get("contagem")) if executado else "",
             "executado": fmt_data(l.get("executado_em")) if executado else "",
+            # Excluído (concluido): o registro sai da tela e do cofre em limpeza.APAGAR_EXCLUIDOS_DIAS
+            "apagar_em": fmt_data(limpeza.apagar_em(l)),
             "itens": [{"de": i.get("from_name") or i.get("from"), "email": i.get("from"),
                        "assunto": i.get("subject") or "(sem assunto)", "data": fmt_data(i.get("date")),
                        "resultado": ROTULO_RESULTADO.get(i.get("resultado"), (i.get("resultado") or "",))[0]
@@ -731,6 +734,31 @@ def _limpeza() -> tuple[list[dict], Optional[str]]:
     # aguardando primeiro, depois os mais novos
     out.sort(key=lambda l: (l["status"] != "aguardando", -l["_ts"]))
     return out, None
+
+
+# estado da extensão (limpeza.estado_extensao) → (tom do selo, rótulo)
+ESTADO_EXTENSAO = {"ok": ("sucesso", "Conectada"), "erro": ("erro", "Com erro"),
+                   "sem_contato": ("erro", "Sem contato"), "nunca": ("neutro", "Nunca conectou")}
+
+
+def _estado_limpeza() -> dict:
+    """Cartão do topo da Limpeza: extensão do Thunderbird ("Verificar agora") e "Categorizar e-mails"."""
+    e = limpeza.estado_extensao()
+    c = limpeza.andamento_categorizacao()
+    tom, rotulo = ESTADO_EXTENSAO[e["estado"]]
+    cats = sorted((c.get("contagem") or {}).items(), key=lambda x: -x[1])
+    return {
+        "estado": e["estado"], "tom": tom, "rotulo": rotulo, "versao": e["versao"],
+        "verificado": fmt_data(e["ultima_verificacao_em"]),
+        "verificado_rel": fmt_relativo(e["ultima_verificacao_em"]),
+        "contato": fmt_data(e["ultimo_contato_em"]), "contato_rel": fmt_relativo(e["ultimo_contato_em"]),
+        "erro": e["erro"], "erro_em": fmt_data(e["erro_em"]),
+        "pedido": fmt_data(e["verificar_pedido_em"]),
+        "cat": {"rodando": bool(c.get("rodando")), "feitos": c.get("feitos") or 0, "total": c.get("total"),
+                "fim": fmt_data(c.get("fim")), "erro": c.get("erro") or c.get("interrompido") or "",
+                "falhas": c.get("falhas") or 0, "categorias": ", ".join(f"{n} {k}" for k, n in cats),
+                "lote_total": c.get("lote_total") or 0} if c else None,
+    }
 
 
 def _dados_inicio() -> dict:
@@ -1153,7 +1181,7 @@ def tela_limpeza(request: Request):
     if not _nonce_da_sessao(request):
         return _para_login(request)
     lotes, erro = _limpeza()
-    return _pagina(request, "limpeza.html", "limpeza", lotes=lotes, erro_limpeza=erro)
+    return _pagina(request, "limpeza.html", "limpeza", lotes=lotes, erro_limpeza=erro, ext=_estado_limpeza())
 
 
 @router.get("/sistema")
@@ -1248,7 +1276,7 @@ def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Option
         html = _render("_agenda_lista.html", ativos=ativos, concluidos=concluidos, inativos=inativos)
     elif nome == "limpeza":
         lotes, erro = _limpeza()
-        html = _render("_limpeza_lista.html", lotes=lotes, erro_limpeza=erro)
+        html = _render("_limpeza_lista.html", lotes=lotes, erro_limpeza=erro, ext=_estado_limpeza())
     elif nome == "sistema":
         html = _render("_sistema.html", **_dados_sistema())
     elif nome == "pesquisa":
@@ -1575,6 +1603,30 @@ async def _acao_lote(request: Request, lid: str, acao: str):
     if fora:
         msg += f" {fora} {'saiu' if fora == 1 else 'saíram'} do lote na revalidação."
     return JSONResponse({"ok": True, "mensagem": msg, "status": r.get("status"), "total": r.get("total")})
+
+
+@router.post("/api/limpeza/verificar")
+async def acao_verificar_extensao(request: Request):
+    if recusa := _checar_post(request):
+        return recusa
+    e = await run_in_threadpool(limpeza.pedir_verificacao)
+    if e["estado"] in ("ok", "erro"):
+        msg = "Pedido enviado: a extensão do Thunderbird faz a passada em até 1 minuto."
+    else:
+        desde = f" desde {fmt_data(e['ultimo_contato_em'])}" if e["ultimo_contato_em"] else ""
+        msg = (f"Pedido registrado, mas a extensão do Thunderbird está sem contato{desde}. Ele vale quando ela "
+               f"voltar a falar com o Alfred (Thunderbird aberto com a extensão carregada).")
+    return JSONResponse({"ok": True, "mensagem": msg})
+
+
+@router.post("/api/limpeza/categorizar")
+async def acao_categorizar(request: Request):
+    if recusa := _checar_post(request):
+        return recusa
+    if not limpeza.iniciar_categorizacao():
+        return _erro(409, "A categorização já está em andamento. O andamento aparece nesta tela.")
+    return JSONResponse({"ok": True, "mensagem": "Categorização iniciada. O andamento aparece nesta tela; "
+                                                  "no fim o Alfred propõe um lote com os e-mails limpáveis."})
 
 
 @router.post("/api/limpeza/{lid}/aprovar")
