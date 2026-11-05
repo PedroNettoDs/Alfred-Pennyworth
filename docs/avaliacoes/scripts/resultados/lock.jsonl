@@ -13,3 +13,4 @@
 {"modo": "iterativo", "pergunta": "brasil", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 12379, "swap_usado_mb": 8190}
 {"modo": "rapido-general", "pergunta": "brasil", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 10222, "swap_usado_mb": 8181}
 {"modo": "profundo-general", "pergunta": "brasil", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 10562, "swap_usado_mb": 8183}
+{"modo": "profundo-general", "pergunta": "noticia", "espera_lock_s": 0.0, "status": 0, "mem_disponivel_mb": 13528, "swap_usado_mb": 8191}
