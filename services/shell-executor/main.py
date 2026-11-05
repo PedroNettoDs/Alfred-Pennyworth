@@ -6,10 +6,11 @@ Token via variável de ambiente SHELL_EXECUTOR_TOKEN.
 
 import os
 import re
+import selectors
 import shlex
 import signal
 import subprocess
-import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,7 +18,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Alfred Shell Executor", version="2.1.0")
+app = FastAPI(title="Alfred Shell Executor", version="2.2.0")
 
 TOKEN = os.getenv("SHELL_EXECUTOR_TOKEN", "")
 
@@ -83,6 +84,13 @@ CURL_HOSTS = {"localhost", "127.0.0.1"}
 _METACARACTERES = set(";&<>()`$\\{}")
 _DESCARTA_STDERR = re.compile(r"\s+2>/dev/null\s*$")   # "docker ps ... 2>/dev/null" (alfred_system_monitor)
 TIMEOUT_MAX = 1800
+# Saída: cada stream (stdout, stderr) guarda até MAX_SAIDA_BYTES; o resto é lido e descartado e a resposta vem com
+# "truncado": true. Sem teto, 200 MB de saída viravam 315 MB de resposta e 896 MiB de pico no executor.
+MAX_SAIDA_BYTES = 1 << 20
+# Comandos ao mesmo tempo. O handler síncrono roda no pool do anyio (40 threads): com 40 comandos lentos o pool
+# enchia e até o /health esperava. Acima do limite, HTTP 429 na hora.
+MAX_SIMULTANEOS = 8
+_vagas = threading.BoundedSemaphore(MAX_SIMULTANEOS)
 # ollama: só leitura (nada de rm, run, pull, cp...)
 OLLAMA_LEITURA = {"list", "ls", "ps", "show", "--version", "-v"}
 # cat: só arquivos informativos do /proc (nunca /proc/<pid>/environ, cmdline, mem...: o ambiente tem segredos)
@@ -252,54 +260,85 @@ def is_allowed(cmd: str) -> bool:
 def _executar(argvs: list, timeout: int, descartar_stderr: bool) -> dict:
     """Roda o pipeline sem shell, num grupo de processos próprio: no timeout o grupo inteiro morre
     (antes só o /bin/sh morria e os filhos seguiam rodando). LC_ALL=C.UTF-8: saída estável para as tools
-    (o system_monitor procura "Model name" no lscpu)."""
+    (o system_monitor procura "Model name" no lscpu).
+    stdout e stderr são lidos por pipe enquanto o comando roda, até MAX_SAIDA_BYTES cada; o excedente é lido e
+    descartado (o comando não trava com o pipe cheio). Antes iam inteiros para arquivos no /tmp (tmpfs: RAM)."""
     env = {k: os.environ[k] for k in ENV_FILHOS if k in os.environ}
     env["LC_ALL"] = "C.UTF-8"
     procs, pgid = [], 0
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        stderr = subprocess.DEVNULL if descartar_stderr else err
-        entrada = subprocess.DEVNULL
+    err_r, err_w = os.pipe()   # um pipe de stderr para todos os trechos do pipeline
+    stderr = subprocess.DEVNULL if descartar_stderr else err_w
+    entrada = subprocess.DEVNULL
+    try:
+        for argv in argvs:
+            p = subprocess.Popen(argv, stdin=entrada, stdout=subprocess.PIPE, stderr=stderr, env=env,
+                                 process_group=pgid)
+            if not pgid:
+                pgid = p.pid
+            if entrada is not subprocess.DEVNULL:
+                entrada.close()
+            entrada = p.stdout
+            procs.append(p)
+    except OSError as e:
+        if pgid:
+            os.killpg(pgid, signal.SIGKILL)
+        for p in procs:
+            p.wait()
+        if entrada is not subprocess.DEVNULL:
+            entrada.close()
+        os.close(err_r)
+        return {"stdout": "", "stderr": f"{argv[0]}: {e.strerror or e}\n", "returncode": 127, "truncado": False}
+    finally:
+        os.close(err_w)
+    out_r = procs[-1].stdout.fileno()
+    lidos = {out_r: bytearray(), err_r: bytearray()}
+    truncado = False
+    prazo = time.monotonic() + timeout
+    sel = selectors.DefaultSelector()
+    for fd in lidos:
+        sel.register(fd, selectors.EVENT_READ)
+    try:
+        while sel.get_map():
+            resto = prazo - time.monotonic()
+            if resto <= 0:
+                raise subprocess.TimeoutExpired(argvs[-1], timeout)
+            eventos = sel.select(min(resto, 0.1))
+            if not eventos and all(p.poll() is not None for p in procs):
+                break   # os trechos já saíram e algum neto segura o pipe: não espera por ele
+            for chave, _ in eventos:
+                bloco = os.read(chave.fd, 1 << 16)
+                if not bloco:
+                    sel.unregister(chave.fd)
+                    continue
+                buf = lidos[chave.fd]
+                truncado |= len(buf) + len(bloco) > MAX_SAIDA_BYTES
+                buf += bloco[:MAX_SAIDA_BYTES - len(buf)]
+        for p in procs:
+            p.wait(timeout=max(0.01, prazo - time.monotonic()))
+    except subprocess.TimeoutExpired:
         try:
-            for i, argv in enumerate(argvs):
-                ultimo = i == len(argvs) - 1
-                p = subprocess.Popen(argv, stdin=entrada, stdout=out if ultimo else subprocess.PIPE,
-                                     stderr=stderr, env=env, process_group=pgid)
-                if not pgid:
-                    pgid = p.pid
-                if entrada is not subprocess.DEVNULL:
-                    entrada.close()
-                entrada = p.stdout
-                procs.append(p)
-        except OSError as e:
-            if pgid:
-                os.killpg(pgid, signal.SIGKILL)
-            for p in procs:
-                p.wait()
-            return {"stdout": "", "stderr": f"{argv[0]}: {e.strerror or e}\n", "returncode": 127}
-        prazo = time.monotonic() + timeout
-        try:
-            for p in procs:
-                p.wait(timeout=max(0.01, prazo - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            for p in procs:
-                p.wait()
-            raise
-        out.seek(0)
-        err.seek(0)
-        return {
-            "stdout": out.read().decode("utf-8", "replace"),
-            "stderr": err.read().decode("utf-8", "replace"),
-            "returncode": procs[-1].returncode,
-        }
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for p in procs:
+            p.wait()
+        raise
+    finally:
+        sel.close()
+        procs[-1].stdout.close()
+        os.close(err_r)
+    return {
+        "stdout": lidos[out_r].decode("utf-8", "replace"),
+        "stderr": lidos[err_r].decode("utf-8", "replace"),
+        "returncode": procs[-1].returncode,
+        "truncado": truncado,
+    }
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "version": "2.1.0"}
+async def health():
+    # async: roda no laço de eventos, fora do pool de threads dos comandos
+    return {"status": "ok", "version": "2.2.0"}
 
 
 @app.post("/execute")
@@ -317,8 +356,12 @@ def execute(
             detail=f"Comando não permitido: '{req.command}'. Consulte ALLOWED_PREFIXES.",
         )
 
+    if not _vagas.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail=f"Executor ocupado: {MAX_SIMULTANEOS} comandos já em execução")
     try:
         argvs, descartar_stderr = analise
         return _executar(argvs, req.timeout, descartar_stderr)
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=408, detail=f"Timeout de {req.timeout}s excedido")
+    finally:
+        _vagas.release()
