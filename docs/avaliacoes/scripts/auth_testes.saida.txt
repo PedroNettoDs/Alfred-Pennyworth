@@ -1,0 +1,16 @@
+MEDIDA: evolution_key_nas_outras_rotas = [401, 401, 401, 401]
+MEDIDA: health_campos_topo = ['db', 'inbox_default', 'model_chat', 'pendencias_aguardando', 'status', 'thunderbird_profile', 'vault', 'vault_noticias', 'whatsapp']
+MEDIDA: health_whatsapp_campos = ['configurado', 'dry_run', 'instancia', 'numero_pedro', 'simulado', 'url']
+MEDIDA: health_db_campos = ['cache_ativas', 'cache_entradas', 'cache_usos', 'db', 'notas', 'wa_msgs']
+MEDIDA: health_tem_numero_do_dono = True
+MEDIDA: ics_loopback_host_local = 200
+MEDIDA: ics_loopback_host_estranho = 200
+MEDIDA: ics_loopback_com_x_forwarded_for = 200
+MEDIDA: ics_container = 403
+MEDIDA: painel_loopback_host_estranho = 403
+MEDIDA: rotas_inbox_testadas = 37
+MEDIDA: status_sem_credencial = {"200": 2, "401": 27, "403": 1, "422": 7}
+MEDIDA: rotas_que_respondem_2xx_sem_credencial = ['GET /vivo', 'GET /health']
+MEDIDA: token_mestre_no_webhook = 200
+MEDIDA: token_vazio_no_servidor_aceita_bearer_vazio = False
+MEDIDA: executor_sem_token / token_errado / servidor_sem_token = [401, 401, 401]
