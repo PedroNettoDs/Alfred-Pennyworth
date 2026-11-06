@@ -526,16 +526,20 @@ def _tocar_ao_notificar() -> bool:
 
 
 def cmd_aguardar_agenda(args):
-    """Interno: notificação "incluído no calendário" com [Ok] [Desfazer]; ociosa até o clique."""
+    """Interno: notificação "incluído no calendário" com [Ok] [Mais detalhes] [Desfazer]; ociosa até o clique.
+    Mais detalhes abre a página do item no painel (promessa, resumo, histórico)."""
     import agenda
     item = agenda.obter(args.id)
     if not item:
         return 0
     titulo, corpo = agenda.texto_notificacao(item)
-    r = _notificacao_dbus(titulo, corpo, [("ok", "Ok"), ("desfazer", "Desfazer")])
+    url = core.url_painel(f"agenda/{item['id']}")
+    r = _notificacao_dbus(titulo, corpo, [("ok", "Ok"), ("detalhes", "Mais detalhes"), ("desfazer", "Desfazer")])
     if r is None:
-        core._notify(titulo, corpo + f"\nDesfazer: run.sh agenda desfazer {item['id']}")
+        core._notify(titulo, corpo + f"\nMais detalhes: {url}\nDesfazer: run.sh agenda desfazer {item['id']}")
         return 0
+    if r == "detalhes" and not core.abrir_no_navegador(url):
+        core._notify("Alfred — agenda", f"Abra {url} no navegador para ver os detalhes.")
     if r == "desfazer":
         it = agenda.desfazer(args.id)
         core._notify("Alfred — agenda", f"Desfeito: {it['titulo']}"

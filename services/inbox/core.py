@@ -1147,6 +1147,23 @@ def _iniciar_aguardador(comando: str, pid: str):
         log(f"[pendencias] Não foi possível iniciar o aguardador de resposta: {e}")
 
 
+def url_painel(caminho: str) -> str:
+    """URL local de uma tela do painel (ex.: "agenda/<id>")."""
+    return f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7073')}/painel/{caminho}"
+
+
+def abrir_no_navegador(url: str) -> bool:
+    """Abre a URL no navegador; False se não há xdg-open.
+    Sob o systemd, o navegador vai num scope próprio — filho comum morreria com a unit do aguardador."""
+    if not shutil.which("xdg-open"):
+        return False
+    cmd = ["xdg-open", url]
+    if os.getenv("INVOCATION_ID") and shutil.which("systemd-run"):
+        cmd = ["systemd-run", "--user", "--scope", "--quiet", "--"] + cmd
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return True
+
+
 def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
     """Notificação desktop com botões (processo destacado, fica ocioso aguardando):
     e-mail → Vou / Não vou / Ouvir · WhatsApp → Enviar (rascunho editável) / Não enviar / Agenda / Ouvir."""

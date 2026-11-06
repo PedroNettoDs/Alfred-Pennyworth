@@ -167,16 +167,10 @@ def aguardar_qr(estado: str) -> int:
 
 
 def abrir_qr_no_painel() -> None:
-    """Abre /painel/whatsapp no navegador: a página gera o QR na hora e mostra o erro se a Evolution falhar.
-    Sob o systemd, o navegador vai num scope próprio — filho comum morreria com a unit do aguardador."""
-    url = f"http://127.0.0.1:{os.getenv('PORT_INBOX', '7073')}/painel/whatsapp"
-    if not shutil.which("xdg-open"):
+    """Abre /painel/whatsapp no navegador: a página gera o QR na hora e mostra o erro se a Evolution falhar."""
+    url = core.url_painel("whatsapp")
+    if not core.abrir_no_navegador(url):
         core._notify("Alfred — WhatsApp desconectado", f"Abra {url} no navegador para ver o QR code.")
-        return
-    cmd = ["xdg-open", url]
-    if os.getenv("INVOCATION_ID") and shutil.which("systemd-run"):
-        cmd = ["systemd-run", "--user", "--scope", "--quiet", "--"] + cmd
-    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 # ── execução ──────────────────────────────────────────────────

@@ -7,6 +7,7 @@ e das notas que Pedro manda para si mesmo no WhatsApp.
 Offline: o LLM é mockado, o vault é temporário, nada chega à Evolution API nem ao Thunderbird.
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -144,6 +145,102 @@ class TestAgendaFila(Base):
             agenda.registrar_resultado(a["id"], "criar", False, erro="calendário somente leitura")
         self.assertEqual(agenda.obter(a["id"])["tentativas"], agenda.MAX_TENTATIVAS)
         self.assertEqual(agenda.fila_extensao(), [])
+
+
+class TestNotificacao(Base):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        spec = importlib.util.spec_from_file_location("inbox_assistant_agenda", INBOX / "inbox-assistant.py")
+        cls.cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.cli)
+
+    def _item(self):
+        return agenda.adicionar("Colocar num docx", _amanha(), tipo="tarefa", notificar=False)
+
+    def _clicar(self, resposta, abriu=True):
+        """Roda o aguardador com a notificação respondendo `resposta`. → (id, botões, urls abertas, avisos)."""
+        item = self._item()
+        botoes, urls, avisos = [], [], []
+
+        def notificacao(_titulo, _corpo, acoes):
+            botoes.extend(acoes)
+            return resposta
+
+        def navegador(url):
+            urls.append(url)
+            return abriu
+
+        with mock.patch.object(self.cli, "_notificacao_dbus", notificacao), \
+             mock.patch.object(core, "abrir_no_navegador", navegador), \
+             mock.patch.object(core, "_notify", lambda _t, c: avisos.append(c)), \
+             mock.patch.dict(os.environ, {"PORT_INBOX": "7073"}):
+            self.assertEqual(self.cli.cmd_aguardar_agenda(mock.Mock(id=item["id"])), 0)
+        return item["id"], botoes, urls, avisos
+
+    def test_corpo_traz_o_resumo_antes_do_rodape(self):
+        _, corpo = agenda.texto_notificacao({"titulo": "Colocar num docx", "inicio": "2026-11-20", "dia_inteiro": True,
+                                             "calendario": "Agenda", "resumo": "Você prometeu mandar o arquivo.",
+                                             "descricao": "Você prometeu a Ana: “vou mandar”\nPrazo: 20/11"})
+        self.assertIn("\n\nVocê prometeu mandar o arquivo.\n\nIncluído no calendário", corpo)
+        self.assertNotIn("Prazo:", corpo)
+
+    def test_sem_resumo_usa_a_primeira_linha_da_descricao(self):
+        _, corpo = agenda.texto_notificacao({"titulo": "Colocar num docx", "inicio": "2026-11-20", "dia_inteiro": True,
+                                             "calendario": "Agenda", "resumo": None,
+                                             "descricao": "Você prometeu a Ana: “vou mandar”\nPrazo: 20/11"})
+        self.assertIn("\n\nVocê prometeu a Ana: “vou mandar”\n\nIncluído", corpo)
+        self.assertNotIn("Prazo:", corpo)
+
+    def test_resumo_longo_e_cortado(self):
+        breve = agenda._descricao_breve({"resumo": "palavra " * 100})
+        self.assertLessEqual(len(breve), agenda.DESCRICAO_BREVE_MAX)
+        self.assertTrue(breve.endswith("…"))
+
+    def test_sem_resumo_nem_descricao_nao_deixa_buraco(self):
+        _, corpo = agenda.texto_notificacao({"titulo": "Colocar num docx", "inicio": "2026-11-20", "dia_inteiro": True,
+                                             "calendario": "Agenda"})
+        self.assertEqual(corpo.count("\n\n"), 1)
+
+    def test_mais_detalhes_abre_o_item_no_painel(self):
+        aid, botoes, urls, avisos = self._clicar("detalhes")
+        self.assertEqual(botoes, [("ok", "Ok"), ("detalhes", "Mais detalhes"), ("desfazer", "Desfazer")])
+        self.assertEqual(urls, [f"http://127.0.0.1:7073/painel/agenda/{aid}"])
+        self.assertEqual(avisos, [])
+        self.assertEqual(agenda.obter(aid)["status"], "pendente")     # só olhar não muda nada
+
+    def test_mais_detalhes_sem_navegador_avisa_com_a_url(self):
+        aid, _, _, avisos = self._clicar("detalhes", abriu=False)
+        self.assertEqual(len(avisos), 1)
+        self.assertIn(f"/painel/agenda/{aid}", avisos[0])
+
+    def test_ok_nao_abre_nada_e_desfazer_continua_valendo(self):
+        aid, _, urls, _ = self._clicar("ok")
+        self.assertEqual(urls, [])
+        self.assertEqual(agenda.obter(aid)["status"], "pendente")
+        agenda.desfazer(aid)                                           # zera para o título poder entrar de novo
+        aid, _, urls, _ = self._clicar("desfazer")
+        self.assertEqual(urls, [])
+        self.assertEqual(agenda.obter(aid)["status"], "cancelado")
+
+    def test_sem_dbus_a_notificacao_simples_leva_a_url(self):
+        aid, _, urls, avisos = self._clicar(None)
+        self.assertEqual(urls, [])
+        self.assertIn(f"Mais detalhes: http://127.0.0.1:7073/painel/agenda/{aid}", avisos[0])
+
+    def test_abrir_no_navegador_vai_num_scope_sob_o_systemd(self):
+        with mock.patch.object(core.shutil, "which", lambda *a, **k: "/usr/bin/x"), \
+             mock.patch.object(core.subprocess, "Popen") as popen, \
+             mock.patch.dict(os.environ, {"INVOCATION_ID": "abc"}):
+            self.assertTrue(core.abrir_no_navegador("http://127.0.0.1:7073/painel/agenda/x"))
+        self.assertEqual(popen.call_args[0][0], ["systemd-run", "--user", "--scope", "--quiet", "--", "xdg-open",
+                                                 "http://127.0.0.1:7073/painel/agenda/x"])
+
+    def test_abrir_no_navegador_sem_xdg_open(self):
+        with mock.patch.object(core.shutil, "which", lambda *a, **k: None), \
+             mock.patch.object(core.subprocess, "Popen") as popen:
+            self.assertFalse(core.abrir_no_navegador("http://127.0.0.1:7073/painel/agenda/x"))
+        popen.assert_not_called()
 
 
 class TestICS(Base):

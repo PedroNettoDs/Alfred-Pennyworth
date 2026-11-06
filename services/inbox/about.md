@@ -748,7 +748,9 @@ WhatsApp para você mesmo ("me lembra de pagar o boleto sexta") ─┼─ detect
 extensão "Alfred — agenda" no Thunderbird (a cada 2 min)
         GET /agenda/fila → cria o evento (com alarme 30 min antes) no calendário "Agenda" (Google via CalDAV
         → aparece no celular) → POST /agenda/{id}/resultado → status no_calendario
-        ↓ só então: notificação "Incluído no calendário “Agenda”" [Ok] [Desfazer]
+        ↓ só então: notificação "Incluído no calendário “Agenda”" com descrição breve (Resumo do Alfred; sem ele,
+        ↓           a 1ª linha da descrição) e [Ok] [Mais detalhes] [Desfazer]
+        Mais detalhes → abre /painel/agenda/{id} no navegador (promessa, resumo, histórico)
         Desfazer → status desfazer → a extensão remove o evento → desfeito
         Feito    → status feito → a extensão regrava o evento com ☑ no título (mesmo UID) → Concluídos
 domingo 19:00 (alfred-semanal.timer) → agenda_semanal.py: relatório da semana + treino do Laya + apaga feitos e desfeitos
@@ -845,7 +847,7 @@ fim do ciclo do e-mail (07:30 / 18:30)  ·  ./run.sh promessas varrer
 ```
 
 - **Feito** no painel da agenda (ou `promessas feita <id>`) = cumprida: o item ganha ☑ no calendário.
-- Cada promessa nova chega com a notificação da agenda **[Ok] [Desfazer]** assim que está no calendário. Desfazer antes do prazo = não era promessa:
+- Cada promessa nova chega com a notificação da agenda **[Ok] [Mais detalhes] [Desfazer]** assim que está no calendário. Desfazer antes do prazo = não era promessa:
   ela vira `descartada` e não volta como atrasada.
 - A verificação só olha o canal da promessa (WhatsApp → histórico da conversa; e-mail → e-mails enviados aos mesmos
   destinatários). Se você cumpriu por outro caminho (pessoalmente, outro app), marque: `./run.sh promessas feita <id>`.

@@ -10,7 +10,7 @@ Fluxo
         cria o evento no calendário escolhido (padrão "Agenda", o Google via CalDAV) — o Thunderbird
         sincroniza com o Google e o evento aparece também no celular
         POST /agenda/{id}/resultado → status no_calendario | erro | desfeito
-        ↓ no_calendario            notificação no PC "incluído no calendário" com [Ok] [Desfazer]
+        ↓ no_calendario            notificação no PC "incluído no calendário" com [Ok] [Mais detalhes] [Desfazer]
     Ao criar, o LLM escreve o Resumo do Alfred (resumo, urgência, prioridade, motivo — agenda_resumir.md);
     cada mudança de estado vai para "historico" (painel → /painel/agenda/{id}).
     Feito (painel ou CLI) → status feito; a extensão regrava o evento com ☑ no título (fila_extensao).
@@ -40,6 +40,7 @@ MAX_TENTATIVAS = 5
 EM_EXECUCAO_TIMEOUT = timedelta(minutes=15)
 TIPOS = ("evento", "tarefa", "lembrete")
 NIVEIS = ("alta", "media", "baixa")
+DESCRICAO_BREVE_MAX = 220      # caracteres na notificação (os resumos reais têm 126–201)
 
 SCHEMA_COMPROMISSO = {
     "type": "object",
@@ -195,7 +196,7 @@ def adicionar(
     """
     Põe um compromisso na fila da agenda. Idempotente: mesmo título (normalizado) no mesmo dia e mesma
     origem devolve o item existente em vez de duplicar. → item (dict) com "_novo": bool.
-    A notificação [Ok] [Desfazer] sai quando a extensão confirma o evento no calendário (registrar_resultado).
+    A notificação [Ok] [Mais detalhes] [Desfazer] sai quando a extensão confirma o evento no calendário (registrar_resultado).
     """
     cfg = _cfg()
     tipo = tipo if tipo in TIPOS else "evento"
@@ -631,11 +632,17 @@ def concluir(aid: str, via: str = "painel", propagar: bool = True) -> dict:
 # ══════════════════════════════════════════════════════════════
 
 def notificar_item(item: dict) -> None:
-    """Notificação com [Ok] [Desfazer] num processo destacado (mesmo esquema das pendências)."""
+    """Notificação com [Ok] [Mais detalhes] [Desfazer] num processo destacado (mesmo esquema das pendências)."""
     if core._tem_gui():
         core._iniciar_aguardador("_aguardar-agenda", item["id"])
     else:
         core._notify("Alfred — incluído na agenda", f"{item['titulo']} — {_quando_legivel(item)}")
+
+
+def _descricao_breve(item: dict) -> str:
+    """Resumo do Alfred; sem ele (LLM fora do ar ou ainda escrevendo), a 1ª linha da descrição."""
+    texto = " ".join((item.get("resumo") or (item.get("descricao") or "").split("\n")[0]).split())
+    return texto if len(texto) <= DESCRICAO_BREVE_MAX else texto[:DESCRICAO_BREVE_MAX - 1].rstrip() + "…"
 
 
 def texto_notificacao(item: dict) -> tuple[str, str]:
@@ -652,6 +659,9 @@ def texto_notificacao(item: dict) -> tuple[str, str]:
         de = (f"\nVocê prometeu a {origem.get('contato') or 'alguém'}"
               + (" e ainda não há sinal de que fez" if origem.get("atraso") else ""))
     corpo = f"{item['titulo']}\n{_quando_legivel(item)}" + (f" · {item['local']}" if item.get("local") else "") + de
+    breve = _descricao_breve(item)
+    if breve:
+        corpo += f"\n\n{breve}"
     corpo += f"\n\nIncluído no calendário “{item.get('calendario')}” do Thunderbird."
     return f"Alfred — {tipo} na agenda", corpo
 
