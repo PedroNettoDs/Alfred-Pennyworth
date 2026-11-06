@@ -328,6 +328,13 @@ main:focus { outline: none; }
 .filtros .campo { margin: 0; }
 .filtros__busca { flex: 1 1 16rem; }
 
+/* ── Paginação (aba Resolvidas) ─────────────────────────────────────────── */
+.paginacao {
+  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: center;
+  gap: var(--e-3); margin-top: var(--e-4);
+}
+.paginacao .campo { margin: 0; }
+
 /* ── Selos (status, urgência, tipo) ─────────────────────────────────────── */
 .selo {
   display: inline-flex; align-items: center; gap: 0.35em;

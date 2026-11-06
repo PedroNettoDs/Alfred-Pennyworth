@@ -293,7 +293,7 @@ def _load_lotes() -> dict:
     if not f.exists():
         return {"lotes": []}
     try:
-        data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        data = core.ler_yaml(f.read_text(encoding="utf-8")) or {}
         if isinstance(data, dict) and isinstance(data.get("lotes"), list):
             return data
     except Exception as e:
@@ -312,10 +312,15 @@ def _save_lotes(data: dict):
         core.gravar_atomico(lotes_file(), yaml.dump(data, allow_unicode=True, sort_keys=False))
 
 
+def _lotes_leitura() -> list[dict]:
+    """Lotes sem reler o arquivo se nada mudou (painel: a cada tela). Só para consultar: ver core.yml_cacheado."""
+    return core.yml_cacheado(lotes_file(), _load_lotes)["lotes"]
+
+
 def listar_lotes(status: Optional[str] = None) -> list[dict]:
     _expirar()
     _apagar_excluidos()
-    lotes = _load_lotes()["lotes"]
+    lotes = _lotes_leitura()
     if status in (None, "", "todos"):
         return lotes
     return [l for l in lotes if l.get("status") == status]
@@ -339,7 +344,7 @@ def _vencido(l: dict, agora: datetime) -> bool:
 def _expirar():
     # listar_lotes chama a cada consulta (painel: polling) — só pega a trava se houver o que expirar
     agora = _now()
-    if not any(_vencido(l, agora) for l in _load_lotes()["lotes"]):
+    if not any(_vencido(l, agora) for l in _lotes_leitura()):
         return
     with _trava():
         data = _load_lotes()
@@ -368,7 +373,7 @@ def _apagar_excluidos():
     def vencido(l: dict) -> bool:
         return (apagar_em(l) or agora) < agora
 
-    if not any(vencido(l) for l in _load_lotes()["lotes"]):
+    if not any(vencido(l) for l in _lotes_leitura()):
         return
     with _trava():
         data = _load_lotes()

@@ -63,6 +63,7 @@ COOKIE = "alfred_painel"
 HOSTS_LOCAIS = ("127.0.0.1", "localhost", "[::1]")
 CLIENTES_LOCAIS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 ATRASO_LOGIN_FALHO = 0.5          # segundos — desestimula tentativa e erro no token
+POR_PAGINA = 20                   # Pendências, aba Resolvidas
 CACHE_WHATSAPP_S = 15             # estado da instância (Início/Sistema): no máximo 1 consulta a cada 15 s
 TIMEOUT_CHECAGEM_S = 2            # cada item da tela Sistema
 
@@ -398,8 +399,16 @@ def _render(nome: str, **ctx) -> str:
     return _env.get_template(nome).render(**ctx)
 
 
+def _aguardando() -> list[dict]:
+    return [p for p in core.pendencias_leitura() if p.get("status") == "aguardando"]
+
+
+def _pendencia_leitura(pid: str) -> Optional[dict]:
+    return next((p for p in core.pendencias_leitura() if p.get("id") == pid), None)
+
+
 def _contadores() -> dict:
-    aguard = core.listar_pendencias("aguardando")
+    aguard = _aguardando()
     wa = sum(1 for p in aguard if p.get("tipo") == "whatsapp")
     try:
         lim = len(limpeza.listar_lotes("aguardando"))
@@ -482,9 +491,22 @@ def _filtros(aba, tipo, q) -> tuple[str, str, str]:
     return aba, tipo, (q or "").strip()[:100]
 
 
-def _lista_pendencias(aba: str, tipo: str, q: str) -> list[dict]:
+def _paginacao(total: int, pedida: Optional[str]) -> dict:
+    """Página pedida na URL → a válida mais próxima (texto inválido cai na 1ª), com as opções do menu suspenso."""
+    paginas = max(1, math.ceil(total / POR_PAGINA))
+    try:
+        atual = min(max(int(pedida or 1), 1), paginas)
+    except ValueError:
+        atual = 1
+    return {"atual": atual, "paginas": paginas,
+            "opcoes": [(str(n), f"{n} de {paginas}") for n in range(1, paginas + 1)]}
+
+
+def _lista_pendencias(aba: str, tipo: str, q: str, pagina: Optional[str] = None) -> tuple[list[dict], Optional[dict]]:
+    """→ (linhas, paginação). Aguardando vem inteira (paginação None); Resolvidas, só a página pedida."""
     agora = _agora()
-    todas = core.listar_pendencias("todas")
+    todas = core.pendencias_leitura()
+    paginacao = None
     if tipo == "whatsapp":
         todas = [p for p in todas if p.get("tipo") == "whatsapp"]
     elif tipo == "email":
@@ -498,8 +520,10 @@ def _lista_pendencias(aba: str, tipo: str, q: str) -> list[dict]:
     else:
         itens = [p for p in todas if p.get("status") != "aguardando"]
         itens.sort(key=lambda p: -_ts(_resolvida_em(p)))
-        itens = itens[:50]
-    return [_linha(p, agora) for p in itens]
+        paginacao = _paginacao(len(itens), pagina)
+        fim = paginacao["atual"] * POR_PAGINA
+        itens = itens[fim - POR_PAGINA:fim]
+    return [_linha(p, agora) for p in itens], paginacao
 
 
 def _vazio_lista(aba: str, tipo: str, q: str) -> str:
@@ -656,7 +680,7 @@ def _dados_agenda_item(i: dict) -> dict:
                                                          if isinstance(conf, (int, float)) else None),
                   ("Tarefa", f"#{i['task_id']} em tasks.yml" if i.get("task_id") else None)],
         "contexto": i.get("descricao") or "",
-        "pendencia_url": f"/painel/pendencias/{pid}" if pid and core.obter_pendencia(pid) else None,
+        "pendencia_url": f"/painel/pendencias/{pid}" if pid and _pendencia_leitura(pid) else None,
         "promessa": promessa,
         "dados_promessa": [("O quê", promessa.get("o_que")), ("Para", promessa.get("para_quem")),
                            ("Dito em", fmt_data(promessa.get("dito_em"))),
@@ -763,7 +787,7 @@ def _estado_limpeza() -> dict:
 
 def _dados_inicio() -> dict:
     agora = _agora()
-    aguard = _lista_pendencias("aguardando", "", "")
+    aguard, _ = _lista_pendencias("aguardando", "", "")
     recentes = sorted(aguard, key=lambda x: -_ts(x["iso"]))[:5]
     ativos = _agenda()[0]
     proximos = [i for i in ativos if i["status"] != "desfazer"   # Pedro mandou tirar do calendário
@@ -866,7 +890,7 @@ def _dados_sistema() -> dict:
     for k in ("executor", "researcher", "ollama"):
         if "erro" in res[k]:
             res[k] = {"estado": "indisponivel", "detalhe": res[k]["erro"]}
-    pend = core.listar_pendencias("aguardando")
+    pend = _aguardando()
     return {
         "alfred": _estado_alfred(), "wa": _conexao_whatsapp(st), "wa_status": st,
         "fila": len(st.get("fila_espera") or []) if not st.get("erro") else None,
@@ -1137,22 +1161,25 @@ def inicio(request: Request):
 
 
 @router.get("/pendencias")
-def pendencias(request: Request, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None):
+def pendencias(request: Request, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None,
+               pagina: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _para_login(request)
     aba, tipo, q = _filtros(aba, tipo, q)
-    itens = _lista_pendencias(aba, tipo, q)
-    return _pagina(request, "pendencias.html", "pendencias", aba=aba, tipo=tipo, q=q, itens=itens,
+    itens, paginacao = _lista_pendencias(aba, tipo, q, pagina)
+    # o polling fica na mesma página que Pedro está vendo
+    parametros = {"aba": aba, "tipo": tipo, "q": q, **({"pagina": paginacao["atual"]} if paginacao else {})}
+    return _pagina(request, "pendencias.html", "pendencias", aba=aba, tipo=tipo, q=q, itens=itens, paginacao=paginacao,
                    vazio=_vazio_lista(aba, tipo, q),
-                   poll_url="/painel/parcial/pendencias?" + urlencode({"aba": aba, "tipo": tipo, "q": q}),
-                   aguardando=len(core.listar_pendencias("aguardando")))
+                   poll_url="/painel/parcial/pendencias?" + urlencode(parametros),
+                   aguardando=len(_aguardando()))
 
 
 @router.get("/pendencias/{pid}")
 def pendencia(request: Request, pid: str):
     if not _nonce_da_sessao(request):
         return _para_login(request)
-    p = core.obter_pendencia(pid)
+    p = _pendencia_leitura(pid)
     if not p:
         return _pagina(request, "nao_encontrada.html", "pendencias", status=404)
     return _pagina(request, "pendencia.html", "pendencias", **_dados_detalhe(p))
@@ -1262,12 +1289,13 @@ def tela_pesquisa(request: Request, slug: str, notebook: Optional[str] = None):
 
 @router.get("/parcial/{nome}")
 def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None,
-            job: Optional[str] = None, notebook: Optional[str] = None):
+            job: Optional[str] = None, notebook: Optional[str] = None, pagina: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _erro(401, MSG_SESSAO)
     if nome == "pendencias":
         aba, tipo, q = _filtros(aba, tipo, q)
-        html = _render("_pendencias_lista.html", itens=_lista_pendencias(aba, tipo, q), aba=aba,
+        itens, paginacao = _lista_pendencias(aba, tipo, q, pagina)
+        html = _render("_pendencias_lista.html", itens=itens, paginacao=paginacao, aba=aba, tipo=tipo, q=q,
                        vazio=_vazio_lista(aba, tipo, q))
     elif nome == "inicio":
         html = _render("_inicio.html", **_dados_inicio())

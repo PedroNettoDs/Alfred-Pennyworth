@@ -18,7 +18,7 @@
   {{ m.botao("Buscar", nome_icone="busca") }}
 </form>
 {%- if aba == "resolvidas" %}
-<p class="pequeno suave">As 50 mais recentes, com o status final e a data da resolução.</p>
+<p class="pequeno suave">Da mais recente para a mais antiga, com o status final e a data da resolução.</p>
 {%- endif %}
 <div data-poll-url="{{ poll_url }}">
   {% include "_pendencias_lista.html" %}

@@ -190,7 +190,7 @@ As **5 mais recentes** não vão dentro de um `<a>` (seriam links aninhados): us
   <div class="filtros__busca">{{ m.campo("q", "Buscar por contato ou texto", q, tipo="search") }}</div>
   {{ m.botao("Buscar", nome_icone="busca") }}
 </form>
-<div data-poll-url="/painel/parcial/pendencias?aba={{ aba }}&tipo={{ tipo }}&q={{ q|urlencode }}">
+<div data-poll-url="/painel/parcial/pendencias?aba={{ aba }}&tipo={{ tipo }}&q={{ q|urlencode }}">   {# Resolvidas: + &pagina=N #}
   {% include "_pendencias_lista.html" %}
 </div>
 ```
@@ -453,7 +453,7 @@ Curtos, formais e sem humor em erro. Estados vazios: "Nenhuma pendência aguarda
 | Template | Rota | Observação |
 |---|---|---|
 | `inicio.html` + `_inicio.html` | `/painel`, `/painel/parcial/inicio` | cartões (pendências, Alfred, WhatsApp, limpeza, agenda) + 5 mais recentes |
-| `pendencias.html` + `_pendencias_lista.html` | `/painel/pendencias`, `/painel/parcial/pendencias` | linha em `_linha.html` (macro `linha`); aba Resolvidas usa `ul.lista--resolvidas` (coluna de data mais larga) |
+| `pendencias.html` + `_pendencias_lista.html` | `/painel/pendencias`, `/painel/parcial/pendencias` | linha em `_linha.html` (macro `linha`); aba Resolvidas usa `ul.lista--resolvidas` (coluna de data mais larga) e, com mais de uma página, `nav.paginacao` (Anterior, `m.selecao("pagina", …)`, Próxima) dentro do contêiner de polling |
 | `pendencia.html` | `/painel/pendencias/{id}` | WhatsApp e e-mail no mesmo template |
 | `agenda.html` + `_agenda_lista.html` | `/painel/agenda`, `/painel/parcial/agenda` | |
 | `limpeza.html` + `_limpeza_lista.html` | `/painel/limpeza`, `/painel/parcial/limpeza` | |

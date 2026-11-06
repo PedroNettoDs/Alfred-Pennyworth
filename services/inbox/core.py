@@ -710,13 +710,45 @@ def preservar_corrompido(f: Path, motivo: str, chave: str) -> Optional[Path]:
     return copia
 
 
+# libyaml quando instalada: o painel relê estes YML a cada tela e o leitor puro-Python leva ~650 ms no
+# pendencias.yml de 460 KB (o de C, ~65 ms).
+_YamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def ler_yaml(texto: str):
+    """Como yaml.safe_load, com o leitor mais rápido disponível."""
+    return yaml.load(texto, Loader=_YamlLoader)
+
+
+_CACHE_YML: dict = {}
+
+
+def yml_cacheado(f: Path, ler):
+    """
+    ler() só quando o arquivo mudou. Olha o disco a cada chamada, então enxerga gravações de outros processos
+    (toda gravação é atômica: mtime e inode novos). O resultado é compartilhado entre threads: só para consultar.
+    Quem vai alterar e gravar usa _load_*() dentro da trava.
+    """
+    try:
+        st = f.stat()
+    except OSError:
+        return ler()
+    versao = (st.st_mtime_ns, st.st_size, st.st_ino)
+    atual = _CACHE_YML.get(f)
+    if atual and atual[0] == versao:
+        return atual[1]
+    dados = ler()
+    _CACHE_YML[f] = (versao, dados)
+    return dados
+
+
 def _load_pend() -> dict:
     f = pend_file()
     if not f.exists():
         return {"pendencias": []}
     try:
         texto = f.read_text(encoding="utf-8")
-        data = yaml.safe_load(texto) or {}
+        data = ler_yaml(texto) or {}
     except Exception as e:
         preservar_corrompido(f, f"YAML inválido: {e}", "pendencias")
         return {"pendencias": []}
@@ -738,6 +770,11 @@ def listar_pendencias(status: Optional[str] = "aguardando") -> list[dict]:
     if status in (None, "", "todas"):
         return pend
     return [p for p in pend if p.get("status") == status]
+
+
+def pendencias_leitura() -> list[dict]:
+    """Todas as pendências sem reler o arquivo se nada mudou (painel). Só para consultar: ver yml_cacheado."""
+    return yml_cacheado(pend_file(), _load_pend)["pendencias"]
 
 
 def obter_pendencia(pid: str) -> Optional[dict]:

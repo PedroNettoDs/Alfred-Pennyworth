@@ -1077,6 +1077,94 @@ class TestResolvidas(Base):
         self.assertNotIn('id="form-resposta"', det)
 
 
+class TestPaginacaoResolvidas(Base):
+    def gravar(self, n: int, status="respondida"):
+        # minutos diferentes: res-00 é a mais antiga, a última de range(n) é a mais recente
+        core._save_pend({"pendencias": [
+            {"id": f"res-{i:02d}", "tipo": "email", "status": status, "titulo": f"Assunto {i:02d}",
+             "criado_em": "2026-10-01T10:00:00", "respondido_em": f"2026-10-01T{10 + i // 60:02d}:{i % 60:02d}:00"}
+            for i in range(n)]})
+
+    def linhas(self, html: str) -> list[str]:
+        return re.findall(r'href="/painel/pendencias/(res-\d+)"', html)
+
+    def test_20_por_pagina_da_mais_recente_para_a_mais_antiga(self):
+        self.gravar(45)
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/pendencias?aba=resolvidas")).text
+        self.assertEqual(self.linhas(html), [f"res-{i:02d}" for i in range(44, 24, -1)])
+        self.assertIn('<option value="1" selected>1 de 3</option>', html)
+        self.assertIn('name="pagina"', html)
+        self.assertIn('href="/painel/pendencias?aba=resolvidas&amp;tipo=&amp;q=&amp;pagina=2"', html)
+        self.assertNotIn(">Anterior<", html)
+        self.assertIn('data-poll-url="/painel/parcial/pendencias?aba=resolvidas&amp;tipo=&amp;q=&amp;pagina=1"', html)
+
+        ultima = self.guardar(cli.get("/painel/pendencias?aba=resolvidas&pagina=3")).text
+        self.assertEqual(self.linhas(ultima), [f"res-{i:02d}" for i in range(4, -1, -1)])
+        self.assertIn('href="/painel/pendencias?aba=resolvidas&amp;tipo=&amp;q=&amp;pagina=2"', ultima)
+        self.assertNotIn(">Próxima<", ultima)
+        self.assertIn('data-poll-url="/painel/parcial/pendencias?aba=resolvidas&amp;tipo=&amp;q=&amp;pagina=3"', ultima)
+
+    def test_pagina_invalida_cai_na_valida_mais_proxima(self):
+        self.gravar(45)
+        cli = self.entrar()
+        for pedida, valida in (("99", 3), ("0", 1), ("-1", 1), ("abc", 1), ("", 1), ("9" * 5000, 1)):
+            r = self.guardar(cli.get("/painel/pendencias", params={"aba": "resolvidas", "pagina": pedida}))
+            self.assertEqual(r.status_code, 200, pedida)
+            self.assertIn(f'<option value="{valida}" selected>', r.text, pedida)
+
+    def test_polling_mantem_a_pagina_e_os_filtros_nos_links(self):
+        self.gravar(45)
+        cli = self.entrar()
+        html = self.guardar(cli.get("/painel/parcial/pendencias",
+                                    params={"aba": "resolvidas", "tipo": "email", "q": "assunto", "pagina": "2"})).text
+        self.assertEqual(self.linhas(html), [f"res-{i:02d}" for i in range(24, 4, -1)])
+        self.assertIn('<option value="2" selected>2 de 3</option>', html)
+        self.assertIn('href="/painel/pendencias?aba=resolvidas&amp;tipo=email&amp;q=assunto&amp;pagina=1"', html)
+        self.assertIn('href="/painel/pendencias?aba=resolvidas&amp;tipo=email&amp;q=assunto&amp;pagina=3"', html)
+        self.assertIn('<input type="hidden" name="tipo" value="email">', html)
+        self.assertIn('<input type="hidden" name="q" value="assunto">', html)
+
+    def test_uma_pagina_so_nao_mostra_o_menu(self):
+        self.gravar(20)
+        html = self.guardar(self.entrar().get("/painel/pendencias?aba=resolvidas")).text
+        self.assertEqual(len(self.linhas(html)), 20)
+        self.assertNotIn('class="paginacao"', html)
+
+    def test_aguardando_nao_e_paginada(self):
+        self.gravar(25, status="aguardando")
+        html = self.guardar(self.entrar().get("/painel/pendencias", params={"pagina": "2"})).text
+        self.assertEqual(len(self.linhas(html)), 25)
+        self.assertNotIn('class="paginacao"', html)
+
+
+class TestLeituraCacheada(Base):
+    def test_so_rele_quando_o_arquivo_muda(self):
+        core._save_pend({"pendencias": [{"id": "a", "status": "aguardando"}]})
+        with mock.patch.object(core, "ler_yaml", wraps=core.ler_yaml) as ler:
+            self.assertEqual(core.pendencias_leitura()[0]["id"], "a")
+            self.assertEqual(core.pendencias_leitura()[0]["id"], "a")
+            self.assertEqual(ler.call_count, 1)
+            # outro processo gravou: o cache enxerga pelo disco
+            core.gravar_atomico(core.pend_file(), "pendencias:\n- {id: b, status: aguardando}\n")
+            self.assertEqual(core.pendencias_leitura()[0]["id"], "b")
+            self.assertEqual(ler.call_count, 2)
+
+    def test_quem_grava_nao_recebe_o_objeto_compartilhado(self):
+        core._save_pend({"pendencias": [{"id": "a", "status": "aguardando"}]})
+        core._load_pend()["pendencias"][0]["status"] = "alterado"
+        self.assertEqual(core.pendencias_leitura()[0]["status"], "aguardando")
+
+    def test_lote_vencido_expira_mesmo_com_o_arquivo_parado(self):
+        agora = limpeza._now()
+        lote = {"id": "l1", "status": "aguardando", "expira_em": (agora + timedelta(days=1)).isoformat(),
+                "itens": [], "total": 0}
+        limpeza._save_lotes({"lotes": [lote]})
+        self.assertEqual(limpeza.listar_lotes()[0]["status"], "aguardando")
+        with mock.patch.object(limpeza, "_now", lambda: agora + timedelta(days=2)):
+            self.assertEqual(limpeza.listar_lotes()[0]["status"], "expirado")
+
+
 class TestAudio(Base):
     def test_audio_com_sessao_sem_sessao_e_expirado(self):
         p = self.criar_wa()

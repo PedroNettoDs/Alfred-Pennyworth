@@ -1,4 +1,4 @@
-{# Miolo do contêiner de polling da lista (página e /painel/parcial/pendencias). Vars: itens, vazio. #}
+{# Miolo do contêiner de polling da lista (página e /painel/parcial/pendencias). Vars: itens, vazio, aba, tipo, q, paginacao. #}
 {% import "_macros.html" as m %}
 {% from "_linha.html" import linha %}
 {%- if itens %}
@@ -9,4 +9,20 @@
 </ul>
 {%- else %}
 {{ m.vazio(vazio, "pendencias") }}
+{%- endif %}
+{%- if paginacao and paginacao.paginas > 1 %}
+<nav class="paginacao" aria-label="Páginas de pendências resolvidas">
+  {%- if paginacao.atual > 1 %}
+  {{ m.botao("Anterior", href="/painel/pendencias?" ~ {'aba': aba, 'tipo': tipo, 'q': q, 'pagina': paginacao.atual - 1}|urlencode) }}
+  {%- endif %}
+  <form method="get" action="/painel/pendencias">
+    <input type="hidden" name="aba" value="{{ aba }}">
+    <input type="hidden" name="tipo" value="{{ tipo }}">
+    <input type="hidden" name="q" value="{{ q }}">
+    {{ m.selecao("pagina", "Página", paginacao.opcoes, paginacao.atual|string, enviar_ao_mudar=true) }}
+  </form>
+  {%- if paginacao.atual < paginacao.paginas %}
+  {{ m.botao("Próxima", href="/painel/pendencias?" ~ {'aba': aba, 'tipo': tipo, 'q': q, 'pagina': paginacao.atual + 1}|urlencode) }}
+  {%- endif %}
+</nav>
 {%- endif %}

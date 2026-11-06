@@ -112,7 +112,7 @@ def _load() -> dict:
     if not f.exists():
         return {"itens": []}
     try:
-        data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        data = core.ler_yaml(f.read_text(encoding="utf-8")) or {}
     except Exception as e:
         # cópia do original antes de a próxima gravação substituir o arquivo (mesma regra de pendencias.yml)
         core.preservar_corrompido(f, f"YAML inválido: {e}", "agenda")
