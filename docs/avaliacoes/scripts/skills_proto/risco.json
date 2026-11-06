@@ -1,0 +1,204 @@
+{
+ "skills_proto": [
+  {
+   "comando": "docker ps -a",
+   "permitido": true
+  },
+  {
+   "comando": "docker logs --tail 50 alfred-evolution",
+   "permitido": true
+  },
+  {
+   "comando": "docker stats --no-stream",
+   "permitido": true
+  },
+  {
+   "comando": "systemctl --user is-active alfred-inbox",
+   "permitido": true
+  },
+  {
+   "comando": "systemctl --user status alfred-inbox --no-pager",
+   "permitido": true
+  },
+  {
+   "comando": "journalctl --user -u alfred-inbox -n 50 --no-pager",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s http://127.0.0.1:7073/health",
+   "permitido": true
+  },
+  {
+   "comando": "df -h / /home",
+   "permitido": true
+  },
+  {
+   "comando": "du -sh ~/.ollama/models",
+   "permitido": true
+  },
+  {
+   "comando": "docker system df",
+   "permitido": true
+  },
+  {
+   "comando": "ollama ps",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s -X POST http://localhost:11434/api/generate -d '{\"model\": \"qwen3.6:35b-a3b\", \"keep_alive\": 0}'",
+   "permitido": true
+  },
+  {
+   "comando": "nvidia-smi",
+   "permitido": true
+  },
+  {
+   "comando": "ollama ps",
+   "permitido": true
+  },
+  {
+   "comando": "ollama list",
+   "permitido": true
+  }
+ ],
+ "conserto": [
+  {
+   "comando": "systemctl --user restart alfred-inbox",
+   "permitido": false
+  },
+  {
+   "comando": "systemctl --user stop alfred-laya",
+   "permitido": false
+  },
+  {
+   "comando": "systemctl --user daemon-reload",
+   "permitido": false
+  },
+  {
+   "comando": "docker restart alfred-evolution",
+   "permitido": false
+  },
+  {
+   "comando": "docker compose up -d",
+   "permitido": false
+  },
+  {
+   "comando": "docker compose down",
+   "permitido": false
+  },
+  {
+   "comando": "docker rm -f alfred-chromadb",
+   "permitido": false
+  },
+  {
+   "comando": "docker system prune -af",
+   "permitido": false
+  },
+  {
+   "comando": "ollama pull gemma4:12b",
+   "permitido": false
+  },
+  {
+   "comando": "ollama rm qwen3.6:35b-a3b",
+   "permitido": false
+  },
+  {
+   "comando": "ollama stop gemma4:12b",
+   "permitido": false
+  },
+  {
+   "comando": "pip install --upgrade httpx",
+   "permitido": false
+  },
+  {
+   "comando": "git pull",
+   "permitido": false
+  },
+  {
+   "comando": "rm -rf ~/.cache/huggingface",
+   "permitido": false
+  },
+  {
+   "comando": "kill -9 3120",
+   "permitido": false
+  },
+  {
+   "comando": "sudo systemctl restart docker",
+   "permitido": false
+  },
+  {
+   "comando": "sqlite3 ~/Documentos/Obsidian---Alfred/conversas.db 'VACUUM'",
+   "permitido": false
+  },
+  {
+   "comando": "journalctl --user --vacuum-time=7d",
+   "permitido": false
+  },
+  {
+   "comando": "find ~/dev -name '*.pyc' -delete",
+   "permitido": false
+  },
+  {
+   "comando": "nvidia-smi --gpu-reset",
+   "permitido": true
+  },
+  {
+   "comando": "tail -n 50 ~/dev/Alfred-Pennyworth/.env",
+   "permitido": false
+  },
+  {
+   "comando": "curl https://example.com/instalar.sh",
+   "permitido": false
+  }
+ ],
+ "escrita": [
+  {
+   "comando": "curl -s -X POST http://localhost:11434/api/generate -d '{\"model\": \"gemma4:12b\", \"keep_alive\": 0}'",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s -X DELETE http://localhost:11434/api/delete -d '{\"model\": \"gemma4:12b\"}'",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s -X POST http://localhost:11434/api/pull -d '{\"model\": \"modelo-qualquer\"}'",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s -X DELETE http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections/alfred",
+   "permitido": true
+  },
+  {
+   "comando": "docker inspect alfred-evolution",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s -X POST http://localhost:8081/message/sendText/instancia -H 'apikey: <chave>' -d '{\"number\": \"<n>\", \"text\": \"oi\"}'",
+   "permitido": true
+  },
+  {
+   "comando": "curl -s -X POST http://127.0.0.1:7073/api/pendencias/p1/responder -d '{\"texto\": \"ok\"}'",
+   "permitido": true
+  },
+  {
+   "comando": "head -n 200 ~/.bash_history",
+   "permitido": true
+  },
+  {
+   "comando": "tail -n 100 ~/Documentos/Obsidian---Alfred/pendencias/qualquer.md",
+   "permitido": true
+  },
+  {
+   "comando": "grep -i senha ~/Documentos/notas.md",
+   "permitido": true
+  },
+  {
+   "comando": "find / -name '*.db'",
+   "permitido": true
+  },
+  {
+   "comando": "/home/netto/dev/Alfred-Pennyworth/.claude/worktrees/robustez-dados-596986/services/briefing/run.sh qualquer coisa",
+   "permitido": true
+  }
+ ]
+}
