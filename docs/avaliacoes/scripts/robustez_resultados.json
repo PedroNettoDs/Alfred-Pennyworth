@@ -1,0 +1,482 @@
+{
+ "medido_em": "2026-11-03",
+ "kill9_98kB": {
+  "injecao": [
+   {
+    "modo": "direto",
+    "n": 200,
+    "bytes": 98563,
+    "ok": 58,
+    "vazio": 136,
+    "truncado": 6,
+    "sumiu": 0,
+    "temporarios_orfaos": 0
+   },
+   {
+    "modo": "tmp_fixo",
+    "n": 200,
+    "bytes": 98563,
+    "ok": 200,
+    "vazio": 0,
+    "truncado": 0,
+    "sumiu": 0,
+    "temporarios_orfaos": 1
+   },
+   {
+    "modo": "atomico",
+    "n": 200,
+    "bytes": 98563,
+    "ok": 200,
+    "vazio": 0,
+    "truncado": 0,
+    "sumiu": 0,
+    "temporarios_orfaos": 125
+   }
+  ],
+  "latencia": [
+   {
+    "modo": "direto",
+    "mediana_ms": 0.239,
+    "p95_ms": 0.42
+   },
+   {
+    "modo": "tmp_fixo",
+    "mediana_ms": 0.211,
+    "p95_ms": 0.676
+   },
+   {
+    "modo": "atomico",
+    "mediana_ms": 3.588,
+    "p95_ms": 4.99
+   }
+  ],
+  "fs": "ext2/ext3",
+  "carga_1min": 12.27294921875
+ },
+ "kill9_9.8kB": {
+  "injecao": [
+   {
+    "modo": "direto",
+    "n": 200,
+    "bytes": 9829,
+    "ok": 48,
+    "vazio": 144,
+    "truncado": 8,
+    "sumiu": 0,
+    "temporarios_orfaos": 0
+   },
+   {
+    "modo": "tmp_fixo",
+    "n": 200,
+    "bytes": 9829,
+    "ok": 200,
+    "vazio": 0,
+    "truncado": 0,
+    "sumiu": 0,
+    "temporarios_orfaos": 0
+   },
+   {
+    "modo": "atomico",
+    "n": 200,
+    "bytes": 9829,
+    "ok": 200,
+    "vazio": 0,
+    "truncado": 0,
+    "sumiu": 0,
+    "temporarios_orfaos": 112
+   }
+  ],
+  "latencia": [
+   {
+    "modo": "direto",
+    "mediana_ms": 0.257,
+    "p95_ms": 1.843
+   },
+   {
+    "modo": "tmp_fixo",
+    "mediana_ms": 0.266,
+    "p95_ms": 1.097
+   },
+   {
+    "modo": "atomico",
+    "mediana_ms": 6.875,
+    "p95_ms": 17.214
+   }
+  ],
+  "fs": "ext2/ext3",
+  "carga_1min": 14.1982421875
+ },
+ "logs": {
+  "briefing_seen.json": {
+   "linhas": 52,
+   "linhas_com_vazamento": {
+    "bruto": 5,
+    "sanitizar": 5,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {
+     "URL com query (qualquer)": 5
+    },
+    "sanitizar": {
+     "URL com query (qualquer)": 5
+    },
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "inbox_categorias.json": {
+   "linhas": 212,
+   "linhas_com_vazamento": {
+    "bruto": 50,
+    "sanitizar": 0,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {
+     "e-mail": 50
+    },
+    "sanitizar": {},
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "inbox_seen.json": {
+   "linhas": 54,
+   "linhas_com_vazamento": {
+    "bruto": 36,
+    "sanitizar": 0,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {
+     "e-mail": 36
+    },
+    "sanitizar": {},
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "vigia_estado.json": {
+   "linhas": 8,
+   "linhas_com_vazamento": {
+    "bruto": 0,
+    "sanitizar": 0,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {},
+    "sanitizar": {},
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "whatsapp_fila.json": {
+   "linhas": 3,
+   "linhas_com_vazamento": {
+    "bruto": 0,
+    "sanitizar": 0,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {},
+    "sanitizar": {},
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "whatsapp_ids_enviados.json": {
+   "linhas": 1,
+   "linhas_com_vazamento": {
+    "bruto": 0,
+    "sanitizar": 0,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {},
+    "sanitizar": {},
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "whatsapp_seen.json": {
+   "linhas": 1614,
+   "linhas_com_vazamento": {
+    "bruto": 2,
+    "sanitizar": 2,
+    "+url": 2
+   },
+   "ocorrencias": {
+    "bruto": {
+     "telefone sem 55 (DDD+9)": 2
+    },
+    "sanitizar": {
+     "telefone sem 55 (DDD+9)": 2
+    },
+    "+url": {
+     "telefone sem 55 (DDD+9)": 2
+    }
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "whatsapp_enviados.jsonl": {
+   "linhas": 4,
+   "linhas_com_vazamento": {
+    "bruto": 4,
+    "sanitizar": 0,
+    "+url": 0
+   },
+   "ocorrencias": {
+    "bruto": {
+     "telefone +55/55": 6,
+     "telefone sem 55 (DDD+9)": 2
+    },
+    "sanitizar": {},
+    "+url": {}
+   },
+   "ja_mascarados_no_arquivo": {
+    "telefone mascarado": 0,
+    "e-mail mascarado (domínio visível)": 0
+   },
+   "nomes_de_chave_que_sobram_apos_sanitizar": {}
+  },
+  "journal.txt": {
+   "antes de 2026-10-31T15:08": {
+    "linhas": 16857,
+    "linhas_com_vazamento": {
+     "bruto": 82,
+     "sanitizar": 75,
+     "+url": 9
+    },
+    "ocorrencias": {
+     "bruto": {
+      "CPF": 1,
+      "IPv4": 4120,
+      "URL com query (qualquer)": 68,
+      "WhatsApp @lid": 8,
+      "e-mail": 7
+     },
+     "sanitizar": {
+      "CPF": 1,
+      "IPv4": 4120,
+      "URL com query (qualquer)": 68,
+      "WhatsApp @lid": 8
+     },
+     "+url": {
+      "CPF": 1,
+      "IPv4": 4120,
+      "WhatsApp @lid": 8
+     }
+    },
+    "ja_mascarados_no_arquivo": {
+     "telefone mascarado": 0,
+     "e-mail mascarado (domínio visível)": 0
+    },
+    "nomes_de_chave_que_sobram_apos_sanitizar": {},
+    "origem_das_linhas_brutas_com_vazamento": {
+     "log() do Alfred": 82
+    }
+   },
+   "depois de 2026-10-31T15:08": {
+    "linhas": 77130,
+    "linhas_com_vazamento": {
+     "bruto": 65,
+     "sanitizar": 65,
+     "+url": 4
+    },
+    "ocorrencias": {
+     "bruto": {
+      "IPv4": 22932,
+      "URL com query (qualquer)": 65,
+      "convite de grupo WhatsApp": 4
+     },
+     "sanitizar": {
+      "IPv4": 22932,
+      "URL com query (qualquer)": 65,
+      "convite de grupo WhatsApp": 4
+     },
+     "+url": {
+      "IPv4": 22932,
+      "convite de grupo WhatsApp": 4
+     }
+    },
+    "ja_mascarados_no_arquivo": {
+     "telefone mascarado": 2,
+     "e-mail mascarado (domínio visível)": 0
+    },
+    "nomes_de_chave_que_sobram_apos_sanitizar": {},
+    "origem_das_linhas_brutas_com_vazamento": {
+     "log() do Alfred": 65
+    }
+   }
+  }
+ },
+ "logs_sintetico": {
+  "casos": [
+   {
+    "caso": "telefone +55 formatado",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "telefone 55 cru / JID",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "telefone sem 55 formatado",
+    "sanitizar": false,
+    "+url": false
+   },
+   {
+    "caso": "telefone sem 55 cru",
+    "sanitizar": false,
+    "+url": false
+   },
+   {
+    "caso": "WhatsApp @lid",
+    "sanitizar": false,
+    "+url": false
+   },
+   {
+    "caso": "e-mail",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "CPF",
+    "sanitizar": false,
+    "+url": false
+   },
+   {
+    "caso": "Bearer",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "Basic auth",
+    "sanitizar": false,
+    "+url": false
+   },
+   {
+    "caso": "NOME_KEY=valor",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "password=valor",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "x-api-key: valor",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "JWT solto",
+    "sanitizar": false,
+    "+url": false
+   },
+   {
+    "caso": "URL usuário:senha",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "URL usuário:senha@IP",
+    "sanitizar": false,
+    "+url": true
+   },
+   {
+    "caso": "URL ?token=",
+    "sanitizar": true,
+    "+url": true
+   },
+   {
+    "caso": "URL ?code= (OAuth)",
+    "sanitizar": false,
+    "+url": true
+   },
+   {
+    "caso": "URL ?sig= (assinada)",
+    "sanitizar": false,
+    "+url": true
+   },
+   {
+    "caso": "URL rastreio ?igsh=",
+    "sanitizar": false,
+    "+url": true
+   },
+   {
+    "caso": "convite de grupo WhatsApp",
+    "sanitizar": false,
+    "+url": false
+   }
+  ],
+  "cobertos_sanitizar": 9,
+  "cobertos_+url": 13,
+  "total": 20
+ },
+ "backup": {
+  "criar_s": 4.204,
+  "criar_cpu_s": 3.326,
+  "tar_mb": 65.19,
+  "tar_modo": "0o600",
+  "verificar_s": 0.883,
+  "membros": 165,
+  "membros_por_area": {
+   "repo": 12,
+   "vault": 153
+  },
+  "bancos_sqlite": 2,
+  "descomprimido_mb": 80.88,
+  "compressao": 0.806,
+  "restaurar_s": 1.945,
+  "restaurar_cpu_s": 1.104,
+  "restaurados_novos": 165,
+  "conferencia": {
+   "sha256_igual_ao_tar": 165,
+   "mtime_igual": 165,
+   "faltando": 0,
+   "bancos": {
+    "integridade_ok": 2,
+    "tabelas": 24,
+    "tabelas_iguais_a_origem": 24,
+    "tabelas_mudaram_depois": 0
+   }
+  },
+  "restaurar_de_novo_s": 1.207,
+  "restaurar_de_novo_sobrescritos": 165,
+  "pico_rss_mb": 71.1,
+  "pasta_temporaria_apagada": true
+ }
+}
