@@ -1,0 +1,73 @@
+# odysseus
+requirements: 51 — exata 6, piso 11, solta 34
+imagens: 12 — digest 9, tag fixa 0, móvel 3
+modelos Ollama: 0 — tag nomeada 0, sem tag/latest 0
+
+## requirements
+  requirements-bootstrap.txt | pip | exata
+  requirements-bootstrap.txt | certifi | exata
+  requirements-dev.txt | pytest-xdist[psutil]>=3.8,<4 | piso
+  requirements-dev.txt | playwright==1.62.0 | exata
+  requirements-optional.txt | rapidocr==3.9.2 | exata
+  requirements-optional.txt | onnxruntime>=1.20,<2 | piso
+  requirements-optional.txt | faster-whisper | solta
+  requirements-optional.txt | kokoro==0.9.4 | exata
+  requirements-optional.txt | soundfile | piso
+  requirements-optional.txt | ddgs | solta
+  requirements-optional.txt | PyMuPDF | solta
+  requirements-optional.txt | markitdown[docx,pptx,xlsx,xls]==0.1.6 | exata
+  requirements-optional.txt | psd-tools | solta
+  requirements.txt | fastapi | solta
+  requirements.txt | uvicorn | solta
+  requirements.txt | python-multipart | solta
+  requirements.txt | python-dotenv | solta
+  requirements.txt | httpx | solta
+  requirements.txt | certifi>=2026.10.23 | piso
+  requirements.txt | httpcore>=1.0,<2.0 | piso
+  requirements.txt | pydantic>=2.13.4 | piso
+  requirements.txt | pydantic-settings>=2.14.1 | piso
+  requirements.txt | SQLAlchemy | solta
+  requirements.txt | pypdf | solta
+  requirements.txt | pypdfium2 | solta
+  requirements.txt | Pillow>=13.0.0 | piso
+  requirements.txt | faster-whisper | solta
+  requirements.txt | pdfplumber | solta
+  requirements.txt | beautifulsoup4 | solta
+  requirements.txt | charset-normalizer | solta
+  requirements.txt | numpy | solta
+  requirements.txt | chromadb-client | solta
+  requirements.txt | grpcio>=1.84.1 | piso
+  requirements.txt | fastembed>=0.9.1 | piso
+  requirements.txt | youtube-transcript-api | solta
+  requirements.txt | yt-dlp | solta
+  requirements.txt | markdown | solta
+  requirements.txt | nh3 | solta
+  requirements.txt | icalendar | solta
+  requirements.txt | python-dateutil | solta
+  requirements.txt | caldav | solta
+  requirements.txt | cryptography | solta
+  requirements.txt | bcrypt | solta
+  requirements.txt | mcp<2 | piso
+  requirements.txt | pyotp | solta
+  requirements.txt | qrcode[pil] | solta
+  requirements.txt | croniter | solta
+  requirements.txt | pytest | solta
+  requirements.txt | pytest-asyncio | solta
+  requirements.txt | httpx2 | solta
+  requirements.txt | psycopg2-binary | solta
+
+## imagens
+  docker-compose.gpu-amd.yml | ghcr.io/odysseus-dev/odysseus:latest | móvel
+  docker-compose.gpu-amd.yml | docker.io/chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6 | digest
+  docker-compose.gpu-amd.yml | docker.io/searxng/searxng:2026.10.24-ef0ec03da@sha256:7c7cbe509429e82755104b2a95f52085a98633c95d53f44e4e905fa3a59f08c8 | digest
+  docker-compose.gpu-amd.yml | docker.io/binwiederhier/ntfy:v2.32.0@sha256:59250e1d8be2ee2186c4560322f625faef22ace380331f05b63f8842dbd62602 | digest
+  docker-compose.gpu-nvidia.yml | ghcr.io/odysseus-dev/odysseus:latest | móvel
+  docker-compose.gpu-nvidia.yml | docker.io/chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6 | digest
+  docker-compose.gpu-nvidia.yml | docker.io/searxng/searxng:2026.10.24-ef0ec03da@sha256:7c7cbe509429e82755104b2a95f52085a98633c95d53f44e4e905fa3a59f08c8 | digest
+  docker-compose.gpu-nvidia.yml | docker.io/binwiederhier/ntfy:v2.32.0@sha256:59250e1d8be2ee2186c4560322f625faef22ace380331f05b63f8842dbd62602 | digest
+  docker-compose.yml | ghcr.io/odysseus-dev/odysseus:latest | móvel
+  docker-compose.yml | docker.io/chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6 | digest
+  docker-compose.yml | docker.io/searxng/searxng:2026.10.24-ef0ec03da@sha256:7c7cbe509429e82755104b2a95f52085a98633c95d53f44e4e905fa3a59f08c8 | digest
+  docker-compose.yml | docker.io/binwiederhier/ntfy:v2.32.0@sha256:59250e1d8be2ee2186c4560322f625faef22ace380331f05b63f8842dbd62602 | digest
+
+## modelos

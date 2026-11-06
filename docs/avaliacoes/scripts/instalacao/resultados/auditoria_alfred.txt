@@ -1,0 +1,42 @@
+# avaliacao-instalacao-090828
+requirements: 22 — exata 1, piso 0, solta 21
+imagens: 6 — digest 1, tag fixa 1, móvel 4
+modelos Ollama: 4 — tag nomeada 2, sem tag/latest 2
+
+## requirements
+  services/briefing/requirements.txt | httpx | solta
+  services/briefing/requirements.txt | feedparser | solta
+  services/briefing/requirements.txt | pyyaml | solta
+  services/briefing/requirements.txt | edge-tts | solta
+  services/briefing/requirements.txt | scikit-learn | solta
+  services/inbox/requirements.txt | httpx | solta
+  services/inbox/requirements.txt | pyyaml | solta
+  services/inbox/requirements.txt | edge-tts | solta
+  services/inbox/requirements.txt | scikit-learn | solta
+  services/inbox/requirements.txt | numpy | solta
+  services/inbox/requirements.txt | icalendar | solta
+  services/inbox/requirements.txt | fastapi | solta
+  services/inbox/requirements.txt | uvicorn | solta
+  services/inbox/requirements.txt | jinja2 | solta
+  services/laya/requirements.txt | laya[serve]==0.4.19 | exata
+  services/researcher/requirements.txt | fastapi | solta
+  services/researcher/requirements.txt | uvicorn[standard] | solta
+  services/researcher/requirements.txt | httpx | solta
+  services/researcher/requirements.txt | pyyaml | solta
+  services/researcher/requirements.txt | beautifulsoup4 | solta
+  services/shell-executor/requirements.txt | fastapi | solta
+  services/shell-executor/requirements.txt | uvicorn[standard] | solta
+
+## imagens
+  docker-compose.yml | ghcr.io/open-webui/open-webui:main | móvel
+  docker-compose.yml | searxng/searxng:latest | móvel
+  docker-compose.yml | chromadb/chroma:latest | móvel
+  docker-compose.yml | n8nio/n8n:latest | móvel
+  docker-compose.yml | evoapicloud/evolution-api@sha256:966625532d9076a2381e973a271307d107e6f070450de3abeeea8bd18be07252 | digest
+  docker-compose.yml | postgres:16-alpine | tag fixa
+
+## modelos
+  .env.example | llama3.1:8b | tag nomeada
+  .env.example | nomic-embed-text-v2-moe:latest | sem tag/latest
+  services/scripts/instalar.sh | bge-m3 | sem tag/latest
+  services/scripts/instalar.sh | gemma4:e4b | tag nomeada
