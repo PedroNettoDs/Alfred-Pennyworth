@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Alfred Escrita
+Comment=Abre o WordCraft com a janela do Alfred ao lado
+Exec=/home/netto/dev/Alfred-Pennyworth/services/scripts/alfred-escrita.sh %f
+Icon=/home/netto/dev/Alfred-Pennyworth/docs/Alfred.png
+Terminal=false
+Categories=Office;WordProcessor;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;

@@ -50,7 +50,7 @@ import httpx
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from _shared import lib_ferramentas, lib_memoria, lib_rag  # noqa: E402
+from _shared import lib_ferramentas, lib_memoria, lib_rag, lib_wordcraft  # noqa: E402
 from _shared.lib_alfred import DEFAULT_MODEL_CHAT, DEFAULT_OLLAMA_URL, log, ollama_generate  # noqa: E402
 from _shared.lib_titulo import extrair_titulo_manchete  # noqa: E402
 
@@ -382,11 +382,12 @@ def _historico(conversa_id: str, ate_id: Optional[int] = None) -> tuple[str, lis
     return conv["resumo"], [dict(r) for r in rows][-(HISTORICO + RESUMO_A_CADA):]
 
 
-def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = None) -> list[dict]:
+def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = None, contexto: str = "") -> list[dict]:
     """
     Mensagens do /api/chat: [system, histórico..., user]. O system junta personalidade, bloco "Agora", memória
     (lib_memoria.contexto), RAG (só se _quer_rag) e o resumo das mensagens antigas. `ate_id` = id da mensagem de
-    Pedro deste turno (o histórico pega só as anteriores a ela).
+    Pedro deste turno (o histórico pega só as anteriores a ela). `contexto` = bloco só deste turno (o documento
+    aberto na janela de escrita); vai junto da pergunta porque, no fim de um system longo, o modelo não o usava.
     """
     partes = [_personalidade(), bloco_agora()]
     try:
@@ -403,7 +404,7 @@ def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = Non
         partes.append(f"## Resumo da conversa até aqui\n{resumo}")
     msgs = [{"role": "system", "content": "\n\n".join(p for p in partes if p)}]
     msgs += [{"role": m["papel"], "content": m["texto"]} for m in historico]
-    msgs.append({"role": "user", "content": pergunta})
+    msgs.append({"role": "user", "content": f"{contexto}\n\n## Pedido de Pedro\n{pergunta}" if contexto else pergunta})
     return msgs
 
 
@@ -450,9 +451,10 @@ class Turno:
     """Um pedido de Pedro e a resposta do Alfred. Estado: na_fila → rodando ⇄ aguardando_aprovacao →
     fim | parado | erro."""
 
-    def __init__(self, conversa_id: str, pergunta: str, modelo: str):
+    def __init__(self, conversa_id: str, pergunta: str, modelo: str, contexto: str = "", num_ctx: Optional[int] = None):
         self.id = secrets.token_hex(8)
         self.conversa_id, self.pergunta, self.modelo = conversa_id, pergunta, modelo
+        self.contexto, self.num_ctx = contexto, num_ctx
         self.mensagem_id: Optional[int] = None
         self.fila: queue.Queue = queue.Queue()
         self.parar = threading.Event()
@@ -491,11 +493,13 @@ def _emitir(turno: Turno, tipo: str, **dados) -> None:
     turno.fila.put({"tipo": tipo, "turno": turno.id, "n": turno._n, **dados})
 
 
-def enviar(conversa_id: str, texto: str, modelo: Optional[str] = None) -> Turno:
+def enviar(conversa_id: str, texto: str, modelo: Optional[str] = None, contexto: str = "",
+           num_ctx: Optional[int] = None) -> Turno:
     """
     Grava a mensagem de Pedro e põe o turno na fila do chat. → Turno (eventos em turno.fila).
     Conversa inexistente → KeyError; texto vazio → ValueError; já há turno em andamento nesta conversa →
-    RuntimeError (uma pergunta por vez: a ordem do histórico depende disso).
+    RuntimeError (uma pergunta por vez: a ordem do histórico depende disso). `contexto` = bloco extra só deste turno
+    (também libera as ferramentas documento_*); `num_ctx` troca o do perfis.yml neste turno.
     """
     global _ATIVOS, _EXECUTOR
     texto = (texto or "").strip()
@@ -504,7 +508,7 @@ def enviar(conversa_id: str, texto: str, modelo: Optional[str] = None) -> Turno:
     with _LOCK:
         if any(t.conversa_id == conversa_id and t.terminado is None for t in _TURNOS.values()):
             raise RuntimeError("já há um turno em andamento nesta conversa")
-    turno = Turno(conversa_id, texto, modelo or _cfg()["modelo"])
+    turno = Turno(conversa_id, texto, modelo or _cfg()["modelo"], contexto, num_ctx)
     with closing(_conectar()) as con, con:
         conv = con.execute("SELECT titulo FROM conversas WHERE id = ?", (conversa_id,)).fetchone()
         if not conv:
@@ -701,9 +705,12 @@ def _turno(turno: Turno) -> None:
         return
     turno.estado = "rodando"
     cfg = _cfg()
+    cfg["num_ctx"] = turno.num_ctx or cfg["num_ctx"]
     t0 = time.monotonic()
-    msgs = montar_contexto(turno.conversa_id, turno.pergunta, ate_id=turno.mensagem_id)
+    msgs = montar_contexto(turno.conversa_id, turno.pergunta, ate_id=turno.mensagem_id, contexto=turno.contexto)
     ferramentas = lib_ferramentas.esquemas()
+    if not turno.contexto:   # sem documento aberto, documento_* só gastariam contexto
+        ferramentas = [f for f in ferramentas if f["function"]["name"] not in lib_wordcraft.FERRAMENTAS]
     # modelo_ferramentas (perfis.yml) diferente: ele decide as ferramentas sem mostrar texto, e o modelo do turno
     # escreve a resposta final sem tools — ver about.md (na 3060 os dois não cabem juntos)
     modelo_f = cfg["modelo_ferramentas"] or turno.modelo

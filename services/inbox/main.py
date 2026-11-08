@@ -651,6 +651,8 @@ def blog_resultado(pasta: str, arquivo: str, req: BlogResultadoRequest, authoriz
 # Painel do Alfred (interface web local de aprovações) — rotas em painel.py (fora se faltar o jinja2)
 if painel is not None:
     app.include_router(painel.router)
+    import escrita  # noqa: E402  (janela do Alfred ao lado do WordCraft: /painel/escrita)
+    app.include_router(escrita.router)
 
 
 if __name__ == "__main__":

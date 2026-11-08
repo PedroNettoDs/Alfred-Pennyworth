@@ -1,0 +1,42 @@
+{#
+  Janela do Alfred ao lado do WordCraft (escrita.py). Sem a navegação do Painel: a janela é estreita.
+  Variáveis: csrf (str).
+#}
+{%- extends "base.html" -%}
+{%- block titulo %}Escrita{% endblock -%}
+{%- block head %}
+  <link rel="stylesheet" href="/painel/static/escrita.css">
+  <script src="/painel/static/escrita.js" defer></script>
+{%- endblock -%}
+{%- block pagina %}
+  <main class="escrita">
+    <header class="escrita__topo">
+      <div class="escrita__identidade">
+        <h1 class="escrita__nome">Alfred</h1>
+        <p id="documento" class="escrita__documento">Procurando o WordCraft…</p>
+      </div>
+      <button id="nova" class="botao botao--discreto botao--pequeno" type="button">Nova conversa</button>
+    </header>
+
+    <section class="escrita__contexto" aria-label="O que Alfred vai considerar">
+      <fieldset class="escrita__alcance">
+        <legend class="sr-only">Alfred vai considerar</legend>
+        <label><input type="radio" name="alcance" value="selecao" checked><span>Seleção</span></label>
+        <label><input type="radio" name="alcance" value="documento"><span>Documento inteiro</span></label>
+      </fieldset>
+      <p id="previa" class="escrita__previa" aria-live="polite"></p>
+      <p id="contagem" class="escrita__contagem"></p>
+    </section>
+
+    <section id="mensagens" class="escrita__mensagens" aria-live="polite" aria-label="Conversa"></section>
+
+    <form id="formulario" class="escrita__envio">
+      <label class="sr-only" for="texto">Mensagem para Alfred</label>
+      <textarea id="texto" class="escrita__campo" rows="3" placeholder="Pergunte sobre o trecho, peça uma revisão ou uma pesquisa…"></textarea>
+      <div class="escrita__botoes">
+        <button id="parar" class="botao botao--discreto botao--pequeno" type="button" hidden>Parar</button>
+        <button id="enviar" class="botao botao--primario botao--pequeno" type="submit">Enviar</button>
+      </div>
+    </form>
+  </main>
+{%- endblock %}

@@ -1,0 +1,136 @@
+/* Janela do Alfred ao lado do WordCraft (escrita.html). Usa os tokens de painel.css. */
+
+.escrita {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--fundo);
+}
+
+.escrita__topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding: var(--e-3) var(--e-4);
+  border-bottom: 1px solid var(--borda);
+}
+.escrita__identidade { min-width: 0; }
+.escrita__nome { font-size: var(--t-md); color: var(--dourado); }
+.escrita__documento {
+  margin: 0;
+  font-size: var(--t-xs);
+  color: var(--texto-suave);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.escrita__documento--erro { color: var(--ambar); white-space: normal; }
+
+.escrita__contexto {
+  padding: var(--e-3) var(--e-4);
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borda);
+}
+.escrita__alcance { display: flex; gap: var(--e-2); margin: 0 0 var(--e-2); padding: 0; border: 0; }
+.escrita__alcance label { cursor: pointer; }
+.escrita__alcance input { position: absolute; opacity: 0; }
+.escrita__alcance span {
+  display: inline-block;
+  padding: var(--e-1) var(--e-3);
+  font-size: var(--t-xs);
+  color: var(--texto-suave);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+}
+.escrita__alcance input:checked + span { color: var(--sobre-dourado); background: var(--dourado); border-color: var(--dourado); }
+.escrita__alcance input:focus-visible + span { outline: 2px solid var(--foco); outline-offset: 2px; }
+.escrita__previa {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--texto);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.escrita__contagem { margin: var(--e-1) 0 0; font-size: var(--t-xs); color: var(--texto-suave); }
+
+.escrita__mensagens {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--e-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+}
+.escrita__erro { margin: 0; font-size: var(--t-sm); color: var(--vermelho); }
+
+.pergunta {
+  align-self: flex-end;
+  max-width: 90%;
+  padding: var(--e-2) var(--e-3);
+  background: var(--superficie-2);
+  border-radius: var(--raio-g);
+}
+.pergunta__citacao {
+  margin: 0 0 var(--e-1);
+  font-size: var(--t-xs);
+  color: var(--texto-suave);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.pergunta__texto { margin: 0; white-space: pre-wrap; }
+
+.resposta__ferramentas { display: flex; flex-direction: column; gap: var(--e-2); }
+.resposta__ferramentas:not(:empty) { margin-top: var(--e-3); }
+.resposta__corpo { font-size: var(--t-md); line-height: 1.5; overflow-wrap: anywhere; }
+.resposta__corpo--stream { white-space: pre-wrap; }
+.resposta__nota { margin: var(--e-2) 0 0; font-size: var(--t-xs); color: var(--texto-suave); }
+
+.ferramenta { font-size: var(--t-xs); color: var(--texto-suave); }
+.ferramenta__titulo { cursor: pointer; }
+.ferramenta__resultado,
+.aprovacao__texto {
+  margin: var(--e-1) 0 0;
+  padding: var(--e-2);
+  max-height: 14rem;
+  overflow: auto;
+  font-family: var(--fonte-mono);
+  font-size: var(--t-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--superficie);
+  border-radius: var(--raio);
+}
+
+.aprovacao {
+  padding: var(--e-3);
+  background: var(--ambar-fundo);
+  border: 1px solid var(--ambar);
+  border-radius: var(--raio);
+}
+.aprovacao__titulo { margin: 0; font-size: var(--t-sm); font-weight: 600; color: var(--ambar); }
+.aprovacao__rotulo { margin: var(--e-2) 0 0; font-size: var(--t-xs); color: var(--texto-suave); }
+.aprovacao__acoes { display: flex; gap: var(--e-2); margin-top: var(--e-3); }
+.aprovacao__decisao { font-size: var(--t-xs); color: var(--texto-suave); }
+
+.escrita__envio {
+  padding: var(--e-3) var(--e-4);
+  background: var(--superficie);
+  border-top: 1px solid var(--borda);
+}
+.escrita__campo {
+  width: 100%;
+  padding: var(--e-2);
+  font: inherit;
+  color: var(--texto);
+  background: var(--fundo);
+  border: 1px solid var(--borda-forte);
+  border-radius: var(--raio);
+  resize: vertical;
+}
+.escrita__botoes { display: flex; justify-content: flex-end; gap: var(--e-2); margin-top: var(--e-2); }
