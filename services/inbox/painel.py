@@ -305,7 +305,8 @@ def _iso(valor) -> str:
 
 def _markdown_seguro(texto: str) -> Markup:
     """
-    Markdown mínimo do .md da pendência (títulos, listas, citações, negrito, itálico, código e links http/https).
+    Markdown mínimo do .md da pendência e das respostas do Alfred (títulos, listas com marcador ou numeradas,
+    citações, negrito, itálico, código em linha e em cerca ```, links http/https).
     Tudo é escapado ANTES de virar tag: nenhum HTML vindo do e-mail ou do LLM chega à página.
     """
     def inline(s: str) -> str:
@@ -322,8 +323,10 @@ def _markdown_seguro(texto: str) -> Markup:
     def fechar():
         nonlocal bloco, tipo
         if bloco:
-            if tipo == "ul":
-                out.append("<ul>" + "".join(f"<li>{inline(x)}</li>" for x in bloco) + "</ul>")
+            if tipo in ("ul", "ol"):
+                out.append(f"<{tipo}>" + "".join(f"<li>{inline(x)}</li>" for x in bloco) + f"</{tipo}>")
+            elif tipo == "code":
+                out.append("<pre><code>" + "\n".join(str(escape(x)) for x in bloco) + "</code></pre>")
             elif tipo == "quote":
                 out.append("<blockquote><p>" + "<br>".join(inline(x) for x in bloco) + "</p></blockquote>")
             else:
@@ -332,6 +335,15 @@ def _markdown_seguro(texto: str) -> Markup:
 
     for linha in (texto or "").splitlines():
         s = linha.rstrip()
+        if re.fullmatch(r"\s*```[\w+-]*\s*", s):   # cerca de código: abre ou fecha; dentro, tudo sai literal
+            abrindo = tipo != "code"
+            fechar()
+            if abrindo:
+                tipo = "code"
+            continue
+        if tipo == "code":
+            bloco.append(s)
+            continue
         if not s.strip() or re.fullmatch(r"\s*-{3,}\s*", s):
             fechar()
             continue
@@ -343,6 +355,11 @@ def _markdown_seguro(texto: str) -> Markup:
         if m := re.match(r"^\s*[-*]\s+(.*)", s):
             if tipo != "ul":
                 fechar(); tipo = "ul"
+            bloco.append(m.group(1))
+            continue
+        if m := re.match(r"^\s*\d{1,3}[.)]\s+(.*)", s):
+            if tipo != "ol":
+                fechar(); tipo = "ol"
             bloco.append(m.group(1))
             continue
         if m := re.match(r"^\s*>\s?(.*)", s):

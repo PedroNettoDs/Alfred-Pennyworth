@@ -1,0 +1,221 @@
+/*
+ * Aba Conversa (conversa.html): conversas à esquerda, mensagens em stream no centro, campo embaixo.
+ * Usa os tokens de painel.css. Mensagens, chips de ferramenta e cartão de aprovação têm a mesma cara
+ * da janela de escrita (escrita.css).
+ */
+
+/* <main> ocupa a altura toda: só as mensagens e a lista rolam. */
+.conteudo--cheio {
+  display: flex; flex-direction: column;
+  height: 100vh; max-width: none;
+  padding: var(--e-5) var(--e-6) var(--e-4);
+}
+.conteudo--cheio .tela-cabecalho { margin-bottom: var(--e-4); }
+.conteudo--cheio .tela-acoes { align-items: center; }
+
+/* ── Seletor de modo (Conversa | Code) ──────────────────────────────────── */
+.modos {
+  display: inline-flex; gap: 2px;
+  padding: 2px;
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+}
+.modo {
+  display: inline-flex; align-items: center; gap: var(--e-2);
+  min-height: 2rem;
+  padding: var(--e-1) var(--e-3);
+  border: 0; border-radius: 4px;
+  background: transparent; color: var(--texto-suave);
+  font: inherit; font-size: var(--t-sm); font-weight: 600;
+  cursor: pointer;
+}
+.modo[aria-pressed="true"] { background: var(--superficie-2); color: var(--texto); box-shadow: inset 0 -2px 0 var(--dourado); }
+.modo:disabled { cursor: not-allowed; }
+.modo__em-breve {
+  padding: 0 var(--e-2);
+  border: 1px dashed var(--borda-forte); border-radius: 999px;
+  font-size: var(--t-xs); font-weight: 500;
+}
+
+/* ── Grade: lista + painel ──────────────────────────────────────────────── */
+.chat {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: var(--e-4);
+}
+
+.chat__lista {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-g);
+  overflow: hidden;
+}
+.chat__busca { padding: var(--e-3); border-bottom: 1px solid var(--borda); }
+.chat__busca .entrada { min-height: 2.25rem; font-size: var(--t-sm); }
+
+.conversas {
+  flex: 1; min-height: 0;
+  list-style: none; margin: 0; padding: var(--e-2);
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.conversas__link {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--e-2) var(--e-3);
+  border-radius: var(--raio);
+  border-left: 3px solid transparent;
+  color: var(--texto-suave); text-decoration: none;
+  font-size: var(--t-sm);
+}
+.conversas__link:hover { background: var(--superficie-2); color: var(--texto); }
+.conversas__item[aria-current="page"] .conversas__link {
+  background: var(--superficie-2); color: var(--texto);
+  border-left-color: var(--dourado);
+}
+.conversas__titulo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversas__trecho {
+  font-size: var(--t-xs);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.conversas__quando { font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.conversas__vazio { padding: var(--e-4) var(--e-3); font-size: var(--t-sm); color: var(--texto-suave); text-align: center; }
+
+.chat__painel {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-g);
+}
+
+/* ── Mensagens ──────────────────────────────────────────────────────────── */
+.chat__mensagens {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: var(--e-5) var(--e-5) var(--e-4);
+  display: flex; flex-direction: column; gap: var(--e-5);
+}
+.chat__mensagens > * { width: 100%; max-width: 52rem; margin-inline: auto; }
+.chat__mensagens .vazio { margin-block: auto; }
+
+.chat__boas-vindas { margin-block: auto; padding: var(--e-7) var(--e-4); text-align: center; color: var(--texto-suave); }
+.chat__boas-vindas .icone { width: 2.5rem; height: 2.5rem; color: var(--dourado); }
+.chat__boas-vindas p { margin: var(--e-3) auto 0; max-width: 34rem; }
+
+.chat__erro { margin: 0; font-size: var(--t-sm); color: var(--vermelho); }
+
+.turno { display: flex; flex-direction: column; gap: var(--e-3); }
+
+.pergunta {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: var(--e-2) var(--e-4);
+  background: var(--superficie-2);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-g) var(--raio-g) 4px var(--raio-g);
+}
+.pergunta__texto { margin: 0; white-space: pre-wrap; }
+
+.resposta { display: flex; flex-direction: column; gap: var(--e-3); }
+.resposta__ferramentas { display: flex; flex-direction: column; gap: var(--e-2); }
+.resposta__ferramentas:empty { display: none; }
+.resposta__corpo { line-height: 1.55; overflow-wrap: anywhere; }
+.resposta__corpo > * + * { margin-top: var(--e-3); }
+.resposta__corpo--stream { white-space: pre-wrap; }
+.resposta__corpo--stream:empty::after { content: "Alfred está pensando…"; color: var(--texto-suave); }
+.resposta__corpo h2, .resposta__corpo h3, .resposta__corpo h4 { margin-top: var(--e-4); font-size: var(--t-md); }
+.resposta__corpo ul, .resposta__corpo ol { padding-left: var(--e-5); }
+.resposta__corpo li + li { margin-top: var(--e-1); }
+.resposta__corpo blockquote { margin: 0; padding-left: var(--e-4); border-left: 3px solid var(--borda-forte); color: var(--texto-suave); }
+.resposta__corpo pre {
+  margin: 0; padding: var(--e-3) var(--e-4);
+  background: var(--fundo); border: 1px solid var(--borda); border-radius: var(--raio);
+  overflow-x: auto; font-size: var(--t-sm); line-height: 1.45;
+}
+.resposta__corpo :not(pre) > code { padding: 0 0.3em; background: var(--fundo); border-radius: 4px; }
+.resposta__nota { margin: 0; font-size: var(--t-xs); color: var(--texto-suave); }
+
+/* ── Chip de ferramenta (<details>) ─────────────────────────────────────── */
+.ferramenta {
+  font-size: var(--t-xs); color: var(--texto-suave);
+  background: var(--fundo);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+}
+.ferramenta__titulo {
+  display: flex; align-items: center; gap: var(--e-2);
+  padding: var(--e-1) var(--e-3);
+  cursor: pointer; list-style: none;
+  font-weight: 600; font-family: var(--fonte-mono);
+}
+.ferramenta__titulo::-webkit-details-marker { display: none; }
+.ferramenta__titulo::before {   /* seta que gira ao abrir (igual ao .recolhivel) */
+  content: ""; width: 0.4rem; height: 0.4rem;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); transition: transform var(--transicao);
+}
+.ferramenta[open] > .ferramenta__titulo::before { transform: rotate(45deg); }
+.ferramenta[data-estado="rodando"] > .ferramenta__titulo::after {   /* girando enquanto executa */
+  content: ""; margin-left: auto;
+  width: 0.8em; height: 0.8em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: girar 0.7s linear infinite;
+}
+.ferramenta[data-estado="erro"] > .ferramenta__titulo { color: var(--vermelho); }
+.ferramenta__rotulo { margin: var(--e-2) var(--e-3) 0; font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+.ferramenta__codigo {
+  margin: var(--e-1) var(--e-3) var(--e-3);
+  padding: var(--e-2);
+  max-height: 14rem; overflow: auto;
+  font-family: var(--fonte-mono); font-size: var(--t-xs); color: var(--texto);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--superficie); border-radius: var(--raio);
+}
+
+/* ── Cartão de aprovação (ferramenta perigosa) ──────────────────────────── */
+.aprovacao {
+  padding: var(--e-3) var(--e-4);
+  background: var(--ambar-fundo);
+  border: 1px solid var(--ambar);
+  border-radius: var(--raio);
+}
+.aprovacao__titulo { margin: 0; font-size: var(--t-sm); font-weight: 600; color: var(--ambar); }
+.aprovacao__rotulo { margin: var(--e-2) 0 0; font-size: var(--t-xs); color: var(--texto-suave); }
+.aprovacao__texto {
+  margin: var(--e-1) 0 0; padding: var(--e-2);
+  max-height: 14rem; overflow: auto;
+  font-family: var(--fonte-mono); font-size: var(--t-xs);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--superficie); border-radius: var(--raio);
+}
+.aprovacao__acoes { display: flex; gap: var(--e-2); margin-top: var(--e-3); }
+.aprovacao__decisao { font-size: var(--t-xs); color: var(--texto-suave); }
+
+/* ── Campo de envio ─────────────────────────────────────────────────────── */
+.chat__envio { padding: var(--e-3) var(--e-4) var(--e-4); border-top: 1px solid var(--borda); }
+.chat__envio > * { max-width: 52rem; margin-inline: auto; }
+.chat__campo {
+  display: block; width: 100%; min-height: 3.5rem;
+  padding: var(--e-2) var(--e-3);
+  font: inherit; color: var(--texto);
+  background: var(--fundo);
+  border: 1px solid var(--borda-forte); border-radius: var(--raio);
+  resize: vertical;
+}
+.chat__campo::placeholder { color: var(--texto-suave); opacity: 1; }
+.chat__campo:hover { border-color: var(--texto-suave); }
+.chat__campo:focus-visible { outline-offset: 0; border-color: var(--foco); }
+.chat__campo:disabled { background: var(--superficie-2); color: var(--texto-suave); }
+.chat__botoes { display: flex; align-items: center; justify-content: flex-end; gap: var(--e-2); margin-top: var(--e-2); }
+.chat__dica { margin: 0 auto 0 0; font-size: var(--t-xs); color: var(--texto-suave); }
+
+/* ── Responsivo ─────────────────────────────────────────────────────────── */
+@media (max-width: 899px) {
+  .conteudo--cheio { height: auto; min-height: calc(100vh - 7rem); padding: var(--e-5) var(--e-4) var(--e-4); }
+  .chat { grid-template-columns: minmax(0, 1fr); }
+  .chat__lista { max-height: 14rem; }
+  .chat__mensagens { min-height: 18rem; }
+  .chat__dica { display: none; }
+}

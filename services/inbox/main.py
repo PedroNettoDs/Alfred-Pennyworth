@@ -653,6 +653,8 @@ if painel is not None:
     app.include_router(painel.router)
     import escrita  # noqa: E402  (janela do Alfred ao lado do WordCraft: /painel/escrita)
     app.include_router(escrita.router)
+    import painel_conversa  # noqa: E402  (aba Conversa do Painel: /painel/conversa)
+    app.include_router(painel_conversa.router)
 
 
 if __name__ == "__main__":

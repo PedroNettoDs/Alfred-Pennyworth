@@ -195,6 +195,17 @@ def mensagens(conversa_id: str) -> list[dict]:
                                              (conversa_id,))]
 
 
+def apagar_conversa(conversa_id: str) -> bool:
+    """Apaga a conversa com mensagens (a FTS acompanha pelo gatilho) e aprovações. False se não existe; RuntimeError
+    com turno em andamento (ele ainda vai gravar nela)."""
+    if turno_ativo(conversa_id):
+        raise RuntimeError("já há um turno em andamento nesta conversa")
+    with closing(_conectar()) as con, con:
+        con.execute("DELETE FROM mensagens WHERE conversa_id = ?", (conversa_id,))
+        con.execute("DELETE FROM aprovacoes WHERE conversa_id = ?", (conversa_id,))
+        return con.execute("DELETE FROM conversas WHERE id = ?", (conversa_id,)).rowcount > 0
+
+
 def buscar(consulta: str, limite: int = 20) -> list[dict]:
     """FTS5 nas mensagens de Pedro e do Alfred → [{conversa_id, titulo, mensagem_id, papel, trecho}]."""
     palavras = list(dict.fromkeys(re.findall(r"\w{2,}", (consulta or "").lower())))[:20]
@@ -486,6 +497,12 @@ def ocupado() -> bool:
 def obter_turno(turno_id: str) -> Optional[Turno]:
     with _LOCK:
         return _TURNOS.get(turno_id)
+
+
+def turno_ativo(conversa_id: str) -> Optional[Turno]:
+    """O turno na fila ou rodando nesta conversa, ou None (a aba Conversa religa o SSE depois de recarregar)."""
+    with _LOCK:
+        return next((t for t in _TURNOS.values() if t.conversa_id == conversa_id and t.terminado is None), None)
 
 
 def _emitir(turno: Turno, tipo: str, **dados) -> None:

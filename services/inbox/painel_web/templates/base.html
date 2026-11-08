@@ -1,8 +1,9 @@
 {#
   Esqueleto de todas as telas do Painel do Alfred.
-  Variáveis: csrf (str), ativo ("inicio"|"pendencias"|"agenda"|"limpeza"|"pesquisar"|"sistema"),
+  Variáveis: csrf (str), ativo ("inicio"|"conversa"|"pendencias"|"agenda"|"limpeza"|"pesquisar"|"sistema"),
              contadores (dict de /painel/api/contadores; opcional), simulado (bool; opcional).
-  Blocos:    titulo (texto do <title>), conteudo (dentro de <main>), pagina (o <body> inteiro — só o login troca).
+  Blocos:    titulo (texto do <title>), conteudo (dentro de <main>), pagina (o <body> inteiro — só o login troca),
+             classe_conteudo (classe extra do <main>; a Conversa usa " conteudo--cheio" para ocupar a altura toda).
   Sem <script> nem style= inline: a CSP só aceita painel.js e painel.css.
 #}
 {%- import "_macros.html" as m -%}
@@ -37,6 +38,7 @@
         <ul class="nav__lista">
           {%- for chave, url, rotulo, nome_icone, contador in [
                 ("inicio",     "/painel",            "Início",     "inicio",     none),
+                ("conversa",   "/painel/conversa",   "Conversa",   "conversa",   none),
                 ("pendencias", "/painel/pendencias", "Pendências", "pendencias", "aguardando"),
                 ("agenda",     "/painel/agenda",     "Agenda",     "agenda",     none),
                 ("limpeza",    "/painel/limpeza",    "Limpeza",    "limpeza",    "limpeza_aguardando"),
@@ -69,7 +71,7 @@
       </div>
     </header>
 
-    <main id="conteudo" class="conteudo" tabindex="-1">
+    <main id="conteudo" class="conteudo{% block classe_conteudo %}{% endblock %}" tabindex="-1">
       <noscript>
         <div class="aviso aviso--aguardando"><p class="aviso__texto">O painel precisa de JavaScript para executar ações e se atualizar sozinho.</p></div>
       </noscript>

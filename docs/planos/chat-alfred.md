@@ -5,7 +5,24 @@ com o Alfred — mesma personalidade, sabendo da agenda, das mensagens, dos estu
 combinado, com busca na internet — 100% local. É a Etapa 2 de
 [remover-openwebui.md](remover-openwebui.md), detalhada.
 
-## Onde estamos (31/10/2026)
+## Onde estamos (08/11/2026)
+
+- **Fase 1 (motor) pronta** — `services/inbox/conversa.py` (ver `services/inbox/about.md`, "Conversa com o Alfred —
+  o motor"): contexto, laço de ferramentas, aprovação, SQLite, resumo, CLI `run.sh conversa`.
+- **Fase 2 (ferramentas) pronta** — as 9 da tabela abaixo existem em `_shared/lib_ferramentas.py`; `buscar_cofre`
+  já passa pelo `lib_rag`. Entraram depois `buscar_artigos` (bases acadêmicas) e as `documento_*` da janela de escrita.
+- **Fase 3 (aba Conversa) pronta em 08/11** — `services/inbox/painel_conversa.py` + `painel_web/templates/conversa.html`
+  + `static/conversa.css` / `conversa.js`, item **Conversa** no menu entre Início e Pendências. Entregue: lista de
+  conversas com busca FTS5, resposta em stream por SSE, chips de ferramenta (nome, argumentos, resultado), cartão
+  [Executar] [Não], **Parar**, **Nova conversa**, **Apagar**, página recarregada no meio do turno religa o stream, e o
+  seletor **Conversa | Code** no topo com o Code só como lugar reservado ("em breve"; a configuração dele vem depois).
+  O `_markdown_seguro` do Painel ganhou cerca de código ``` e lista numerada para as respostas. Testes em
+  `tests/test_painel_conversa.py`. **Ficou para depois:** citações `[n]` clicáveis (nota/URL), seletor de modelo,
+  🎤/🔊 (Fase 6).
+- O Open WebUI saiu em 05/11 ([remover-openwebui.md](remover-openwebui.md)); a Fase 4 (personalidade) e a 5 (roteador)
+  continuam abertas.
+
+## De onde partimos (31/10/2026)
 
 **Painel** (`services/inbox/painel.py` + `painel_web/`, FastAPI + Jinja + `painel.js` sem framework,
 CSP `default-src 'self'`, só 127.0.0.1, login pelo `SHELL_EXECUTOR_TOKEN`, CSRF em todo POST):
@@ -19,7 +36,7 @@ CSP `default-src 'self'`, só 127.0.0.1, login pelo `SHELL_EXECUTOR_TOKEN`, CSRF
 | Sistema | serviços, WhatsApp, fila |
 | WhatsApp (`/painel/whatsapp`) | QR code para parear |
 
-Não há chat: hoje só o Open WebUI conversa, e ele está saindo.
+Em 31/10 não havia chat no Painel: só o Open WebUI conversava, e ele saiu em 05/11.
 
 **Peças prontas (branch `laya`):**
 
@@ -95,16 +112,20 @@ conversa só via `responder_pendencia` (o mesmo cartão de confirmação do Pain
 
 ### Interface (aba Conversa)
 
-- Coluna esquerda: conversas (título gerado com `lib_titulo`, data), **Nova conversa**, busca (FTS5).
-- Centro: mensagens em Markdown seguro (o mesmo renderizador mínimo do detalhe de pendência);
-  resposta aparecendo por SSE; **chips de ferramenta** recolhíveis (nome, argumentos, resultado);
-  **citações** `[n]` levando à nota (`obsidian://open?vault=…&file=…`) ou à URL.
-- **Cartão de aprovação** para ferramenta perigosa: o que vai rodar, com quais argumentos,
-  [Executar] [Não]; sem clique em 5 min, cancela.
-- Campo de texto (Enter envia, Shift+Enter quebra), **Parar** durante a geração, seletor de modelo
-  (padrão `MODEL_CHAT`).
+- ✔ Coluna esquerda: conversas (título gerado com `lib_titulo`, "há X"), **Nova conversa**, busca (FTS5 nas
+  mensagens, com o trecho), **Apagar** (com confirmação).
+- ✔ Centro: mensagens em Markdown seguro (o mesmo renderizador mínimo do detalhe de pendência, agora com cerca de
+  código e lista numerada); resposta aparecendo por SSE (texto cru enquanto chega, HTML no `fim`); **chips de
+  ferramenta** recolhíveis (nome, argumentos, resultado, estado). ✗ **citações** `[n]` levando à nota
+  (`obsidian://open?vault=…&file=…`) ou à URL — ainda texto.
+- ✔ **Cartão de aprovação** para ferramenta perigosa: o que vai rodar, com quais argumentos, [Executar] [Não]; sem
+  clique em 5 min, cancela.
+- ✔ Campo de texto (Enter envia, Shift+Enter quebra), **Parar** durante a geração. ✗ seletor de modelo (padrão
+  `MODEL_CHAT`, pelo `perfis.yml → conversa.modelo`).
+- ✔ Seletor **Conversa | Code** no topo (Code desabilitado, "em breve").
 - Depois: 🎤 (grava → `lib_audio` transcreve) e 🔊 (resposta em voz com `lib_tts`).
-- Tudo dentro da CSP atual (`default-src 'self'`): nada de CDN, `EventSource` nativo.
+- ✔ Tudo dentro da CSP atual (`default-src 'self'`): nada de CDN, `EventSource` nativo; `conversa.css` e
+  `conversa.js` são estáticos próprios da aba.
 
 ### Backend
 
@@ -112,10 +133,13 @@ conversa só via `responder_pendencia` (o mesmo cartão de confirmação do Pain
   execução de ferramentas, aprovação pendente, resumo do histórico.
 - `VAULT_ALFRED/conversas.db` (SQLite + FTS5): `conversas`, `mensagens` (papel, texto, ferramenta,
   argumentos, resultado, tokens, modelo, tempo), `aprovacoes`.
-- Rotas no Painel (sessão + CSRF como as demais):
-  `GET /painel/conversa`, `GET/POST /painel/api/conversas`, `POST /painel/api/conversas/{id}/mensagens`,
-  `GET /painel/api/turnos/{id}/eventos` (SSE), `POST /painel/api/turnos/{id}/parar`,
-  `POST /painel/api/aprovacoes/{id}/executar|negar`, `DELETE /painel/api/conversas/{id}`.
+- Rotas da aba em `services/inbox/painel_conversa.py` (módulo próprio, como `escrita.py`; `painel.py` só cedeu o
+  `_markdown_seguro` e o `base.html` ganhou o item do menu e o bloco `classe_conteudo`), com sessão + CSRF como as
+  demais: `GET /painel/conversa[?q=]` e `GET /painel/conversa/{id}` (lista e mensagens vêm renderizadas do servidor),
+  `POST /painel/api/conversas` `{texto}` (cria a conversa com a primeira mensagem), `POST
+  /painel/api/conversas/{id}/mensagens` `{texto}`, `GET /painel/api/turnos/{id}/eventos` (SSE), `POST
+  /painel/api/turnos/{id}/parar`, `POST /painel/api/aprovacoes/{id}/executar|negar`, `POST
+  /painel/api/conversas/{id}/apagar` (POST, não DELETE: o `painel.js` só faz POST com CSRF).
 - **Fila própria do chat** (1 worker) separada do threadpool do FastAPI — aprendido em 31/10: uma
   rajada de webhooks esgotou o threadpool. O SSE é `async` e só lê a fila de eventos do turno.
 - **GPU**: o chat e o processamento do WhatsApp disputam o Ollama. O turno do chat tem prioridade:
@@ -126,16 +150,16 @@ conversa só via `responder_pendencia` (o mesmo cartão de confirmação do Pain
 
 | Fase | Entrega | Depende de | Pronto quando |
 |---|---|---|---|
-| **1. Motor** | `conversa.py`, contexto, laço de ferramentas, aprovação, SQLite, CLI | — | testes offline (Ollama mockado) do laço, aprovação, limite de voltas, resumo; CLI responde "quais pendências tenho?" chamando `listar_pendencias` |
-| **2. Ferramentas novas** | as 9 da tabela acima em `lib_ferramentas.py` | — (paralela à 1) | testes offline de cada uma; `buscar_cofre` usando `lib_rag` |
-| **3. Aba Conversa** | template, JS, CSS, rotas SSE no Painel | 1 | conversa completa no navegador: texto em stream, chips, cartão de aprovação, citações, histórico |
+| **1. Motor** ✔ 01/11 | `conversa.py`, contexto, laço de ferramentas, aprovação, SQLite, CLI | — | testes offline (Ollama mockado) do laço, aprovação, limite de voltas, resumo; CLI responde "quais pendências tenho?" chamando `listar_pendencias` |
+| **2. Ferramentas novas** ✔ | as 9 da tabela acima em `lib_ferramentas.py` | — (paralela à 1) | testes offline de cada uma; `buscar_cofre` usando `lib_rag` |
+| **3. Aba Conversa** ✔ 08/11 | template, JS, CSS, rotas SSE no Painel (`painel_conversa.py`) | 1 | conversa completa no navegador: texto em stream, chips, cartão de aprovação, histórico, lista com busca, parar, apagar (citações clicáveis e seletor de modelo ficaram de fora) |
 | **4. Personalidade** | `alfred-system-prompt.md` revisado para a nova pilha | 1 | 10 perguntas de referência respondidas com a voz do Alfred e as ferramentas certas |
 | **5. Roteador e memória** | Laya escolhe o subconjunto de ferramentas e se vale RAG automático; `lib_memoria.extrair` após cada volta | 1, 2; Laya treinado com os registros das fases 1–3 | menos tokens por volta sem perder acerto de ferramenta (medido no log) |
 | **6. Voz** | 🎤 e 🔊 | 3 | pergunta falada → resposta falada |
 | **7. Desligar o Open WebUI** | Etapa 5 de `remover-openwebui.md` | 3, 4 | container removido, testes passando |
 
-Fases 1 e 2 podem rodar em paralelo (arquivos diferentes). A 3 é a única que mexe em
-`painel.py`/`base.html`.
+Fases 1 e 2 rodaram em paralelo (arquivos diferentes). A 3 mexeu só no `base.html` (item do menu e bloco
+`classe_conteudo`) e no `_markdown_seguro` do `painel.py`; o resto é módulo próprio.
 
 ## Riscos
 

@@ -1,0 +1,108 @@
+{#
+  Aba Conversa (painel_conversa.py). Vars: conv (dict da conversa aberta, ou None), lista ([{id, titulo, url, quando,
+  relativo, iso, trecho}]), q (texto da busca), turnos ([{pergunta, ferramentas: [{nome, argumentos, resultado,
+  estado, rotulo}], resposta (HTML seguro ou None), quando, modelo}]), turno_ativo (id do turno em andamento, ou ""),
+  nao_encontrada (bool).
+  O conversa.js envia as mensagens (POST /painel/api/conversas e /painel/api/conversas/{id}/mensagens) e ouve o SSE
+  do turno (/painel/api/turnos/{id}/eventos). Apagar usa o cliente de ações do painel.js (diálogo + ir:/painel/conversa).
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}{{ conv.titulo if conv and conv.titulo else "Conversa" }}{% endblock %}
+{% block classe_conteudo %} conteudo--cheio{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="/painel/static/conversa.css">
+  <script src="/painel/static/conversa.js" defer></script>
+{% endblock %}
+{% block conteudo %}
+{%- set subtitulo = conv.titulo if conv and conv.titulo else "Converse com o Alfred: pendências, agenda, e-mails, pesquisas e as notas do cofre." %}
+{% call m.cabecalho("Conversa", subtitulo) %}
+  <div class="modos" role="group" aria-label="Modo">
+    <button class="modo" type="button" aria-pressed="true">Conversa</button>
+    <button class="modo" type="button" disabled aria-disabled="true" title="O modo Code ainda está em construção">Code <span class="modo__em-breve">em breve</span></button>
+  </div>
+  <form id="apagar" data-acao="{% if conv %}/painel/api/conversas/{{ conv.id }}/apagar{% endif %}" data-confirmar="dialogo-apagar"
+        data-apos-sucesso="ir:/painel/conversa"{% if not conv %} hidden{% endif %}>
+    {{ m.botao("Apagar", "discreto", pequeno=true, nome_icone="limpeza", attrs={"data-texto-ocupado": "Apagando…"}) }}
+  </form>
+  {{ m.botao("Nova conversa", pequeno=true, nome_icone="conversa", href="/painel/conversa") }}
+{% endcall %}
+
+<div class="chat" id="chat" data-conversa="{{ conv.id if conv else '' }}" data-turno-ativo="{{ turno_ativo }}">
+  <aside class="chat__lista" aria-label="Conversas">
+    <form class="chat__busca" method="get" action="/painel/conversa" role="search">
+      <label class="sr-only" for="campo-q">Buscar nas conversas</label>
+      <input class="entrada" id="campo-q" name="q" type="search" value="{{ q }}" placeholder="Buscar nas conversas" autocomplete="off">
+    </form>
+    <ul class="conversas" id="conversas">
+      {%- for c in lista %}
+      <li class="conversas__item"{% if conv and c.id == conv.id %} aria-current="page"{% endif %}>
+        <a class="conversas__link" href="{{ c.url }}">
+          <span class="conversas__titulo">{{ c.titulo }}</span>
+          {%- if c.trecho %}<span class="conversas__trecho">{{ c.trecho }}</span>{% endif %}
+          {{ m.tempo(c.iso, c.relativo, c.quando, "conversas__quando") }}
+        </a>
+      </li>
+      {%- else %}
+      <li class="conversas__vazio">{{ "Nenhuma conversa com essas palavras." if q else "Nenhuma conversa ainda." }}</li>
+      {%- endfor %}
+    </ul>
+  </aside>
+
+  <section class="chat__painel" aria-label="Mensagens">
+    <div class="chat__mensagens" id="mensagens" aria-live="polite">
+      {%- if nao_encontrada %}
+      {{ m.vazio("Não encontrei essa conversa, senhor. Ela pode ter sido apagada.", "conversa") }}
+      {%- elif not turnos %}
+      <div class="chat__boas-vindas">
+        {{ m.icone("marca") }}
+        <p>Às ordens, senhor. Pergunte sobre as pendências, a agenda, os e-mails ou as notas do cofre — ou peça uma pesquisa.</p>
+      </div>
+      {%- endif %}
+      {%- for t in turnos %}
+      <article class="turno">
+        {%- if t.pergunta %}
+        <div class="pergunta"><p class="pergunta__texto">{{ t.pergunta }}</p></div>
+        {%- endif %}
+        <div class="resposta"{% if loop.last and turno_ativo and not t.resposta %} data-vivo{% endif %}>
+          <div class="resposta__ferramentas">
+            {%- for f in t.ferramentas %}
+            <details class="ferramenta" data-estado="{{ f.estado }}">
+              <summary class="ferramenta__titulo">{{ f.nome }} · {{ f.rotulo }}</summary>
+              <p class="ferramenta__rotulo">Argumentos</p>
+              <pre class="ferramenta__codigo">{{ f.argumentos }}</pre>
+              <p class="ferramenta__rotulo">Resultado</p>
+              <pre class="ferramenta__codigo">{{ f.resultado }}</pre>
+            </details>
+            {%- endfor %}
+          </div>
+          {%- if t.resposta %}
+          <div class="resposta__corpo">{{ t.resposta }}</div>
+          {%- elif loop.last and turno_ativo %}
+          <div class="resposta__corpo resposta__corpo--stream"></div>
+          {%- else %}
+          <p class="resposta__nota">Sem resposta gravada (o turno foi interrompido ou deu erro).</p>
+          {%- endif %}
+        </div>
+      </article>
+      {%- endfor %}
+    </div>
+
+    <form class="chat__envio" id="formulario">
+      <label class="sr-only" for="texto">Mensagem para o Alfred</label>
+      <textarea class="chat__campo" id="texto" rows="2" maxlength="20000" placeholder="Escreva para o Alfred…"
+                autofocus{% if nao_encontrada %} disabled{% endif %}></textarea>
+      <div class="chat__botoes">
+        <p class="chat__dica">Enter envia · Shift+Enter quebra a linha</p>
+        <button id="parar" class="botao botao--pequeno" type="button" hidden>Parar</button>
+        <button id="enviar" class="botao botao--primario botao--pequeno" type="submit"{% if nao_encontrada or turno_ativo %} disabled{% endif %}>Enviar</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+{% call m.dialogo("dialogo-apagar", "Apagar conversa", "Apagar", "perigo") %}
+  <p>Apagar a conversa <strong data-titulo-conversa>{{ conv.titulo if conv else "" }}</strong> e todas as mensagens dela?
+     Não dá para desfazer.</p>
+{% endcall %}
+{% endblock %}

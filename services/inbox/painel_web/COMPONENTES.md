@@ -32,12 +32,14 @@ Guia objetivo para quem escreve `painel.py` e os templates de cada tela. A lingu
 | Variável | Tipo | Uso |
 |---|---|---|
 | `csrf` | str | `<meta name="csrf-token">`, que o JS manda em `X-CSRF-Token` em todo POST |
-| `ativo` | `"inicio"`, `"pendencias"`, `"agenda"`, `"limpeza"`, `"pesquisar"` ou `"sistema"` | `aria-current="page"` no item da navegação |
+| `ativo` | `"inicio"`, `"conversa"`, `"pendencias"`, `"agenda"`, `"limpeza"`, `"pesquisar"` ou `"sistema"` | `aria-current="page"` no item da navegação |
 | `contadores` | dict (opcional) | mesmo JSON de `/painel/api/contadores`; valor inicial dos contadores da navegação (`aguardando`, `limpeza_aguardando`) |
 | `simulado` | bool (opcional) | mostra o selo "Modo simulado" no rodapé da navegação |
 
 Blocos: `titulo` (texto do `<title>`, que vira "X · Alfred"), `conteudo` (dentro de `<main id="conteudo">`),
-`pagina` (o `<body>` inteiro, que só o login troca).
+`pagina` (o `<body>` inteiro, que só o login troca), `classe_conteudo` (classe extra do `<main>`; a Conversa usa
+` conteudo--cheio` para ocupar a altura toda) e `head` (folha e script próprios de uma tela, como `conversa.css` /
+`conversa.js` — registrados em `painel.ESTATICOS`).
 Já vêm prontos no base: "Pular para o conteúdo", navegação com contador, botão **Sair**, `<noscript>`
 e a área global `#avisos` (`aria-live="polite"`), onde o JS põe o resultado de ações feitas em listas
 que se atualizam sozinhas e o aviso de "sem contato com a API".
@@ -53,7 +55,7 @@ começa com `/painel` e não com `//`). O campo `token` é `type=password` e nun
 
 | Macro | Gera |
 |---|---|
-| `icone(nome, rotulo=none)` | SVG decorativo (`aria-hidden`). Nomes: `sucesso erro aguardando info alerta simulado ponto whatsapp email inicio pendencias agenda limpeza sistema sair externo voltar audio audio-off busca pessoa marca` |
+| `icone(nome, rotulo=none)` | SVG decorativo (`aria-hidden`). Nomes: `sucesso erro aguardando info alerta simulado ponto whatsapp email inicio conversa pendencias agenda limpeza sistema sair externo voltar audio audio-off busca pessoa marca` |
 | `selo(tom, texto, nome_icone=none)` | `.selo.selo--{sucesso,aguardando,simulado,erro,neutro}` com ícone + texto |
 | `selo_status(status)` | selo de status de pendência, item de agenda ou lote (`aguardando`, `respondida`, `respondida_manual`, `vou`, `nao_vou`, `ignorada`, `expirada`, `pendente`, `no_calendario`, `em_execucao`, `desfazer`, `desfeito`, `cancelado`, `erro`, `aprovado`, `recusado`, `expirado`, `concluido`, `simulado`, `parcial`, `falhou`) |
 | `selo_urgencia(u)` | `alta` → vermelho "Urgência alta"; `media`/`baixa` → neutro; vazio → nada |
@@ -174,6 +176,18 @@ WhatsApp: `m.selo` (`sucesso` Conectado, `erro` Desconectado, `aguardando` Conec
 `neutro` + ícone `alerta` Indisponível). Vários selos lado a lado ficam em `div.selos`.
 As **5 mais recentes** não vão dentro de um `<a>` (seriam links aninhados): use `section.cartao` com
 `div.cartao__cabecalho` (`h2.cartao__titulo` + `a` "Ver todas") e `ul.lista.lista--solta` com as linhas da lista.
+
+### Conversa (`/painel/conversa`, `ativo="conversa"`)
+
+Rotas e dados em `painel_conversa.py`; comportamento em `static/conversa.js`; estilo em `static/conversa.css`.
+`div.chat` (`data-conversa`, `data-turno-ativo`) com `aside.chat__lista` (form GET `?q=` + `ul.conversas` de
+`li.conversas__item[aria-current=page]` > `a.conversas__link`) e `section.chat__painel`: `div.chat__mensagens` com
+um `article.turno` por pergunta (`div.pergunta > p.pergunta__texto`, `div.resposta` com `div.resposta__ferramentas`
+— `details.ferramenta[data-estado]` > `summary.ferramenta__titulo` + `pre.ferramenta__codigo`, ou `div.aprovacao` —
+e `div.resposta__corpo`, com `--stream` enquanto o texto chega) e `form.chat__envio` (`textarea.chat__campo`,
+**Parar**, **Enviar**). No cabeçalho, `div.modos > button.modo[aria-pressed]` (Code `disabled` + `span.modo__em-breve`)
+e **Apagar** (form `data-acao` + `data-confirmar="dialogo-apagar"` + `ir:/painel/conversa`). Texto do modelo só por
+`textContent`; o HTML da resposta final vem do servidor (`_markdown_seguro`).
 
 ### Pendências — lista (`/painel/pendencias`, `ativo="pendencias"`)
 

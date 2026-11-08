@@ -4,7 +4,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 
 **Poder 3 — WhatsApp:** mensagens e áudios recebidos pela Evolution API passam pelo mesmo tratamento (transcrição local com gemma4 → classificação → pendência com texto + áudio em que Alfred pergunta **"o que você quer responder?"**); a resposta de Pedro — por WhatsApp, terminal, chat ou API — é enviada de volta ao contato. Ver [WhatsApp (Poder 3)](#whatsapp-poder-3--evolution-api).
 
-**Painel do Alfred:** interface web local servida pela própria API (`http://127.0.0.1:7073/painel`, só desta máquina, login com o `SHELL_EXECUTOR_TOKEN`) para ver as pendências, revisar a resposta que o Alfred propõe e autorizar, editar ou recusar — além de agenda, lotes de limpeza e estado do sistema. Ver [Painel do Alfred](#painel-do-alfred).
+**Painel do Alfred:** interface web local servida pela própria API (`http://127.0.0.1:7073/painel`, só desta máquina, login com o `SHELL_EXECUTOR_TOKEN`) para ver as pendências, revisar a resposta que o Alfred propõe e autorizar, editar ou recusar — além de conversar com o Alfred (aba **Conversa**), agenda, lotes de limpeza e estado do sistema. Ver [Painel do Alfred](#painel-do-alfred).
 
 **Blog:** jornal, podcast e os briefings de `services/briefing` nascem com `Blogspot: none` no frontmatter. A extensão "Alfred — blog" do Thunderbird posta cada um no Blogspot por e-mail (`GET /blog/fila`), e o Alfred troca a propriedade por `postado <data>`. Ver [BLOG.md](BLOG.md).
 
@@ -25,7 +25,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh whatsapp status | qrcode | webhook URL | simular payload.json | notificar <id>
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
 ./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
-./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa
+./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa; no navegador, a aba Conversa do Painel
 ./run.sh promessas                     # o que você disse que ia fazer (abertas e atrasadas) — ver Promessas
 ```
 
@@ -191,7 +191,8 @@ por `main.py`). Usa templates Jinja2 em `painel_web/templates/` e um CSS e um JS
 dos componentes em `painel_web/COMPONENTES.md`). Não tem build, CDN nem fonte externa: funciona offline. Toda ação
 chama as **mesmas funções** do CLI, da notificação e da API — o painel não grava YAML nem tem lógica própria de envio,
 resposta, agenda ou limpeza. A aba **Pesquisar** pede ao researcher (`pesquisa.py`), mostra o que ele gravou no cofre
-e leva a pesquisa ao OpenNotebook — ver [Pesquisar](#pesquisar).
+e leva a pesquisa ao OpenNotebook — ver [Pesquisar](#pesquisar). A aba **Conversa** (`painel_conversa.py`) é o chat
+com o Alfred, sobre o motor `conversa.py` — ver [Conversa](#conversa-aba-do-painel).
 
 ### Como abrir
 
@@ -234,6 +235,7 @@ e leva a pesquisa ao OpenNotebook — ver [Pesquisar](#pesquisar).
 | Tela | O que mostra |
 |---|---|
 | **Início** (`/painel`) | pendências aguardando (total, WhatsApp, e-mail) e as 5 mais recentes; Alfred ligado/desligado (pelo arquivo `logs/alfred_desligado`, com o "desde" da 1ª linha); WhatsApp Conectado / Desconectado / Conectando / Modo simulado / Indisponível (estado da instância com timeout de 2 s e cache de 15 s); lotes de limpeza aguardando; até 4 próximos itens da agenda. Cada bloco leva à tela correspondente |
+| **Conversa** (`/painel/conversa`) | chat com o Alfred: conversas à esquerda (título, "há X", busca FTS5 nas mensagens), mensagens no centro com a resposta chegando em stream, chips de ferramenta recolhíveis (nome, argumentos, resultado) e o cartão **Executar** / **Não** das ferramentas perigosas; **Parar** durante a geração; **Nova conversa**; **Apagar**; seletor **Conversa \| Code** no topo (Code ainda desabilitado, "em breve"). Cada conversa abre em `/painel/conversa/{id}`; recarregar no meio de um turno religa o stream — ver [Conversa](#conversa-aba-do-painel) |
 | **Pendências** (`/painel/pendencias`) | abas **Aguardando** (padrão; urgência alta primeiro, depois as mais recentes) e **Resolvidas** (da mais recente para a mais antiga, com o status final e a data; 20 por página, com menu suspenso de página e **Anterior** / **Próxima**); filtro por tipo; busca por contato ou texto, sem diferenciar acento nem caixa. Cada linha: tipo, contato/remetente, resumo em uma linha, urgência (ou status) e "há X". Itens `respondida_manual` mostram **lado a lado** "O Alfred proporia" × "Você respondeu" |
 | **Detalhe WhatsApp** (`/painel/pendencias/{id}`) | contato e número, mensagem original (ou "Transcrição do áudio"), resumo do Alfred, categoria, confiança, urgência e motivo; player do áudio de resumo; histórico; caixa de texto já preenchida com `whatsapp.rascunho` (ou com o texto de um envio que falhou) e os botões **Autorizar envio**, **Não enviar** e **Agendar** |
 | **Detalhe e-mail** | texto explicativo do `.md` (sem frontmatter, linha de status, "Dados extraídos" e "Como responder"; markdown mínimo e seguro, links só http/https), link do evento, cartão de dados (tipo, quando, local, organizador, custo, remetente, assunto), áudio, histórico e **Vou** / **Não vou** com nota opcional |
@@ -265,6 +267,10 @@ Datas sempre em America/Sao_Paulo, `DD/MM/AAAA HH:MM`, e relativas nas listas ("
 | **Recusar** (limpeza) | `limpeza.recusar(id, nota)` | `recusado`, nenhum e-mail é movido |
 | **Abrir um notebook sobre isso** / **Adicionar** (pesquisa) | `pesquisa.abrir_notebook(slug, destino)` → API do OpenNotebook em `127.0.0.1:5055` (ver [Pesquisar](#pesquisar)) | o notebook abre numa **aba nova** e a página do Alfred recarrega com o estado novo. Já vinculado → link direto **Abrir o notebook** (nova aba). OpenNotebook fora do ar → 502 na tela, com **Tentar de novo** |
 | **Buscar mais fontes** (notebook) | link para `/painel/pesquisar?notebook=<id>`: o formulário vem com o notebook escolhido | a pesquisa nova (rápida ou profunda) termina e vai para esse notebook, sem repetir página que ele já tem |
+| **Enviar** (conversa) | `conversa.enviar(id, texto)` — na primeira mensagem, `conversa.nova_conversa()` antes; os eventos do turno chegam por SSE | a resposta aparece em stream; conversa e mensagens ficam em `VAULT_ALFRED/conversas.db` |
+| **Executar** / **Não** (cartão de ferramenta perigosa) | `conversa.aprovar(id)` / `conversa.negar(id)` | a ferramenta roda (ou não) e o turno continua; sem clique em 5 min, cancelada |
+| **Parar** (conversa) | `conversa.parar(turno_id)` | corta o stream na próxima linha e grava o que já tinha chegado ("Interrompido.") |
+| **Apagar** (conversa) | confirmação em `<dialog>` → `conversa.apagar_conversa(id)` | some com mensagens e aprovações; 409 com turno em andamento |
 | **Pesquisar** | `pesquisa.pesquisar(tema, profundo)` → `POST 127.0.0.1:${PORT_RESEARCHER:-7072}/research` com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN` | rápido: espera a síntese (~40–50 s, teto de 300 s) e abre o resultado; profundo: 202 + `job_id` → abre o andamento. Researcher fora do ar ou erro dele → 502 com a mensagem e **Tentar de novo** |
 
 - **Já resolvida por outro caminho** (celular, notificação, CLI, chat): o servidor confere "ainda aguardando" antes de
@@ -307,7 +313,10 @@ recarrega a cada seta) e Enter ou **Buscar** aplicam.
 | POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` · `/limpar` `{nota}` | agenda e limpeza |
 | POST `/painel/api/pesquisar` `{tema, modo: rapido\|profundo, notebook: ""\|<id>}` | nova pesquisa; a resposta traz `url` (resultado ou andamento; com notebook e falha no envio, `?notebook=falhou`) |
 | POST `/painel/api/pesquisar/{slug}/notebook` `{notebook: ""\|<id>}` | `""`: cria ou reabre o notebook da pesquisa; id: manda a pesquisa para esse notebook. A resposta traz `url` (a interface, 127.0.0.1:8502) e `falhas` |
-| GET `/painel/static/painel.css`, `/painel/static/painel.js` | estáticos (lista fechada) |
+| GET `/painel/conversa[?q=]`, `/painel/conversa/{id}` | aba Conversa: lista (com busca FTS5) e a conversa aberta com as mensagens; id desconhecido → 404 na própria tela |
+| POST `/painel/api/conversas` `{texto}` · `/painel/api/conversas/{id}/mensagens` `{texto}` | cria a conversa com a primeira mensagem / continua uma → `{conversa, titulo, turno, url, nova}`; 400 vazio ou > 20 mil caracteres; 409 com turno em andamento |
+| GET `/painel/api/turnos/{id}/eventos` (SSE) · POST `/painel/api/turnos/{id}/parar` · POST `/painel/api/aprovacoes/{id}/executar\|negar` · POST `/painel/api/conversas/{id}/apagar` | eventos do turno (`texto`, `ferramenta`, `aprovar`, `fim` com `html`, `erro`; turno já acabado e fila vazia → `fim` com `recarregar`), parar, cartão de aprovação (409 se já decidida), apagar (409 com turno em andamento) |
+| GET `/painel/static/painel.css`, `/painel/static/painel.js`, `/painel/static/conversa.css`, `/painel/static/conversa.js` | estáticos (lista fechada; `escrita.*` entram pela janela de escrita) |
 
 Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 403 CSRF/origem/rede; 404; 409 já resolvida;
 502 falha de envio (`pode_tentar_de_novo: true`).
@@ -375,9 +384,43 @@ embedding dele é o `qwen3-embedding:4b`, que roda na GPU e tira o `gemma4:12b` 
 `OLLAMA_EMBED_NUM_GPU=0` para evitar isso); o `bge-m3` já está cadastrado lá como alternativa. A troca é decisão
 pendente e não é feita pelo Alfred.
 
+### Conversa (aba do Painel)
+
+`painel_conversa.py` é só a casca: rotas, SSE e a montagem da tela. O motor é o
+[`conversa.py`](#conversa-com-o-alfred--o-motor-conversapy) — o mesmo do `run.sh conversa` e da janela de escrita —,
+com personalidade, bloco "Agora", memória, RAG, as ferramentas e a aprovação das perigosas.
+
+- **Primeira mensagem** cria a conversa (`POST /painel/api/conversas`): a URL vira `/painel/conversa/{id}`
+  (`history.replaceState`) e o título (`lib_titulo`, sem LLM) entra na lista e no cabeçalho. As seguintes vão para
+  `POST …/{id}/mensagens`. Uma pergunta por vez: a segunda recebe 409 "Alfred ainda está respondendo a mensagem
+  anterior.".
+- **Stream:** o `conversa.js` abre um `EventSource` em `/painel/api/turnos/{id}/eventos`; o servidor só espia a fila
+  do turno (rota `async`, sem prender thread) e manda um comentário `: ping` a cada 15 s. `texto` entra como texto puro
+  (`textContent`, "Alfred está pensando…" enquanto nada chegou); no `fim` o servidor manda o `html` da resposta inteira
+  pelo `_markdown_seguro` — que ganhou cerca de código ``` e lista numerada — e a tela troca o texto cru por ele.
+  `erro` aparece em vermelho; a pergunta fica gravada sem resposta.
+- **Ferramentas:** um `<details>` por chamada — "nome · executando…" com os argumentos (JSON) e, ao terminar, "feito" /
+  "erro" / "negada" / "expirada" com o resultado. Perigosa: cartão âmbar "Alfred quer executar X" com os argumentos e
+  **Executar** / **Não** (`POST /painel/api/aprovacoes/{id}/executar|negar`); depois do clique o cartão mostra
+  "Autorizado" / "Negado" e o chip segue. Já decidida ou expirada → 409 no cartão.
+- **Parar:** `POST /painel/api/turnos/{id}/parar` → o turno corta na próxima linha do stream, grava o que já veio e a
+  tela marca "Interrompido.".
+- **Recarregar no meio:** a página lê as mensagens do banco e, se há turno em andamento na conversa
+  (`conversa.turno_ativo`), deixa o bloco da resposta vazio com `data-vivo`, o Enviar desabilitado e o JS religa o SSE
+  (os eventos que ninguém leu continuam na fila do turno). Se já acabou e a fila está vazia, o SSE responde `fim` com
+  `recarregar` e a página recarrega.
+- **Lista e busca:** as 50 conversas mais recentes (`atualizada_em`); `?q=` usa `conversa.buscar` (FTS5 nas mensagens
+  de Pedro e do Alfred, por prefixo, sem acento) e mostra o trecho. **Apagar** confirma em `<dialog>` e chama
+  `conversa.apagar_conversa` (mensagens, aprovações e FTS vão junto; 409 com turno em andamento).
+- **Code:** o seletor **Conversa | Code** do topo só reserva o lugar; o Code fica desabilitado ("em breve") até a
+  configuração dele existir.
+- Tudo dentro da CSP atual: `conversa.css` e `conversa.js` são estáticos próprios (registrados em `painel.ESTATICOS`),
+  nada inline, `EventSource` nativo. Ainda sem: citações `[n]` clicáveis, seletor de modelo e voz
+  ([plano](../../docs/planos/chat-alfred.md)).
+
 ### Fora do escopo e limitações
 
-- Não edita configuração (`perfis.yml`, `.env`), não tem botão de modo jogo, chat com o Alfred, novos tipos de ação nem
+- Não edita configuração (`perfis.yml`, `.env`), não tem botão de modo jogo, novos tipos de ação nem
   workflows N8N. Sem acesso externo ou pelo celular, por decisão.
 - Desenhado para tela de PC (≥ 1280 px); abaixo de 900 px a barra lateral vira menu superior.
 - Não há limite de tentativas de login (só o atraso de 0,5 s); o acesso restrito a 127.0.0.1 reduz o risco.
@@ -392,6 +435,7 @@ pendente e não é feita pelo Alfred.
 ```bash
 cd services/inbox
 venv/bin/python -m unittest tests.test_painel -v     # 66 testes offline, ~6 s
+venv/bin/python -m unittest tests.test_painel_conversa -v   # aba Conversa: 15 testes, ~1 s
 ```
 
 Vault temporário, LLM/TTS mockados e envios simulados. Cobrem login (token errado/certo, cookie adulterado, expirado,
@@ -407,6 +451,14 @@ privada de fora, OpenNotebook fora do ar, lista de notebooks, "Buscar mais fonte
 repetir página nem envio, adicionar a outro notebook) — e conferem que o token não aparece em nenhuma resposta. Nenhum
 teste chega ao researcher ou ao OpenNotebook de verdade: o transporte padrão do `pesquisa.py` nos testes recusa a
 conexão.
+
+`tests.test_painel_conversa` (Ollama trocado por um roteiro, como em `test_conversa`): aba na navegação entre Início e
+Pendências e seletor de modo com o Code desabilitado, CSP e dois scripts, primeira mensagem criando a conversa e
+respondendo em stream (SSE até o `fim` com `html`, página recarregada com pergunta, resposta e lista), segunda mensagem
+com o histórico no contexto, validações (400, 403, 404, 409), ferramenta segura virando chip (SSE e página), ferramenta
+com erro, aprovação **Executar** e **Não** pelas rotas, parar com texto parcial gravado, uma pergunta por vez, página
+recarregada com turno em andamento (`data-turno-ativo`, Enviar desabilitado), SSE depois do fim (`recarregar`), erro do
+Ollama, busca `?q=`, apagar (tabelas e FTS limpas) e o markdown com cerca de código e lista numerada.
 
 ## N8N — workflows em `n8n/`
 
@@ -873,8 +925,9 @@ recente no disco era de 20/10.
 
 ## Conversa com o Alfred — o motor (`conversa.py`)
 
-Fase 1 de [`docs/planos/chat-alfred.md`](../../docs/planos/chat-alfred.md): o chat que substitui o Open WebUI, ainda
-sem interface (a aba Conversa do Painel é a Fase 3 e serve os eventos abaixo por SSE).
+Fase 1 de [`docs/planos/chat-alfred.md`](../../docs/planos/chat-alfred.md): o chat que substitui o Open WebUI.
+Interfaces: a aba [Conversa](#conversa-aba-do-painel) do Painel (Fase 3; serve os eventos abaixo por SSE), a janela de
+escrita (`escrita.py`) e o terminal (`run.sh conversa`).
 
 ```
 enviar(conversa_id, texto) ── grava a pergunta ──► fila do chat (executor próprio, 1 worker — fora do threadpool
@@ -900,7 +953,9 @@ No terminal, ferramenta perigosa pergunta `Executar? [s/N]` (Enter ou fim da ent
 `mensagens(id)`, `buscar(texto)` (FTS5, sem acento acha com acento) · `enviar(conversa_id, texto, modelo=None)` →
 `Turno` (eventos em `turno.fila`, um `queue.Queue`; `KeyError` conversa inexistente, `ValueError` texto vazio,
 `RuntimeError` se a conversa já tem turno em andamento — uma pergunta por vez) · `aprovar(id)` / `negar(id)` /
-`parar(turno_id)` → `bool` (a primeira decisão vence; tarde demais = `False`) · `obter_turno(id)` · `ocupado()`.
+`parar(turno_id)` → `bool` (a primeira decisão vence; tarde demais = `False`) · `obter_turno(id)` ·
+`turno_ativo(conversa_id)` (o turno na fila ou rodando nessa conversa) · `apagar_conversa(id)` (`RuntimeError` com turno
+em andamento) · `ocupado()`.
 
 | Evento | Campos (além de `tipo`, `turno` e `n`, a sequência) |
 |---|---|
