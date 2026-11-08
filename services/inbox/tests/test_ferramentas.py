@@ -42,10 +42,11 @@ import limpeza     # noqa: E402
 from email.message import EmailMessage  # noqa: E402
 from _shared import lib_alfred, lib_chromadb, lib_db, lib_mail, lib_memoria, lib_rag, lib_web  # noqa: E402
 from _shared import lib_ferramentas as lf  # noqa: E402
+from _shared import lib_wordcraft  # noqa: E402,F401  (registra as ferramentas documento_*)
 
 TOKEN = "token-de-teste"
 PERIGOSAS = {"executar_comando", "responder_pendencia", "responder_limpeza", "salvar_nota", "completar_tarefa",
-             "criar_compromisso"}
+             "criar_compromisso", "documento_substituir"}
 
 
 def resposta(status: int = 200, dados=None) -> httpx.Response:
@@ -990,6 +991,27 @@ class TestWeb(Base):
         self.assertIn("ler_pagina(url)", r)
         with mock.patch.object(lf, "searxng_search", return_value=[]):
             self.assertIn("Nenhum resultado na web", lf.executar("buscar_web", {"consulta": "x"}))
+
+    def test_buscar_artigos(self):
+        achados = [{"title": "The Lottery Ticket Hypothesis", "url": "https://arxiv.org/abs/1803.03635",
+                    "url_html": "https://arxiv.org/html/1803.03635", "snippet": "Finds subnetworks.", "source": "OpenAlex",
+                    "doi": "10.48550/arxiv.1803.03635", "arxiv_id": "1803.03635", "ano": 2018, "citacoes": 3200,
+                    "autores": ["Jonathan Frankle", "Michael Carbin"]},
+                   {"title": "Sem metadados", "url": "https://exemplo.org/a", "url_html": "", "snippet": "", "source": "Semantic Scholar",
+                    "doi": "", "arxiv_id": "", "ano": None, "citacoes": None, "autores": ["A", "B", "C"]}]
+        with mock.patch.object(lf.lib_academico, "buscar_todas", return_value=achados) as busca:
+            r = lf.executar("buscar_artigos", {"consulta": "lottery ticket hypothesis", "n": 99})
+        busca.assert_called_once_with("lottery ticket hypothesis", limite=10)
+        self.assertIn("2 artigo(s) para 'lottery ticket hypothesis'", r)
+        self.assertIn("[1] The Lottery Ticket Hypothesis\nJonathan Frankle, Michael Carbin · 2018 · 3200 citações · "
+                      "arXiv:1803.03635 · OpenAlex\nhttps://arxiv.org/abs/1803.03635\nFinds subnetworks.", r)
+        self.assertIn("[2] Sem metadados\nA, B, C et al. · Semantic Scholar\nhttps://exemplo.org/a", r)
+        self.assertIn("ler_pagina(url)", r)
+        with mock.patch.object(lf.lib_academico, "buscar_todas", return_value=achados) as busca:
+            self.assertIn("1 artigo(s)", lf.executar("buscar_artigos", {"consulta": "x", "n": 1}))   # corta em n
+        busca.assert_called_once_with("x", limite=1)
+        with mock.patch.object(lf.lib_academico, "buscar_todas", return_value=[]):
+            self.assertIn("Nenhum artigo encontrado", lf.executar("buscar_artigos", {"consulta": "x"}))
 
     def test_buscar_web_vai_ao_searxng_local(self):
         pedidos = []

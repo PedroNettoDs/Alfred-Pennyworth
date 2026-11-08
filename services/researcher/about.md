@@ -99,7 +99,7 @@ ID desconhecido → 404. O estado fica em `<repositório>/logs/research-jobs/<jo
 (temporário + `os.replace`), então sobrevive a um restart do serviço.
 
 ### `GET /health`
-Retorna `{"status": "ok", "version": "3.2.0"}`.
+Retorna `{"status": "ok", "version": "3.3.0"}`.
 
 ## Pipeline — fluxo completo
 
@@ -140,16 +140,22 @@ notas desta pesquisa vão ao Ollama. Sem ChromaDB, atualiza só o FTS5. O resear
 por vez** — dois modelos grandes na mesma GPU só ficariam trocando de lugar, então o segundo espera em `fila`):
 
 ```
-1. Plano       modelo leve + JSON Schema (ollama_generate_json) → 3 a 6 subperguntas; o prompt começa com
-               "Hoje é DD/MM/AAAA." (LLM fora / resposta inútil → o próprio tema vira a única subpergunta)
-2. Busca       por subpergunta: _buscar (SearXNG general, vazio → news,it) → deduplicate_by_url_and_title
-               → tira URLs já tentadas
+1. Plano       modelo leve + JSON Schema (ollama_generate_json) → 3 a 6 subperguntas + academico: true|false
+               (o tema é estudado em artigos científicos?); o prompt começa com "Hoje é DD/MM/AAAA."
+               (LLM fora / resposta inútil → o próprio tema vira a única subpergunta, não acadêmico)
+2. Busca       por subpergunta: _buscar (SearXNG general, vazio → news,it); tema acadêmico → os artigos de
+               _buscar_academico (OpenAlex, Semantic Scholar — ver "Bases acadêmicas") entram na frente
+               → deduplicate_by_url_and_title → tira URLs já tentadas
                → _relevante(subpergunta, resultado) — filtro barato ANTES de baixar
-3. Leitura     até paginas_por_subpergunta páginas por subpergunta, na ordem do SearXNG (falhou → tenta o próximo)
+3. Leitura     até paginas_por_subpergunta páginas por subpergunta, na ordem da lista (falhou → tenta o próximo;
+               artigo do arXiv tenta arxiv.org/html/<id> antes de arxiv.org/abs/<id>)
                httpx → texto (BeautifulSoup) → nota de máquina com o modelo leve: {"url", "titulo", "fatos": [...]}
+               (+ "id": "arXiv:…" / "doi:…" quando a fonte veio de uma base acadêmica)
 4. Síntese     modelo maior, só com as notas numeradas → Markdown com citações [n]
-               ([1, 3] vira [1][3]; número fora da lista é removido) + lista "## Fontes" [n] → URL, montada pelo código
-5. Vault       research/<slug>/ synthesis.md + sources.md + index.md (frontmatter modo: profundo) → ChromaDB → sync KB
+               ([1, 3] vira [1][3]; número fora da lista é removido) + lista "## Fontes" [n] → URL (— arXiv:… / doi:…
+               quando há), montada pelo código
+5. Vault       research/<slug>/ synthesis.md + sources.md + index.md (frontmatter modo: profundo, academico,
+               fontes_academicas) → ChromaDB → RAG local
 ```
 
 Sem nenhuma nota (busca vazia, tudo filtrado, downloads falharam) ou com síntese vazia, o job termina em `error` e
@@ -186,6 +192,7 @@ pesquisa:
   modelo_sintese: "qwen3.6:35b-a3b"   # só o relatório final (vazio = MODEL_CHAT)
   relevancia_minima: 0.5
   categorias: "general"               # categoria do SearXNG nos dois modos (ver "Busca e data" abaixo)
+  fontes_academicas: ["openalex", "semanticscholar"]   # bases de artigos em tema acadêmico; [] desliga
 ```
 
 `RESEARCH_MODEL_NOTAS` / `RESEARCH_MODEL_SINTESE` no `.env` passam por cima (máquina sem o qwen, por exemplo). A
@@ -206,6 +213,32 @@ não o resultado ruim. Mais motores em `general` é configuração do SearXNG, f
 
 O prompt do plano (profundo) e o de consultas (rápido) começam com `Hoje é DD/MM/AAAA.`: sem a data, a pergunta de
 notícia virava subpergunta no futuro ("quem tem chances", "tendências").
+
+## Bases acadêmicas
+
+Ideia trazida do Feynman ([docs/planos/feynman-ideias.md](../../docs/planos/feynman-ideias.md), Fase 1): a
+avaliação de `docs/avaliacoes/pesquisa.md` mostrou que a pergunta acadêmica (lottery ticket hypothesis) era a que
+menos cobria, porque o SearXNG devolve blogs e o arXiv só aparecia em PDF. Agora, quando o plano marca o tema como
+acadêmico (`academico: true` no JSON do plano, mesmo modelo leve, mesma chamada), cada subpergunta também é buscada
+em `services/_shared/lib_academico.py`:
+
+- **OpenAlex** (`api.openalex.org/works?search=`) e **Semantic Scholar** (`api.semanticscholar.org/graph/v1/paper/search`),
+  nesta ordem (`pesquisa.fontes_academicas` do `perfis.yml`; lista vazia desliga). Sem chave e sem LLM: só a
+  consulta sai da máquina. `OPENALEX_MAILTO` no `.env` (opcional) põe o pedido no pool "educado" do OpenAlex. O
+  Semantic Scholar anônimo devolve 429 com frequência: uma segunda tentativa após 1 s e a fonte é pulada (log
+  `[academico] … — pulando semanticscholar`); a busca continua com o que as outras devolveram.
+- Cada artigo vira um resultado no formato do SearXNG (`title`, `url`, `snippet` = resumo) mais `doi`, `arxiv_id`,
+  `ano`, `citacoes`, `autores` e `url_html`. URL canônica: `arxiv.org/abs/<id>` quando é do arXiv, senão
+  `doi.org/<doi>`, senão a página que a base deu — o mesmo artigo nas duas bases cai no dedup por URL.
+- Os artigos entram **na frente** dos resultados do SearXNG na lista da subpergunta e passam pelo mesmo filtro de
+  relevância; a leitura tenta `arxiv.org/html/<id>` (texto completo) antes de `arxiv.org/abs/<id>` (resumo). PDF
+  continua fora (Fase 2 do plano).
+- A nota guarda `"id": "arXiv:1803.03635"` ou `"doi:10.…"`; a lista `## Fontes` do `synthesis.md` e o `sources.md`
+  mostram o ID ao lado da URL; o `index.md` grava `academico` e `fontes_academicas` no frontmatter; o
+  `GET /research/{job_id}` mostra `academico` desde a etapa `plano`.
+
+A ferramenta `buscar_artigos(consulta, n)` da conversa (`lib_ferramentas`) usa a mesma lib, sem passar pelo
+researcher: título, autores, ano, citações, ID e resumo, para ler em seguida com `ler_pagina(url)`.
 
 ## Cache em dois níveis
 

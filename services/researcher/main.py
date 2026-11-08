@@ -49,8 +49,9 @@ from _shared.perfis import get_perfil, load as carregar_perfis
 import _shared.lib_chromadb as chroma
 import _shared.lib_rag as rag
 import _shared.lib_web as web
+import _shared.lib_academico as academico
 
-app = FastAPI(title="Alfred Researcher", version="3.2.0")
+app = FastAPI(title="Alfred Researcher", version="3.3.0")
 
 # ── Config ────────────────────────────────────────────────────
 TOKEN        = os.getenv("SHELL_EXECUTOR_TOKEN", "")
@@ -74,11 +75,12 @@ TEXTO_MAX_CHARS      = 8000           # texto da página que vai ao modelo de no
 FATOS_MAX            = 8
 NUM_CTX_SINTESE      = 16384          # as notas de 6 subperguntas × 3 páginas passam de 8k tokens
 TIPOS_TEXTO          = {"", "text/html", "application/xhtml+xml", "text/plain"}
-USER_AGENT           = "Mozilla/5.0 (compatible; AlfredResearcher/3.2; +local)"
+USER_AGENT           = "Mozilla/5.0 (compatible; AlfredResearcher/3.3; +local)"
 
 # ── Config: busca (os dois modos) ─────────────────────────────
 CATEGORIAS_PADRAO  = "general"   # news,it trazia MDN/Hackage em 3 de 5 perguntas (docs/avaliacoes/pesquisa.md)
 CATEGORIAS_RESERVA = "news,it"   # general vazio: os 3 motores web da instância suspendem sob carga
+FONTES_ACADEMICAS_PADRAO = ["openalex", "semanticscholar"]   # pesquisa.fontes_academicas do perfis.yml; [] desliga
 
 _transporte_http: Optional[httpx.BaseTransport] = None   # os testes trocam por httpx.MockTransport
 
@@ -332,6 +334,20 @@ def _buscar(consulta: str, max_results: int) -> list[dict]:
     return resultados
 
 
+def _fontes_academicas() -> list[str]:
+    fontes = _config_pesquisa().get("fontes_academicas")
+    if fontes is None:
+        return list(FONTES_ACADEMICAS_PADRAO)
+    return [str(f).strip() for f in fontes if str(f).strip()] if isinstance(fontes, list) else []
+
+
+def _buscar_academico(consulta: str, max_results: int) -> list[dict]:
+    """Artigos do OpenAlex / Semantic Scholar (lib_academico) para a subpergunta de um tema que o plano marcou
+    como acadêmico. Lista vazia em pesquisa.fontes_academicas desliga; base fora do ar é pulada lá dentro."""
+    fontes = _fontes_academicas()
+    return academico.buscar_todas(consulta, fontes, max_results) if fontes else []
+
+
 # ── Estado dos jobs (gravação atômica: temporário + os.replace) ──
 def _gravar_json_atomico(caminho: Path, dados) -> None:
     """Quem lê (GET /research/{id}, outro processo) vê o arquivo antigo inteiro ou o novo inteiro, nunca metade."""
@@ -417,13 +433,15 @@ SCHEMA_PLANO = {
     "type": "object",
     "properties": {
         "subperguntas": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 6},
+        "academico": {"type": "boolean"},
     },
-    "required": ["subperguntas"],
+    "required": ["subperguntas", "academico"],
 }
 
 
-def _plano(topic: str, perfil_ctx: str) -> list[str]:
-    """3–6 subperguntas pesquisáveis sozinhas. LLM fora ou resposta inútil → o próprio tema como única subpergunta."""
+def _plano(topic: str, perfil_ctx: str) -> tuple[list[str], bool]:
+    """(3–6 subperguntas pesquisáveis sozinhas, tema acadêmico?). Acadêmico = estudado em artigos científicos: as
+    bases do lib_academico entram na busca de cada subpergunta. LLM fora ou resposta inútil → ([tema], False)."""
     perfil_hint = f"\n{perfil_ctx}\n" if perfil_ctx else ""
     prompt = (
         f"{_hoje()}"
@@ -433,10 +451,13 @@ def _plano(topic: str, perfil_ctx: str) -> list[str]:
         f"num buscador (sem pronomes que dependam das outras). Cubra, quando fizer sentido: o que é, como "
         f"funciona, estado atual, alternativas/comparações e limitações. "
         f"Escreva cada subpergunta no idioma em que o assunto é mais documentado.\n"
-        f'Responda em JSON: {{"subperguntas": ["...", "..."]}}'
+        f"Marque academico como true se o tema é estudado em artigos científicos (papers, teses, revistas "
+        f"acadêmicas) e false se é assunto de documentação, produto, notícia ou mercado.\n"
+        f'Responda em JSON: {{"subperguntas": ["...", "..."], "academico": true ou false}}'
     )
     dados = ollama_generate_json(prompt, model=_modelo("notas"), schema=SCHEMA_PLANO, timeout=120)
     brutas = dados.get("subperguntas") if isinstance(dados, dict) else None
+    eh_academico = isinstance(dados, dict) and dados.get("academico") is True
     subs, vistas = [], set()
     for s in brutas if isinstance(brutas, list) else []:
         s = re.sub(r"\s+", " ", s).strip() if isinstance(s, str) else ""
@@ -445,8 +466,8 @@ def _plano(topic: str, perfil_ctx: str) -> list[str]:
             subs.append(s)
     if not subs:
         log("[researcher] plano veio vazio — pesquisando o tema como subpergunta única")
-        return [topic]
-    return subs[:6]
+        return [topic], False
+    return subs[:6], eh_academico
 
 
 # ── 2. Busca + filtro de relevância ───────────────────────────
@@ -489,9 +510,14 @@ def _relevante(subpergunta: str, resultado: dict) -> bool:
     return _cosseno(a, b) >= _relevancia_minima()
 
 
-def _candidatos(job: dict, subpergunta: str, max_results: int, vistos: set[str]) -> list[dict]:
-    """Resultados do SearXNG para a subpergunta, sem duplicatas (URL/título, e URLs já tentadas antes) e relevantes."""
-    unicos = [r for r in deduplicate_by_url_and_title(_buscar(subpergunta, max_results))
+def _candidatos(job: dict, subpergunta: str, max_results: int, vistos: set[str],
+                eh_academico: bool = False) -> list[dict]:
+    """Resultados do SearXNG (e, em tema acadêmico, os artigos do lib_academico na frente) para a subpergunta, sem
+    duplicatas (URL/título, e URLs já tentadas antes) e relevantes."""
+    brutos = _buscar(subpergunta, max_results)
+    if eh_academico:
+        brutos = _buscar_academico(subpergunta, max_results) + brutos
+    unicos = [r for r in deduplicate_by_url_and_title(brutos)
               if r.get("url") and r["url"] not in vistos]
     relevantes = [r for r in unicos if _relevante(subpergunta, r)]
     job["contagem"]["resultados"] += len(unicos)
@@ -540,6 +566,16 @@ def _baixar_pagina(url: str) -> Optional[str]:
     return texto if len(texto) >= PAGINA_TEXTO_MIN else None
 
 
+def _texto_da_fonte(resultado: dict) -> Optional[str]:
+    """Texto do resultado: artigo do arXiv tenta a versão HTML (url_html) antes da página do resumo (url)."""
+    for url in (resultado.get("url_html"), resultado["url"]):
+        if url:
+            texto = _baixar_pagina(url)
+            if texto:
+                return texto
+    return None
+
+
 SCHEMA_NOTAS = {
     "type": "object",
     "properties": {
@@ -569,7 +605,11 @@ def _nota_da_pagina(subpergunta: str, resultado: dict, texto: str) -> Optional[d
              if isinstance(f, str) and f.strip()][:FATOS_MAX]
     if not fatos:
         return None
-    return {"url": url, "titulo": titulo, "subpergunta": subpergunta, "fatos": fatos}
+    nota = {"url": url, "titulo": titulo, "subpergunta": subpergunta, "fatos": fatos}
+    ident = academico.identificador(resultado)        # "arXiv:…" / "doi:…" quando a fonte veio das bases acadêmicas
+    if ident:
+        nota["id"] = ident
+    return nota
 
 
 # ── 4. Síntese ────────────────────────────────────────────────
@@ -614,15 +654,16 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
 
     # 1. Plano
     _job_atualizar(job, etapa="plano", mensagem=f"quebrando o tema em subperguntas ({_modelo('notas')})")
-    subs = _plano(topic, perfil_ctx)
-    _job_atualizar(job, subperguntas=subs, mensagem=f"{len(subs)} subperguntas: " + " | ".join(subs))
+    subs, eh_academico = _plano(topic, perfil_ctx)
+    _job_atualizar(job, subperguntas=subs, academico=eh_academico,
+                   mensagem=f"{len(subs)} subperguntas{' (tema acadêmico)' if eh_academico else ''}: " + " | ".join(subs))
 
     # 2 + 3. Busca, filtro e leitura, subpergunta por subpergunta
     notas: list[dict] = []
     vistos: set[str] = set()   # URLs já tentadas: uma página não é baixada duas vezes nem cita duas subperguntas
     for i, sub in enumerate(subs, 1):
         _job_atualizar(job, etapa="busca", mensagem=f"subpergunta {i}/{len(subs)}: {sub}")
-        candidatos = _candidatos(job, sub, req.results_per_query, vistos)
+        candidatos = _candidatos(job, sub, req.results_per_query, vistos, eh_academico)
         _job_atualizar(job, etapa="leitura",
                        mensagem=f"subpergunta {i}/{len(subs)}: {len(candidatos)} resultado(s) relevante(s)")
         lidas = 0
@@ -631,7 +672,7 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
                 break
             vistos.add(r["url"])
             job["contagem"]["tentadas"] += 1
-            texto = _baixar_pagina(r["url"])
+            texto = _texto_da_fonte(r)
             nota = _nota_da_pagina(sub, r, texto) if texto else None
             if not nota:
                 continue
@@ -655,9 +696,12 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
     now      = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     dt_str   = now.strftime("%d/%m/%Y %H:%M")
-    rodape   = f"pesquisa profunda: {len(subs)} subperguntas, {len(notas)} páginas lidas"
+    n_academicas = sum(1 for nota in notas if nota.get("id"))
+    rodape   = (f"pesquisa profunda: {len(subs)} subperguntas, {len(notas)} páginas lidas"
+                + (f", {n_academicas} artigo(s) científico(s)" if n_academicas else ""))
 
-    lista_fontes = "\n".join(f"- [{n}] [{nota['titulo']}]({nota['url']})" for n, nota in enumerate(notas, 1))
+    lista_fontes = "\n".join(f"- [{n}] [{nota['titulo']}]({nota['url']})" + (f" — {nota['id']}" if nota.get("id") else "")
+                             for n, nota in enumerate(notas, 1))
     synthesis_body = (
         f"# {topic}\n\n"
         f"{relatorio}\n\n"
@@ -679,7 +723,8 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
         sources_body += (
             f"## [{n}] {nota['titulo']}\n"
             f"- **URL**: {nota['url']}\n"
-            f"- **Subpergunta**: {nota['subpergunta']}\n"
+            + (f"- **ID**: {nota['id']}\n" if nota.get("id") else "")
+            + f"- **Subpergunta**: {nota['subpergunta']}\n"
             + "".join(f"  - {fato}\n" for fato in nota["fatos"]) + "\n"
         )
     vault_write(VAULT_ALFRED, f"research/{slug}", "sources", sources_body, frontmatter={
@@ -708,6 +753,8 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
         "topic": slug,
         "type":  "index",
         "modo":  "profundo",
+        "academico": eh_academico,
+        "fontes_academicas": n_academicas,
         "tags":  ["research", slug],
     })
 
@@ -722,6 +769,7 @@ def _pesquisa_profunda(job: dict, req: ResearchRequest, topic_dir: Path) -> dict
         "cached":        False,
         "cache_type":    None,
         "profundo":      True,
+        "academico":     eh_academico,
         "subperguntas":  subs,
         "sources_found": len(notas),
         "synthesis":     synthesis_body,
@@ -942,7 +990,7 @@ def health():
     chroma_ok = _get_chroma() is not None
     return {
         "status":     "ok",
-        "version":    "3.2.0",
+        "version":    "3.3.0",
         "vault":      str(VAULT_ALFRED),
         "cache_days": CACHE_DAYS,
         "chromadb":   "online" if chroma_ok else "offline",

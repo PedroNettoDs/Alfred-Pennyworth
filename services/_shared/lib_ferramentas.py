@@ -43,7 +43,7 @@ from typing import Literal, Optional, Union, get_args, get_origin
 import httpx
 import yaml
 
-from _shared import lib_db, lib_memoria, lib_rag, lib_web
+from _shared import lib_academico, lib_db, lib_memoria, lib_rag, lib_web
 from _shared.lib_alfred import PROJECT_ROOT, gravar_atomico, log, searxng_search
 from _shared.lib_mail import compactar_urls, html_to_text
 
@@ -475,6 +475,30 @@ def buscar_web(consulta: str, n: int = 5) -> str:
     return f"{len(achados)} resultado(s) para {consulta!r} — leia uma página com ler_pagina(url):\n\n" + "\n\n".join(
         f"[{i}] {r['title'] or r['url']}\n{r['url']}" + (f"\n{r['snippet']}" if r.get("snippet") else "")
         for i, r in enumerate(achados, 1))
+
+
+@ferramenta("buscar_artigos",
+            "Busca artigos científicos nas bases abertas OpenAlex e Semantic Scholar: título, autores, ano, citações, "
+            "DOI/arXiv e resumo. Use para papers, teses, \"o que a literatura diz\", estado da arte. Para ler um "
+            "artigo, ler_pagina(url); para um estudo com notas salvas no cofre, pesquisar.",
+            timeout=50)
+def buscar_artigos(consulta: str, n: int = 5) -> str:
+    """
+    :param consulta: Tema ou título, de preferência em inglês, ex.: "lottery ticket hypothesis"
+    :param n: Quantos artigos (até 10)
+    """
+    n = min(max(n, 1), 10)
+    achados = lib_academico.buscar_todas(consulta, limite=n)[:n]
+    if not achados:
+        return f"Nenhum artigo encontrado para {consulta!r} (ou as bases não responderam)."
+    blocos = []
+    for i, r in enumerate(achados, 1):
+        autores = ", ".join(r["autores"]) + (" et al." if len(r["autores"]) == 3 else "") if r["autores"] else ""
+        meta = " · ".join(x for x in (autores, str(r["ano"] or ""),
+                                       f"{r['citacoes']} citações" if r["citacoes"] is not None else "",
+                                       lib_academico.identificador(r), r["source"]) if x)
+        blocos.append(f"[{i}] {r['title']}\n{meta}\n{r['url']}" + (f"\n{r['snippet']}" if r["snippet"] else ""))
+    return f"{len(achados)} artigo(s) para {consulta!r} — leia um com ler_pagina(url):\n\n" + "\n\n".join(blocos)
 
 
 @ferramenta("ler_pagina",

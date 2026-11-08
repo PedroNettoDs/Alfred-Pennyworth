@@ -447,7 +447,7 @@ nunca recebe exceção). Código do repositório é chamado direto; HTTP só par
 | Área | Ferramentas |
 |---|---|
 | Sistema (Shell Executor) | `executar_comando` ⚠, `relatorio_sistema`, `status_disco`, `status_gpu` |
-| Pesquisa e web | `pesquisar`, `andamento_pesquisa` (Researcher), `buscar_web`, `ler_pagina` |
+| Pesquisa e web | `pesquisar`, `andamento_pesquisa` (Researcher), `buscar_web`, `buscar_artigos` (OpenAlex / Semantic Scholar), `ler_pagina` |
 | Briefings e resumo | `gerar_briefing`, `ver_briefings`, `ler_briefing`, `resumo_do_dia` |
 | Pendências, jornal e limpeza | `listar_pendencias`, `ver_pendencia`, `responder_pendencia` ⚠, `jornal_de_hoje`, `listar_limpezas`, `responder_limpeza` ⚠ |
 | E-mail e WhatsApp | `emails_recentes`, `ler_email`, `buscar_mensagens`, `conversa_com` |

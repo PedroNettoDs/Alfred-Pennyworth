@@ -87,6 +87,11 @@ class _Transporte:
         return rota(request) if callable(rota) else rota
 
 
+ARTIGO = {"url": "https://arxiv.org/abs/1803.03635", "url_html": "https://arxiv.org/html/1803.03635",
+          "title": "Tokio runtime async Rust (paper)", "snippet": "rust async runtime", "source": "OpenAlex",
+          "doi": "", "arxiv_id": "1803.03635", "ano": 2018, "citacoes": 10, "autores": ["A"]}
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -129,7 +134,8 @@ class TestPlano(_Base):
                                      "História"]}
 
         with mock.patch.object(researcher, "ollama_generate_json", llm):
-            subs = researcher._plano("Tokio", "")
+            subs, eh_academico = researcher._plano("Tokio", "")
+        self.assertFalse(eh_academico)                                   # sem o campo → não acadêmico
         self.assertEqual(subs, ["O que é Tokio?", "Como funciona o executor?", "Tokio vs async-std",
                                 "Limitações do Tokio", "Uso em produção", "Benchmarks"])
         self.assertEqual(chamadas[0]["model"], "leve:teste")          # plano usa o modelo leve
@@ -148,7 +154,7 @@ class TestPlano(_Base):
     def test_llm_fora_ou_lixo_pesquisa_o_tema(self):
         for resposta in (None, [], {"subperguntas": "não é lista"}, {"outra": ["x"]}):
             with mock.patch.object(researcher, "ollama_generate_json", lambda *a, r=resposta, **k: r):
-                self.assertEqual(researcher._plano("Tema X", ""), ["Tema X"])
+                self.assertEqual(researcher._plano("Tema X", ""), (["Tema X"], False))
 
     def test_perfil_entra_no_prompt(self):
         prompts = []
@@ -222,6 +228,36 @@ class TestBusca(_Base):
         relevantes = researcher._candidatos(job, "O que é o runtime Tokio em Rust?", 8, set())
         self.assertEqual([r["url"] for r in relevantes], ["https://tokio.example/"])
         self.assertEqual([c[1] for c in chamadas], ["general", "news,it"])
+
+    def test_tema_academico_poe_os_artigos_na_frente(self):
+        # título do SearXNG sem sobreposição > 80% com o do artigo (senão o dedup por título o tira)
+        self._searxng({"general": [{"url": "https://tokio.example/", "title": "Guia do Tokio para iniciantes em Rust",
+                                    "snippet": "runtime async"},
+                                   {"url": "https://arxiv.org/abs/1803.03635", "title": "Tokio runtime async Rust (paper)",
+                                    "snippet": "duplicado do artigo"}]})
+        pedidos = []
+        artigos = lambda consulta, fontes, limite: pedidos.append((consulta, list(fontes), limite)) or [dict(ARTIGO)]
+        job = {"contagem": {"resultados": 0, "relevantes": 0}}
+        with mock.patch.object(researcher.academico, "buscar_todas", artigos):
+            sem = researcher._candidatos(job, "O que é o runtime Tokio em Rust?", 8, set())
+            com = researcher._candidatos(job, "O que é o runtime Tokio em Rust?", 8, set(), eh_academico=True)
+        self.assertEqual([r["url"] for r in sem], ["https://tokio.example/", "https://arxiv.org/abs/1803.03635"])
+        self.assertEqual(pedidos, [("O que é o runtime Tokio em Rust?", ["openalex", "semanticscholar"], 8)])
+        # artigo na frente, com url_html preservada; o resultado igual do SearXNG cai no dedup por URL
+        self.assertEqual([r["url"] for r in com], ["https://arxiv.org/abs/1803.03635", "https://tokio.example/"])
+        self.assertEqual(com[0]["url_html"], "https://arxiv.org/html/1803.03635")
+        self.assertEqual(job["contagem"]["resultados"], 4)
+        # perfis.yml: lista própria de fontes, e lista vazia desliga mesmo em tema acadêmico
+        pedidos.clear()
+        with mock.patch.object(researcher.academico, "buscar_todas", artigos), \
+                mock.patch.object(researcher, "_config_pesquisa", lambda: {"fontes_academicas": ["openalex"]}):
+            researcher._candidatos(job, "x", 8, set(), eh_academico=True)
+        self.assertEqual(pedidos[0][1], ["openalex"])
+        pedidos.clear()
+        with mock.patch.object(researcher.academico, "buscar_todas", artigos), \
+                mock.patch.object(researcher, "_config_pesquisa", lambda: {"fontes_academicas": []}):
+            researcher._candidatos(job, "x", 8, set(), eh_academico=True)
+        self.assertEqual(pedidos, [])
 
 
 # ══════════════════════════════════════════════════════════════
@@ -362,6 +398,31 @@ class TestLeitura(_Base):
         for url in ("https://pdf.example/x.pdf", "https://erro.example/", "https://vazia.example/"):
             self.assertIsNone(researcher._baixar_pagina(url), url)
 
+    def test_texto_da_fonte_tenta_html_do_arxiv_antes_do_resumo(self):
+        pagina = lambda corpo: httpx.Response(200, headers={"content-type": "text/html"}, content=html("Paper", corpo))
+        t = self.usar_transporte({"https://arxiv.org/abs/1803.03635": pagina("Só o resumo do artigo.")})
+        texto = researcher._texto_da_fonte(dict(ARTIGO))
+        self.assertIn("Só o resumo do artigo.", texto)
+        self.assertEqual(t.pedidos, ["https://arxiv.org/html/1803.03635", "https://arxiv.org/abs/1803.03635"])
+        t = self.usar_transporte({"https://arxiv.org/html/1803.03635": pagina("Texto completo do artigo."),
+                                  "https://arxiv.org/abs/1803.03635": pagina("Só o resumo do artigo.")})
+        self.assertIn("Texto completo do artigo.", researcher._texto_da_fonte(dict(ARTIGO)))
+        self.assertEqual(t.pedidos, ["https://arxiv.org/html/1803.03635"])
+        t = self.usar_transporte({})
+        self.assertIsNone(researcher._texto_da_fonte(dict(ARTIGO)))
+        sem_html = {"url": "https://tokio.example/guia"}            # resultado do SearXNG: só a url
+        t = self.usar_transporte({"https://tokio.example/guia": pagina("Guia.")})
+        self.assertIn("Guia.", researcher._texto_da_fonte(sem_html))
+        self.assertEqual(t.pedidos, ["https://tokio.example/guia"])
+
+    def test_nota_de_artigo_leva_o_id(self):
+        with mock.patch.object(researcher, "ollama_generate_json", lambda *a, **k: {"fatos": ["Fato."]}):
+            nota = researcher._nota_da_pagina("sub", dict(ARTIGO), "texto")
+            comum = researcher._nota_da_pagina("sub", {"url": "https://a.example/", "title": "A"}, "texto")
+        self.assertEqual(nota["id"], "arXiv:1803.03635")
+        self.assertEqual(nota["url"], "https://arxiv.org/abs/1803.03635")      # a URL canônica, não a html
+        self.assertNotIn("id", comum)
+
     def test_nota_tem_url_do_codigo_e_fatos_limpos(self):
         prompts = []
 
@@ -446,7 +507,7 @@ class TestFluxoProfundo(_Base):
     def _llm_json(self, prompt, model=None, timeout=120, schema=None, options=None):
         self.chamadas_llm.append(("json", model, schema, options))
         if schema is researcher.SCHEMA_PLANO:
-            return {"subperguntas": list(SUBS)}
+            return {"subperguntas": list(SUBS), "academico": getattr(self, "academico", False)}
         url = re.search(r"^Página: .* \((https?://[^)]+)\)$", prompt, re.MULTILINE).group(1)
         return {"fatos": [f"Fato lido em {url}"]}
 
@@ -530,6 +591,44 @@ class TestFluxoProfundo(_Base):
         r2 = self._post()
         self.assertEqual(r2.status_code, 200)
         self.assertEqual(r2.json()["cache_type"], "exact")
+
+    def test_tema_academico_le_o_arxiv_e_cita_o_id(self):
+        self.academico = True
+        pagina = lambda corpo: httpx.Response(200, headers={"content-type": "text/html"}, content=html("Paper", corpo))
+        self.transporte.rotas["https://arxiv.org/abs/1803.03635"] = pagina("Resumo do artigo sobre o runtime.")
+        artigos = lambda consulta, fontes, limite: [dict(ARTIGO)] if consulta == SUBS[0] else []
+        with mock.patch.object(researcher.academico, "buscar_todas", artigos):
+            job = self._esperar(self._post().json()["job_id"])
+        self.assertEqual(job["status"], "done", job.get("erro"))
+        self.assertTrue(job["academico"])
+        self.assertTrue(job["resultado"]["academico"])
+        # a primeira subpergunta leu o artigo: html (404 no teste) e depois abs; sem SearXNG para ela
+        self.assertEqual(self.transporte.pedidos[:2],
+                         ["https://arxiv.org/html/1803.03635", "https://arxiv.org/abs/1803.03635"])
+        self.assertEqual(job["notas"][0]["url"], "https://arxiv.org/abs/1803.03635")
+        self.assertEqual(job["notas"][0]["id"], "arXiv:1803.03635")
+        self.assertEqual(job["contagem"]["lidas"], 3)
+        slug = job["resultado"]["slug"]
+        sintese = (self.vault / "research" / slug / "synthesis.md").read_text(encoding="utf-8")
+        self.assertIn("- [1] [Tokio runtime async Rust (paper)](https://arxiv.org/abs/1803.03635) — arXiv:1803.03635\n"
+                      "- [2] [", sintese)
+        self.assertIn("1 artigo(s) científico(s)", sintese)
+        fontes = (self.vault / "research" / slug / "sources.md").read_text(encoding="utf-8")
+        self.assertIn("- **URL**: https://arxiv.org/abs/1803.03635\n- **ID**: arXiv:1803.03635\n- **Subpergunta**: ", fontes)
+        indice = (self.vault / "research" / slug / "index.md").read_text(encoding="utf-8").split("\n---", 1)[0]
+        self.assertIn("academico: True", indice)        # vault_write grava bool como o Python imprime
+        self.assertIn("fontes_academicas: 1", indice)
+        # o plano foi a única chamada com o schema do plano e pediu a marcação
+        self.assertEqual(sum(1 for c in self.chamadas_llm if c[2] is researcher.SCHEMA_PLANO), 1)
+
+    def test_tema_comum_nao_consulta_as_bases(self):
+        with mock.patch.object(researcher.academico, "buscar_todas", side_effect=AssertionError("não devia chamar")):
+            job = self._esperar(self._post().json()["job_id"])
+        self.assertEqual(job["status"], "done", job.get("erro"))
+        self.assertFalse(job["academico"])
+        indice = (self.vault / "research" / job["resultado"]["slug"] / "index.md").read_text(encoding="utf-8")
+        self.assertIn("academico: False", indice.split("\n---", 1)[0])
+        self.assertIn("fontes_academicas: 0", indice.split("\n---", 1)[0])
 
     def test_sintese_vazia_erro_sem_gravar(self):
         self.relatorio = ""
