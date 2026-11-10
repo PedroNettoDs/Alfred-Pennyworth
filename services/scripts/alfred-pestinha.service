@@ -1,0 +1,16 @@
+[Unit]
+Description=Alfred — Pestinha (pet de tela: a fila e o trabalho do Alfred na área de trabalho)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart="@ALFRED_DIR@/services/scripts/alfred-pestinha.sh"
+Restart=no
+
+[Install]
+WantedBy=graphical-session.target
+
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh e services/inbox/integracoes.py trocam @ALFRED_DIR@ pelo
+# caminho real e gravam a unit em ~/.config/systemd/user/. Ninguém habilita sozinho: abrir no login é escolha
+# sua (Painel → Integrações, ou `run.sh integracoes login-ligar`).

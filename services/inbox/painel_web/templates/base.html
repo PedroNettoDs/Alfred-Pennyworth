@@ -1,6 +1,6 @@
 {#
   Esqueleto de todas as telas do Painel do Alfred.
-  Variáveis: csrf (str), ativo ("inicio"|"conversa"|"pendencias"|"agenda"|"limpeza"|"pesquisar"|"sistema"),
+  Variáveis: csrf (str), ativo ("inicio"|"conversa"|"pendencias"|"agenda"|"limpeza"|"pesquisar"|"integracoes"|"sistema"),
              contadores (dict de /painel/api/contadores; opcional), simulado (bool; opcional).
   Blocos:    titulo (texto do <title>), conteudo (dentro de <main>), pagina (o <body> inteiro — só o login troca),
              classe_conteudo (classe extra do <main>; a Conversa usa " conteudo--cheio" para ocupar a altura toda).
@@ -44,6 +44,7 @@
                 ("redigir",    "/painel/redigir",    "Redigir",    "conversa",   "redigir_aguardando"),
                 ("limpeza",    "/painel/limpeza",    "Limpeza",    "limpeza",    "limpeza_aguardando"),
                 ("pesquisar",  "/painel/pesquisar",  "Pesquisar",  "busca",      none),
+                ("integracoes","/painel/integracoes","Integrações","externo",    none),
                 ("sistema",    "/painel/sistema",    "Sistema",    "sistema",    none),
               ] %}
           {%- set n = contadores.get(contador, 0) if contador else 0 %}

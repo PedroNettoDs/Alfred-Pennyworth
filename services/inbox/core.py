@@ -45,6 +45,7 @@ from _shared.lib_mail import (  # noqa: E402
     find_thunderbird_profile, list_accounts, fetch_messages, imap_fetch, limpar_url,
 )
 from _shared import lib_db  # noqa: E402
+from _shared import lib_atividade  # noqa: E402
 from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text  # noqa: E402
 from _shared.lib_titulo import generate_title_via_llm  # noqa: E402
 from _shared.lib_tts import tts_save, limpar_para_fala, tocar_audio  # noqa: E402
@@ -1167,6 +1168,7 @@ def abrir_no_navegador(url: str) -> bool:
 def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
     """Notificação desktop com botões (processo destacado, fica ocioso aguardando):
     e-mail → Vou / Não vou / Ouvir · WhatsApp → Enviar (rascunho editável) / Não enviar / Agenda / Ouvir."""
+    lib_atividade.evento("pendencia", entry.get("titulo") or "")
     if entry.get("tipo") == "whatsapp":
         wa = entry.get("whatsapp") or {}
         if aguardar_resposta and _tem_gui():
@@ -1484,6 +1486,7 @@ def _resumo_msg(m: dict, c: dict) -> dict:
     }
 
 
+@lib_atividade.atividade("email", "Ler e classificar os e-mails")
 def ciclo(
     inbox_name: Optional[str] = None,
     dry_run: bool = False,
@@ -1498,6 +1501,7 @@ def ciclo(
     inicio = _now()
     log(f"=== Inbox '{nome}' (perfil {cfg.get('perfil')}) — {inicio:%d/%m/%Y %H:%M}{' [DRY-RUN]' if dry_run else ''} ===")
 
+    lib_atividade.passo("Lendo a caixa de entrada")
     msgs = coletar(cfg, janela_horas, max_emails)
     seen = load_seen()
     novos = [m for m in msgs if reprocessar or m["message_id"] not in seen]
@@ -1514,6 +1518,7 @@ def ciclo(
     eventos: list[tuple[dict, dict]] = []
     nao_marcar: set[str] = set()   # message_ids que NÃO vão para o seen: tratados num próximo ciclo
     for i, m in enumerate(novos, 1):
+        lib_atividade.passo("Classificando e-mails", i, len(novos))
         c = classificar(m, cfg)
         if c.get("falhou"):
             nao_marcar.add(m["message_id"])
@@ -1531,6 +1536,7 @@ def ciclo(
         return resumo
 
     if not so_pendencias and emails_noticia:
+        lib_atividade.passo("Montando o jornal")
         itens: list[dict] = []
         for m in emails_noticia:
             itens.extend(extrair_noticias(m, cfg.get("jornal") or {}))
@@ -1540,6 +1546,7 @@ def ciclo(
         log("[jornal] Nenhuma newsletter nova — edição não gerada")
 
     if not so_jornal:
+        lib_atividade.passo("Preparando as pendências")
         existentes = _load_pend()["pendencias"]
         for m, c in eventos:
             ev = extrair_evento(m, c)
@@ -1568,6 +1575,7 @@ def ciclo(
         nao_marcar.update(m["message_id"] for m in emails_noticia)
     if nao_marcar:
         log(f"[ciclo] {len(nao_marcar)} e-mail(s) não marcado(s) como visto(s) — ficam para o próximo ciclo")
+    lib_atividade.passo("Arrumando a casa")
     for m in novos:
         if m["message_id"] not in nao_marcar:
             seen[m["message_id"]] = datetime.now().isoformat(timespec="minutes")

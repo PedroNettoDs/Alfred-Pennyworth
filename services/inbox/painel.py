@@ -3,7 +3,7 @@ Painel do Alfred — interface web local de aprovações, servida pela própria 
 
     http://127.0.0.1:7073/painel      (login com o mesmo SHELL_EXECUTOR_TOKEN da API)
 
-Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza, Pesquisar e Sistema (só leitura). As ações chamam
+Telas: Início, Pendências (lista + detalhe), Agenda, Limpeza, Pesquisar, Integrações e Sistema (só leitura). As ações chamam
 as MESMAS funções do CLI/notificação/API — whatsapp.responder_texto, whatsapp.agendar_pendencia,
 core.responder, agenda.desfazer, limpeza.aprovar/recusar/limpar, pesquisa.pesquisar/abrir_notebook —; nada aqui
 grava YAML.
@@ -48,6 +48,7 @@ from starlette.concurrency import run_in_threadpool
 
 import agenda
 import core
+import integracoes
 import limpeza
 import pesquisa
 import whatsapp
@@ -1308,6 +1309,13 @@ def tela_sistema(request: Request):
     return _pagina(request, "sistema.html", "sistema", **_dados_sistema())
 
 
+@router.get("/integracoes")
+def tela_integracoes(request: Request):
+    if not _nonce_da_sessao(request):
+        return _para_login(request)
+    return _pagina(request, "integracoes.html", "integracoes", pet=integracoes.estado())
+
+
 @router.get("/whatsapp")
 def tela_whatsapp(request: Request):
     """Pareamento: gera o QR na hora (expira em ~40 s na Evolution; a página recarrega sozinha)."""
@@ -1398,6 +1406,8 @@ def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Option
         html = _render("_limpeza_lista.html", lotes=lotes, erro_limpeza=erro, ext=_estado_limpeza())
     elif nome == "sistema":
         html = _render("_sistema.html", **_dados_sistema())
+    elif nome == "integracoes":
+        html = _render("_integracoes.html", pet=integracoes.estado())
     elif nome == "pesquisa":
         destino = _destino_valido(notebook)
         dados = _dados_andamento(job or "", destino) if destino is not None else None
@@ -1763,3 +1773,22 @@ async def acao_recusar(request: Request, lid: str):
 @router.post("/api/limpeza/{lid}/limpar")
 async def acao_limpar(request: Request, lid: str):
     return await _acao_lote(request, lid, "limpar")
+
+
+# ── Integrações (Pestinha) ──
+
+@router.post("/api/integracoes/pestinha/{acao}")
+async def acao_integracao(request: Request, acao: str):
+    if recusa := _checar_post(request):
+        return recusa
+    if acao not in integracoes.ACOES:
+        return _erro(404, "Ação desconhecida.")
+    if acao in integracoes.LONGAS:      # baixam e instalam: seguem em segundo plano, a tela mostra o passo
+        if not integracoes.iniciar(acao):
+            return _erro(409, "Já há uma instalação ou atualização em andamento. O andamento aparece nesta tela.")
+        return JSONResponse({"ok": True, "mensagem": "Começou. O andamento aparece nesta tela."})
+    try:
+        mensagem = await run_in_threadpool(integracoes.executar, acao)
+    except integracoes.Falha as e:
+        return _erro(409, str(e))
+    return JSONResponse({"ok": True, "mensagem": mensagem})

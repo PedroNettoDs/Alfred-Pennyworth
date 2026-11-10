@@ -30,6 +30,8 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa; no navegador, a aba Conversa do Painel
 ./run.sh conversa-comprimir                   # conversas paradas há um dia viram resumo no cofre e fatos na memória (timer às 04:00)
 ./run.sh promessas                     # o que você disse que ia fazer (abertas e atrasadas) — ver Promessas
+./run.sh fila                          # o que o Alfred faz agora e a fila (adicionar TIPO [--frente] | frente ID | cancelar ID) — ver PESTINHA.md
+./run.sh integracoes                   # Pestinha, o pet de tela: estado | instalar | atualizar | abrir | fechar | login-ligar | login-desligar — ver PESTINHA.md
 ```
 
 Flags do ciclo: `--inbox NOME`, `--desde HORAS`, `--reprocessar` (ignora o `inbox_seen.json`), `--max N`, `--sem-notificar`, `--json`.

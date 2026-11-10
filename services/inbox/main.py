@@ -58,6 +58,7 @@ import core  # noqa: E402
 import whatsapp  # noqa: E402
 import semanal  # noqa: E402
 from _shared import lib_db  # noqa: E402
+from _shared import lib_atividade  # noqa: E402
 try:
     import painel  # noqa: E402  (Painel do Alfred: /painel, só 127.0.0.1)
 except ImportError as e:
@@ -106,6 +107,8 @@ async def lifespan(_app: FastAPI):
     INICIO_API = datetime.now(timezone.utc)
     parar = threading.Event()
     threading.Thread(target=_laco_fila_whatsapp, args=(parar,), name="whatsapp-fila", daemon=True).start()
+    if os.getenv("ALFRED_AUTOMACAO") == "1":   # só a API das units despacha a fila; testes e `run.sh serve` à mão, não
+        threading.Thread(target=lib_atividade.laco, args=(parar,), name="atividade", daemon=True).start()
     yield
     parar.set()   # se estiver no meio de um item, ele continua na fila e sai na próxima subida
     INICIO_API = None

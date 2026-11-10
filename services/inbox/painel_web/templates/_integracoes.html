@@ -1,0 +1,81 @@
+{#
+  Miolo de Integrações (página e /painel/parcial/integracoes). Var: pet = integracoes.estado() —
+  pasta, repo, codigo, venv, instalado, ramo, commit, ligado, unit, rodando, a_mao, no_login, xprintidle,
+  sessao_grafica, publicando, tarefa ({acao, andando, passo, mensagem, erro}).
+#}
+{% import "_macros.html" as m %}
+{%- set t = pet.tarefa %}
+{%- set api = "/painel/api/integracoes/pestinha/" %}
+<section class="cartao sistema-grupo" aria-labelledby="i-pestinha">
+  <h2 class="cartao__titulo" id="i-pestinha">Pestinha</h2>
+  <p class="suave">Pet de tela: mostra a fila do Alfred, o que ele está fazendo e as pendências novas. Código próprio (GPL-3.0), em <code>{{ pet.pasta }}</code>.</p>
+  {%- if t.andando %}
+  {{ m.aviso("aguardando", ("Instalando" if t.acao == "instalar" else "Atualizando") ~ ": " ~ t.passo ~ "…") }}
+  {%- elif t.erro %}
+  {{ m.aviso("erro", t.erro) }}
+  {%- elif t.mensagem %}
+  {{ m.aviso("sucesso", t.mensagem) }}
+  {%- endif %}
+  <ul class="sistema-lista">
+    {%- if pet.instalado %}
+    {{ m.item_sistema("Instalação", "ok", (pet.ramo ~ " · " ~ pet.commit) if pet.commit else "Código e ambiente presentes", rotulo="Instalado") }}
+    {%- elif pet.codigo %}
+    {{ m.item_sistema("Instalação", "aviso", "O código está na pasta, mas falta o ambiente Python. Instalar resolve.", rotulo="Incompleta") }}
+    {%- else %}
+    {{ m.item_sistema("Instalação", "neutro", "Instalar baixa o código e as dependências.", rotulo="Não instalado") }}
+    {%- endif %}
+    {%- if pet.codigo %}
+    {%- if pet.ligado %}
+    {{ m.item_sistema("Ligação com o Alfred", "ok", "O pet lê a atividade deste repositório.", rotulo="Ligado") }}
+    {%- else %}
+    {{ m.item_sistema("Ligação com o Alfred", "aviso", "O pet não aponta para este repositório. Instalar corrige.", rotulo="Desligado") }}
+    {%- endif %}
+    {%- endif %}
+    {%- if pet.publicando %}
+    {{ m.item_sistema("Atividade do Alfred", "ok", "A fila e o andamento estão sendo publicados.", rotulo="Publicando") }}
+    {%- else %}
+    {{ m.item_sistema("Atividade do Alfred", "erro", "Nada publicado nos últimos 20 s: no pet aparece “fora do ar”.", rotulo="Parada") }}
+    {%- endif %}
+    {%- if pet.instalado %}
+    {%- if pet.rodando %}
+    {{ m.item_sistema("Em execução", "ok", "Aberto à mão, fora da unit." if pet.a_mao else "Pela unit alfred-pestinha.service.", rotulo="Aberto") }}
+    {%- elif not pet.sessao_grafica %}
+    {{ m.item_sistema("Em execução", "indisponivel", "Sem sessão gráfica ativa: o pet só abre com a área de trabalho aberta.", rotulo="Fechado") }}
+    {%- else %}
+    {{ m.item_sistema("Em execução", "neutro", "", rotulo="Fechado") }}
+    {%- endif %}
+    {{ m.item_sistema("Abrir no login", "ok" if pet.no_login else "neutro", "", rotulo="Ligado" if pet.no_login else "Desligado") }}
+    {%- endif %}
+    {%- if pet.xprintidle %}
+    {{ m.item_sistema("Tempo ocioso", "ok", "xprintidle instalado.", rotulo="Disponível") }}
+    {%- else %}
+    {{ m.item_sistema("Tempo ocioso", "aviso", "Sem o xprintidle o pet acha que você está sempre ativo. No terminal: sudo apt install xprintidle", rotulo="Falta") }}
+    {%- endif %}
+  </ul>
+  {%- if not t.andando %}
+  <form class="lote__form" data-acao="" data-acoes>
+    <div class="acoes">
+      {%- if not pet.instalado or not pet.ligado %}
+      {{ m.botao("Instalar", "primario", attrs={"data-acao": api ~ "instalar", "data-confirmar": "dialogo-integracao",
+          "data-texto-ocupado": "Iniciando…",
+          "data-dialogo-mensagem": "O Alfred baixa o código de " ~ pet.repo ~ " para " ~ pet.pasta ~ " e instala as dependências num ambiente próprio (cerca de 100 MB na primeira vez)."}) }}
+      {%- else %}
+      {%- if pet.rodando %}
+      {{ m.botao("Fechar", attrs={"data-acao": api ~ "fechar", "data-texto-ocupado": "Fechando…"}) }}
+      {%- else %}
+      {{ m.botao("Abrir", "primario", attrs={"data-acao": api ~ "abrir", "data-texto-ocupado": "Abrindo…"}) }}
+      {%- endif %}
+      {%- if pet.no_login %}
+      {{ m.botao("Não abrir no login", attrs={"data-acao": api ~ "login-desligar"}) }}
+      {%- else %}
+      {{ m.botao("Abrir no login", attrs={"data-acao": api ~ "login-ligar"}) }}
+      {%- endif %}
+      {{ m.botao("Atualizar", attrs={"data-acao": api ~ "atualizar", "data-confirmar": "dialogo-integracao",
+          "data-texto-ocupado": "Iniciando…",
+          "data-dialogo-mensagem": "O Alfred busca a versão nova em " ~ pet.repo ~ " e reinstala as dependências. Se houver alterações locais na pasta do pet, nada é mexido."}) }}
+      {%- endif %}
+    </div>
+    {{ m.resultado() }}
+  </form>
+  {%- endif %}
+</section>

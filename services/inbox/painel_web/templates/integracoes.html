@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Integrações{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Integrações", "Programas de fora deste repositório que o Alfred instala, liga e abre") }}
+<div class="pilha" data-poll-url="/painel/parcial/integracoes">{% include "_integracoes.html" %}</div>
+{% call m.dialogo("dialogo-integracao", "Baixar e instalar?", "Continuar") %}
+  <p data-preencher="mensagem"></p>
+{% endcall %}
+{% endblock %}

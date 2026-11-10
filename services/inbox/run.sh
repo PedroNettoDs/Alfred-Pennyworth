@@ -13,6 +13,8 @@
 #   ./run.sh indexar|buscar TERMO [--whatsapp] → índice SQLite FTS5 dos cofres e do histórico do WhatsApp
 #   ./run.sh conversa "pergunta" [--conversa ID] → conversa com o Alfred (ferramentas, aprovação no terminal)
 #   ./run.sh conversa-comprimir [--horas 24]     → conversas paradas viram resumo no cofre e fatos na memória
+#   ./run.sh fila [adicionar TIPO [--frente]|frente ID|cancelar ID] → o que o Alfred faz agora e a fila (PESTINHA.md)
+#   ./run.sh integracoes [instalar|atualizar|abrir|fechar|login-ligar|login-desligar] → Pestinha, o pet de tela (PESTINHA.md)
 #   ./run.sh serve           → API HTTP (FastAPI) na porta PORT_INBOX, para o N8N / Evolution
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

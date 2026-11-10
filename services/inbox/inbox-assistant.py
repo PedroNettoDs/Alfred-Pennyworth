@@ -35,6 +35,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +48,7 @@ load_env(override=False)  # .env da raiz; variáveis já exportadas (run.sh, tes
 import core  # noqa: E402
 import whatsapp  # noqa: E402
 from _shared import lib_db  # noqa: E402
+from _shared import lib_atividade  # noqa: E402
 from _shared.lib_tts import tocar_audio, iniciar_audio, parar_audio, tocando  # noqa: E402
 
 
@@ -55,6 +58,29 @@ def _msg_erro(e: Exception) -> str:
 
 
 # ── Subcomandos ───────────────────────────────────────────────
+
+def cmd_fila(args):
+    """Fila do Alfred, a mesma que o Pestinha mostra: ver | adicionar TIPO [--frente] | frente ID | cancelar ID."""
+    if args.acao == "adicionar":
+        lib_atividade.pedir("enfileirar", tipo=args.alvo, frente=args.frente)
+        return 0
+    if args.acao in ("frente", "cancelar"):
+        lib_atividade.pedir(args.acao, id=args.alvo)
+        return 0
+    est = lib_atividade.estado()
+    if time.time() - (est.get("atualizado") or 0) > 30:
+        print("O Alfred não está publicando a atividade (alfred-inbox-api parada ou em modo jogo).")
+        return 1
+    for a in est["agora"]:
+        andamento = f" {a['feito']}/{a['total']}" if a.get("total") else ""
+        print(f"Agora:    {a['rotulo']}" + (f" — {a['passo']}{andamento}" if a.get("passo") else ""))
+    for n, i in enumerate(est["fila"], 1):
+        print(f"Fila {n}:   {i['rotulo']}  [{i['id']}]")
+    for a in est["agendadas"]:
+        print(f"{datetime.fromtimestamp(a['quando']):%d/%m %H:%M}:  {a['rotulo']}")
+    print("Pode pedir: " + ", ".join(c["tipo"] for c in est["catalogo"]))
+    return 0
+
 
 def cmd_ciclo(args, dry_run=False, so_jornal=False, so_pendencias=False):
     resumo = core.ciclo(
@@ -768,6 +794,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("consulta", nargs="+"); sp.add_argument("--whatsapp", action="store_true")
     sp.add_argument("--cofre", default=None, help="alfred | pedro"); sp.add_argument("--max", type=int, default=5)
     sp = sub.add_parser("_aguardar-resposta"); sp.add_argument("id")
+    sp = sub.add_parser("fila", help="o que o Alfred faz agora e a fila: ver | adicionar TIPO [--frente] | frente ID | cancelar ID")
+    sp.add_argument("acao", nargs="?", default="ver", choices=["ver", "adicionar", "frente", "cancelar"])
+    sp.add_argument("alvo", nargs="?"); sp.add_argument("--frente", action="store_true")
     import limpeza
     limpeza.adicionar_parser(sub)
     sp = sub.add_parser("_aguardar-whatsapp"); sp.add_argument("id")
@@ -779,6 +808,8 @@ def build_parser() -> argparse.ArgumentParser:
     vigia.adicionar_parser(sub)
     import conversa
     conversa.adicionar_parser(sub)
+    import integracoes
+    integracoes.adicionar_parser(sub)
     return ap
 
 
@@ -799,6 +830,8 @@ def main() -> int:
         return 0
     if args.cmd == "buscar":
         return cmd_buscar(args)
+    if args.cmd == "fila":
+        return cmd_fila(args)
     if args.cmd == "limpeza":
         import limpeza
         return limpeza.cmd_limpeza(args)
@@ -850,6 +883,9 @@ def main() -> int:
     if args.cmd == "conversa-comprimir":
         import conversa
         return conversa.cmd_comprimir(args)
+    if args.cmd == "integracoes":
+        import integracoes
+        return integracoes.cmd_integracoes(args)
     build_parser().print_help()
     return 1
 

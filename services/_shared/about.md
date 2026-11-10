@@ -201,6 +201,9 @@ Registro de ferramentas do Alfred para tool calling nativo do Ollama (`/api/chat
   - `buscar_cofre("redes de computadores")` → `lib_rag.buscar` com o ChromaDB real (8001, coleção `cofres-bge-m3`) em 2,9 s na primeira chamada: os 5 primeiros com `origem` `ambos` (notas da Fatec, CCNA, TCC), saída com `[n] caminho (cofre pedro)`. Para "o que é entropia" o vetor não achou nada abaixo de `DISTANCIA_MAX` e sobrou um acerto fraco do FTS5 (OR em "o que") num briefing — limite do `lib_rag`, não da ferramenta.
   - `ler_pagina` na página do docs.python.org que o SearXNG devolveu: 0,4 s, texto cortado em 8 000 caracteres. `http://127.0.0.1:7073/vivo` e `http://localhost:8889/` → `[erro] ler_pagina: URL recusada (não é http/https público)`.
 
+### `lib_atividade.py`
+O que o Alfred faz agora, a fila e os avisos, publicados em `logs/atividade/` para o Pestinha mostrar na tela. `atividade(tipo, rotulo)` (bloco ou decorador), `passo(texto, feito, total)` e `evento(tipo, texto)` nunca levantam; `pedir()`/`estado()` servem ao `run.sh fila`; `Despachante` (thread da API) junta tudo, roda a fila uma rotina por vez e grava `estado.json`. Sem rede e sem trava. Ver [`inbox/PESTINHA.md`](../inbox/PESTINHA.md).
+
 ### `lib_tts.py`
 `generate_tts()` (async, edge-tts), `tts_save()` (síncrono, nunca levanta), `limpar_para_fala()` (fallback sem LLM), `tocar_audio()` (ffplay → mpv → xdg-open; com `bloquear=True` passa ao próximo player se um sair com erro).
 
