@@ -1,0 +1,47 @@
+{# Miolo da visão Calendário (página e /painel/parcial/agenda?vista=calendario&dia=…). Var: cal (de painel._calendario). #}
+{% import "_macros.html" as m %}
+{% from "_agenda_item.html" import item %}
+<section class="cartao calendario" aria-labelledby="cal-mes">
+  <div class="calendario__topo">
+    <h2 class="calendario__mes" id="cal-mes">{{ cal.titulo }}</h2>
+    <div class="acoes">
+      {{ m.botao("‹", href=cal.url_mes_anterior, pequeno=true, attrs={"aria-label": "Mês anterior"}) }}
+      {{ m.botao("Hoje", href=cal.url_hoje, pequeno=true) }}
+      {{ m.botao("›", href=cal.url_mes_seguinte, pequeno=true, attrs={"aria-label": "Mês seguinte"}) }}
+    </div>
+  </div>
+  <div class="calendario__grade">
+    {%- for nome in cal.dias_semana %}<span class="calendario__semana">{{ nome }}</span>{% endfor %}
+    {%- for d in cal.celulas %}
+    <a class="calendario__dia{% if d.fora %} calendario__dia--fora{% endif %}{% if d.hoje %} calendario__dia--hoje{% endif %}{% if d.selecionado %} calendario__dia--selecionado{% endif %}"
+       href="{{ d.url }}" aria-label="{{ d.rotulo }}"{% if d.selecionado %} aria-current="date"{% endif %}>
+      <span class="calendario__numero">{{ d.numero }}</span>
+      {%- if d.total %}<span class="calendario__total">{{ d.total }} {{ "item" if d.total == 1 else "itens" }}</span>{% endif %}
+      {%- if d.altas %}<span class="calendario__alta">{{ d.altas }} alta{{ "s" if d.altas > 1 }}</span>{% endif %}
+    </a>
+    {%- endfor %}
+  </div>
+</section>
+<section aria-labelledby="cal-dia">
+  <div class="calendario__topo">
+    <h2 class="secao-titulo" id="cal-dia">{{ cal.dia_titulo }}</h2>
+    <div class="acoes">
+      {{ m.botao("‹", href=cal.url_dia_anterior, pequeno=true, attrs={"aria-label": "Dia anterior"}) }}
+      {{ m.botao("›", href=cal.url_dia_seguinte, pequeno=true, attrs={"aria-label": "Dia seguinte"}) }}
+    </div>
+  </div>
+  {%- if cal.itens %}
+  <div class="selos calendario__resumo">
+    {{ m.selo("neutro", cal.resumo.total ~ (" tarefa/evento" if cal.resumo.total == 1 else " tarefas/eventos")) }}
+    {%- if cal.resumo.alta %}{{ m.selo("erro", cal.resumo.alta ~ " urgência alta", "alerta") }}{% endif %}
+    {%- if cal.resumo.media %}{{ m.selo("neutro", cal.resumo.media ~ " média") }}{% endif %}
+    {%- if cal.resumo.baixa %}{{ m.selo("neutro", cal.resumo.baixa ~ " baixa") }}{% endif %}
+    {%- if cal.resumo.sem %}{{ m.selo("neutro", cal.resumo.sem ~ " sem urgência") }}{% endif %}
+    {%- if cal.resumo.feitos %}{{ m.selo("sucesso", cal.resumo.feitos ~ (" feito" if cal.resumo.feitos == 1 else " feitos"), "sucesso") }}{% endif %}
+    {%- if cal.resumo.inativos %}{{ m.selo("neutro", cal.resumo.inativos ~ (" desfeito" if cal.resumo.inativos == 1 else " desfeitos")) }}{% endif %}
+  </div>
+  <ul class="lista">{% for i in cal.itens %}{{ item(i) }}{% endfor %}</ul>
+  {%- else %}
+  {{ m.vazio("Nada anotado neste dia.", "agenda", compacto=true) }}
+  {%- endif %}
+</section>

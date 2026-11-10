@@ -3,5 +3,9 @@
 {% block titulo %}Agenda{% endblock %}
 {% block conteudo %}
 {{ m.cabecalho("Agenda", "Compromissos anotados pelo Alfred no calendário do Thunderbird") }}
-<div class="pilha" data-poll-url="/painel/parcial/agenda">{% include "_agenda_lista.html" %}</div>
+<nav class="abas" aria-label="Visualização da agenda">
+  <a class="aba" href="/painel/agenda"{% if vista == "lista" %} aria-current="page"{% endif %}>Lista</a>
+  <a class="aba" href="/painel/agenda?vista=calendario"{% if vista == "calendario" %} aria-current="page"{% endif %}>Calendário</a>
+</nav>
+<div class="pilha" data-poll-url="{{ url_poll }}">{% include "_agenda_calendario.html" if vista == "calendario" else "_agenda_lista.html" %}</div>
 {% endblock %}

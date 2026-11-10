@@ -941,6 +941,29 @@ class TestAgenda(Base):
         html = self.guardar(cli.get("/painel/parcial/agenda")).text
         self.assertIn("Desfeitos e cancelados", html)
 
+    def test_calendario_dia_contagens_e_polling(self):
+        amanha = core._now().replace(hour=15, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        a = agenda.adicionar("Reunião com a Attano", amanha, notificar=False)
+        with mock.patch.object(agenda, "ollama_generate_json", return_value={"resumo": "r", "urgencia": "alta"}):
+            agenda.resumir_item(a["id"])
+        agenda.adicionar("Dentista", amanha + timedelta(hours=2), notificar=False)
+        agenda.adicionar("Outro dia", amanha + timedelta(days=2), notificar=False)
+        d = amanha.strftime("%Y-%m-%d")
+        cli = self.entrar()
+        html = self.guardar(cli.get(f"/painel/agenda?vista=calendario&dia={d}")).text
+        self.assertIn('aria-current="date"', html)
+        self.assertIn("2 tarefas/eventos", html)
+        self.assertIn("Reunião com a Attano", html)
+        self.assertIn("Dentista", html)
+        self.assertNotIn("Outro dia", html)
+        self.assertIn(f"data-poll-url=\"/painel/parcial/agenda?vista=calendario&amp;dia={d}\"", html)
+        self.assertIn("1 urgência alta", html)
+        parcial = self.guardar(cli.get(f"/painel/parcial/agenda?vista=calendario&dia={d}")).text
+        self.assertIn("2 tarefas/eventos", parcial)
+        for ruim in ("x", "1500-01-01", "9999-12-31"):
+            self.assertEqual(self.guardar(cli.get(f"/painel/agenda?vista=calendario&dia={ruim}")).status_code, 200)
+        self.assertIn("Próximos", self.guardar(cli.get("/painel/agenda")).text)
+
     def test_feito_detalhe_e_concluidos(self):
         amanha = core._now().replace(hour=15, minute=0, second=0, microsecond=0) + timedelta(days=1)
         r = {"resumo": "Leve a proposta impressa.", "urgencia": "alta", "prioridade": "media", "motivo": "é amanhã"}

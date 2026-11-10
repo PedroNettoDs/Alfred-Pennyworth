@@ -1,36 +1,6 @@
 {# Miolo da Agenda (página e /painel/parcial/agenda). Vars: ativos, concluidos, inativos (de painel._agenda_vm). #}
 {% import "_macros.html" as m %}
-{% macro item(i) -%}
-<li class="agenda-item{% if i.inativo %} agenda-item--inativo{% endif %}">
-  {{ m.tempo(i.iso, i.quando, i.relativo, "agenda-item__quando") }}
-  <div>
-    <p class="agenda-item__titulo"><a href="{{ i.url }}">{{ i.titulo }}</a></p>
-    <span class="agenda-item__origem">{{ i.origem }}{% if i.local %} · {{ i.local }}{% endif %}</span>
-    {%- if i.concluido and i.feito_em %}<span class="agenda-item__origem"> · feito em {{ i.feito_em }}</span>{% endif %}
-    {%- if i.erro %}<span class="agenda-item__origem"> · Erro: {{ i.erro }}</span>{% endif %}
-  </div>
-  <span class="acoes">
-    {%- if not i.concluido and not i.inativo %}{{ m.selo_urgencia(i.urgencia) }}{% endif %}
-    {{ m.selo_status(i.status) }}
-  </span>
-  {%- if i.pode_concluir or i.pode_desfazer %}
-  <div class="acoes">
-    {%- if i.pode_concluir %}
-    <form data-acao="/painel/api/agenda/{{ i.id }}/feito" data-apos-sucesso="encerrar">
-      {{ m.botao("Feito", "primario", pequeno=true, attrs={"data-texto-ocupado": "Marcando…", "aria-label": "Marcar como feito: " ~ i.titulo}) }}
-    </form>
-    {%- endif %}
-    {%- if i.pode_desfazer %}
-    <form data-acao="/painel/api/agenda/{{ i.id }}/desfazer" data-apos-sucesso="encerrar">
-      {{ m.botao("Desfazer", pequeno=true, attrs={"data-texto-ocupado": "Desfazendo…", "aria-label": "Desfazer " ~ i.titulo}) }}
-    </form>
-    {%- endif %}
-  </div>
-  {%- else %}
-  <span></span>
-  {%- endif %}
-</li>
-{%- endmacro %}
+{% from "_agenda_item.html" import item %}
 {%- if not ativos and not concluidos and not inativos %}
 {{ m.vazio("A agenda está vazia.", "agenda") }}
 {%- else %}

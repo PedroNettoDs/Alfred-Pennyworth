@@ -622,6 +622,26 @@ textarea.entrada { resize: vertical; }
 .agenda-item__origem { color: var(--texto-suave); font-size: var(--t-xs); }
 .agenda-item--inativo .agenda-item__titulo { color: var(--texto-suave); font-weight: 500; text-decoration: line-through; text-decoration-color: var(--borda-forte); }
 .agenda-item .mensagem { grid-column: 1 / -1; margin-top: 0; }
+.calendario__topo { display: flex; align-items: center; justify-content: space-between; gap: var(--e-3); margin-bottom: var(--e-3); }
+.calendario__topo .secao-titulo { margin: 0; }
+.calendario__mes { margin: 0; font-size: var(--t-md); }
+.calendario__grade { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--e-1); }
+.calendario__semana { padding: var(--e-1); text-align: center; color: var(--texto-suave); font-size: var(--t-xs); }
+.calendario__dia {
+  display: flex; flex-direction: column; gap: 2px;
+  min-height: 4.75rem; padding: var(--e-2);
+  border: 1px solid var(--borda); border-radius: var(--raio);
+  color: var(--texto); text-decoration: none; font-size: var(--t-xs);
+}
+.calendario__dia:hover { background: var(--superficie-2); }
+.calendario__dia--fora { border-color: transparent; color: var(--texto-suave); }
+.calendario__dia--hoje .calendario__numero { color: var(--dourado); }
+.calendario__dia--hoje .calendario__numero::after { content: " · hoje"; font-weight: 500; }
+.calendario__dia--selecionado { border: 2px solid var(--dourado); background: var(--superficie-2); }
+.calendario__numero { font-size: var(--t-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+.calendario__total { color: var(--texto-suave); }
+.calendario__alta { color: var(--vermelho); font-weight: 600; }
+.calendario__resumo { margin-bottom: var(--e-3); }
 .secao-titulo { margin: var(--e-5) 0 var(--e-3); font-size: var(--t-sm); color: var(--texto-suave); text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ── Limpeza (lotes) ────────────────────────────────────────────────────── */
@@ -750,6 +770,8 @@ textarea.entrada { resize: vertical; }
   .tela-titulo { font-size: 1.5rem; }
   .dialogo__acoes { justify-content: stretch; }
   .dialogo__acoes .botao { flex: 1 1 auto; }
+  .calendario__dia { min-height: 4rem; padding: var(--e-1); }
+  .calendario__dia--hoje .calendario__numero::after { content: none; }
 }
 
 /* Telas largas: mais respiro, mesma largura máxima de leitura. */

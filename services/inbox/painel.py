@@ -32,7 +32,8 @@ import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturoTimeout
-from datetime import datetime, timedelta
+from calendar import Calendar
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
@@ -639,7 +640,15 @@ def _agenda_vm(i: dict, agora: datetime) -> dict:
             "pode_desfazer": st in AGENDA_DESFAZIVEIS, "pode_concluir": st in AGENDA_DESFAZIVEIS,
             "inativo": st in ("desfeito", "cancelado"), "concluido": st == "feito",
             "feito_em": fmt_data(i.get("feito_em")), "_feito_ts": _ts(i.get("feito_em")),
-            "erro": i.get("erro") if st == "erro" else None}
+            "erro": i.get("erro") if st == "erro" else None, "dia": _dia_agenda(inicio)}
+
+
+def _dia_agenda(inicio) -> str:
+    """AAAA-MM-DD do início, no mesmo fuso que a Lista mostra."""
+    if _so_data(inicio):
+        return inicio.strip()
+    d = _dt(inicio)
+    return d.strftime("%Y-%m-%d") if d else ""
 
 
 AGENDA_DESFAZIVEIS = ("pendente", "no_calendario", "em_execucao", "erro")
@@ -653,6 +662,64 @@ def _agenda() -> tuple[list[dict], list[dict], list[dict]]:
     concluidos = sorted([i for i in itens if i["concluido"]], key=lambda i: -i["_feito_ts"])
     inativos = sorted([i for i in itens if i["inativo"]], key=lambda i: -(_ts(i["iso"]) or 0))
     return ativos, concluidos, inativos
+
+
+MESES = ("Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro",
+         "Novembro", "Dezembro")
+DIAS_SEMANA = ("Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo")
+
+
+def _url_calendario(d: date) -> str:
+    return f"/painel/agenda?vista=calendario&dia={d.isoformat()}"
+
+
+def _dia_pedido(dia: Optional[str], hoje: date) -> date:
+    try:
+        d = date.fromisoformat((dia or "").strip())
+    except ValueError:
+        return hoje
+    return d if 2000 <= d.year <= 2100 else hoje   # as setas nunca saem do intervalo de date
+
+
+def _calendario(ativos: list[dict], concluidos: list[dict], inativos: list[dict], dia: Optional[str]) -> dict:
+    """Grade do mês do dia selecionado (domingo primeiro) + itens e contagens desse dia."""
+    hoje = _agora().date()
+    sel = _dia_pedido(dia, hoje)
+    primeiro = sel.replace(day=1)
+    mes_anterior = (primeiro - timedelta(days=1)).replace(day=1)
+    mes_seguinte = (primeiro + timedelta(days=32)).replace(day=1)
+    celulas = []
+    for d in (d for semana in Calendar(firstweekday=6).monthdatescalendar(sel.year, sel.month) for d in semana):
+        chave = d.isoformat()
+        total = sum(i["dia"] == chave for i in ativos + concluidos)
+        altas = sum(i["dia"] == chave and i.get("urgencia") == "alta" for i in ativos)
+        rotulo = f"{d:%d/%m/%Y}: " + (f"{total} {'item' if total == 1 else 'itens'}" if total else "sem itens")
+        if altas:
+            rotulo += f", {altas} de urgência alta"
+        celulas.append({"numero": d.day, "url": _url_calendario(d), "fora": d.month != sel.month, "hoje": d == hoje,
+                        "selecionado": d == sel, "total": total, "altas": altas, "rotulo": rotulo})
+    chave = sel.isoformat()
+    do_dia = [[i for i in grupo if i["dia"] == chave] for grupo in (ativos, concluidos, inativos)]
+    urg = [i.get("urgencia") for i in do_dia[0]]
+    return {"titulo": f"{MESES[sel.month - 1]} de {sel.year}", "dia": chave, "celulas": celulas,
+            "dias_semana": ("Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"),
+            "dia_titulo": f"{DIAS_SEMANA[sel.weekday()]}, {sel:%d/%m/%Y}" + (" (hoje)" if sel == hoje else ""),
+            "url_hoje": _url_calendario(hoje), "url_mes_anterior": _url_calendario(mes_anterior),
+            "url_mes_seguinte": _url_calendario(mes_seguinte), "url_dia_anterior": _url_calendario(sel - timedelta(days=1)),
+            "url_dia_seguinte": _url_calendario(sel + timedelta(days=1)), "itens": do_dia[0] + do_dia[1] + do_dia[2],
+            "resumo": {"total": len(do_dia[0]) + len(do_dia[1]), "alta": urg.count("alta"), "media": urg.count("media"),
+                       "baixa": urg.count("baixa"), "sem": sum(u not in ("alta", "media", "baixa") for u in urg),
+                       "feitos": len(do_dia[1]), "inativos": len(do_dia[2])}}
+
+
+def _dados_agenda(vista: Optional[str], dia: Optional[str]) -> dict:
+    ativos, concluidos, inativos = _agenda()
+    dados = {"ativos": ativos, "concluidos": concluidos, "inativos": inativos, "vista": "lista",
+             "url_poll": "/painel/parcial/agenda"}
+    if vista == "calendario":
+        cal = _calendario(ativos, concluidos, inativos, dia)
+        dados.update(vista="calendario", cal=cal, url_poll=f"/painel/parcial/agenda?vista=calendario&dia={cal['dia']}")
+    return dados
 
 
 ROTULO_NIVEL = {"alta": "Alta", "media": "Média", "baixa": "Baixa"}
@@ -1204,11 +1271,10 @@ def pendencia(request: Request, pid: str):
 
 
 @router.get("/agenda")
-def tela_agenda(request: Request):
+def tela_agenda(request: Request, vista: Optional[str] = None, dia: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _para_login(request)
-    ativos, concluidos, inativos = _agenda()
-    return _pagina(request, "agenda.html", "agenda", ativos=ativos, concluidos=concluidos, inativos=inativos)
+    return _pagina(request, "agenda.html", "agenda", **_dados_agenda(vista, dia))
 
 
 @router.get("/agenda/{aid}")
@@ -1307,7 +1373,8 @@ def tela_pesquisa(request: Request, slug: str, notebook: Optional[str] = None):
 
 @router.get("/parcial/{nome}")
 def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Optional[str] = None, q: Optional[str] = None,
-            job: Optional[str] = None, notebook: Optional[str] = None, pagina: Optional[str] = None):
+            job: Optional[str] = None, notebook: Optional[str] = None, pagina: Optional[str] = None,
+            vista: Optional[str] = None, dia: Optional[str] = None):
     if not _nonce_da_sessao(request):
         return _erro(401, MSG_SESSAO)
     if nome == "pendencias":
@@ -1318,8 +1385,8 @@ def parcial(request: Request, nome: str, aba: Optional[str] = None, tipo: Option
     elif nome == "inicio":
         html = _render("_inicio.html", **_dados_inicio())
     elif nome == "agenda":
-        ativos, concluidos, inativos = _agenda()
-        html = _render("_agenda_lista.html", ativos=ativos, concluidos=concluidos, inativos=inativos)
+        dados = _dados_agenda(vista, dia)
+        html = _render("_agenda_calendario.html" if dados["vista"] == "calendario" else "_agenda_lista.html", **dados)
     elif nome == "limpeza":
         lotes, erro = _limpeza()
         html = _render("_limpeza_lista.html", lotes=lotes, erro_limpeza=erro, ext=_estado_limpeza())

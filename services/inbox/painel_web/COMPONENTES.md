@@ -301,8 +301,10 @@ O corpo enviado é `{nota, resposta}`.
 ### Agenda (`/painel/agenda`, `ativo="agenda"`)
 
 ```jinja
-<div data-poll-url="/painel/parcial/agenda">{% include "_agenda_lista.html" %}</div>
+<div data-poll-url="{{ url_poll }}">{% include "_agenda_calendario.html" if vista == "calendario" else "_agenda_lista.html" %}</div>
 ```
+`nav.abas` alterna Lista (`/painel/agenda`) e Calendário (`?vista=calendario&dia=AAAA-MM-DD`); o polling preserva vista e dia.
+Calendário: grade mensal (`.calendario__grade`) sem JS, cada dia é um link; abaixo, resumo e itens do dia (mesmo `_agenda_item.html` da Lista).
 Dentro do parcial: `h2.secao-titulo` "Próximos" / "Desfeitos e cancelados", cada grupo num `ul.lista`:
 ```jinja
 <li class="agenda-item{% if inativo %} agenda-item--inativo{% endif %}">
