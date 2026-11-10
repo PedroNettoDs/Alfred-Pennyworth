@@ -1,0 +1,44 @@
+{#
+  E-mails de evento/entrevista esperando Pedro liberar (painel_redigir.py).
+  Variáveis: aguardando, resolvidos (itens de redigir.listar()).
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Redigir{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Redigir", "E-mails de evento ou entrevista que esperam a sua revisão antes de ir para o Thunderbird") }}
+<div class="pilha">
+  {%- if not aguardando %}
+  {{ m.vazio("Nenhum e-mail aguardando.", "info") }}
+  {%- endif %}
+  {%- for i in aguardando %}
+  <section class="cartao" aria-labelledby="r-{{ i.id }}" data-acoes>
+    <h2 class="cartao__titulo" id="r-{{ i.id }}">{{ i.assunto or "(sem assunto)" }}</h2>
+    {{ m.chave_valor([("Para", i.para | join(", ")), ("Contexto", i.contexto)]) }}
+    {{ m.aviso("erro" if i.agenda.conflitos else "neutro", i.agenda.resumo) }}
+    {%- if i.agenda.eventos %}
+    <ul>{% for e in i.agenda.eventos %}<li>{{ e }}</li>{% endfor %}</ul>
+    {%- endif %}
+    <form data-acao="" data-apos-sucesso="encerrar">
+      {{ m.area_texto("texto", "Texto do e-mail", i.texto, id="texto-" ~ i.id, grande=true, obrigatorio=true,
+                      ajuda="Edite à vontade. O Alfred só põe o texto na janela; quem envia é você.") }}
+      <div class="acoes">
+        {{ m.botao("Liberar para o Thunderbird", "primario", attrs={"data-acao": "/painel/api/redigir/" ~ i.id ~ "/liberar", "data-texto-ocupado": "Liberando…"}) }}
+        {{ m.botao("Recusar", attrs={"data-acao": "/painel/api/redigir/" ~ i.id ~ "/recusar"}) }}
+      </div>
+      {{ m.resultado() }}
+    </form>
+  </section>
+  {%- endfor %}
+  {%- if resolvidos %}
+  <section aria-labelledby="r-resolvidos">
+    <h2 class="secao-titulo" id="r-resolvidos">Resolvidos</h2>
+    <ul class="lista">
+      {%- for i in resolvidos %}
+      <li>{{ m.selo_status(i.status) }} {{ i.assunto or "(sem assunto)" }}</li>
+      {%- endfor %}
+    </ul>
+  </section>
+  {%- endif %}
+</div>
+{% endblock %}

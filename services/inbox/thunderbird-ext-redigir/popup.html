@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Alfred</title>
+<style>
+body{font:13px system-ui;margin:0;padding:12px;width:380px;box-sizing:border-box}
+h1{font-size:14px;margin:0 0 8px}
+blockquote{margin:0 0 8px;padding:4px 8px;border-left:3px solid #888;max-height:72px;overflow:hidden;opacity:.8}
+textarea{width:100%;box-sizing:border-box;font:inherit;resize:vertical}
+.acoes{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+small{opacity:.7}
+</style>
+</head>
+<body>
+  <div id="formulario" hidden>
+    <h1 id="titulo"></h1>
+    <blockquote id="trecho" hidden></blockquote>
+    <textarea id="instrucao" rows="6"></textarea>
+    <div class="acoes"><small>Ctrl+Enter envia</small><button id="enviar"></button></div>
+  </div>
+  <p id="aviso" hidden></p>
+  <script src="popup.js"></script>
+</body>
+</html>

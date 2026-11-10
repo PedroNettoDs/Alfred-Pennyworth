@@ -1,0 +1,17 @@
+[
+  {
+    "namespace": "alfredAgendaLeitura",
+    "functions": [
+      {
+        "name": "listarEventos",
+        "type": "function",
+        "async": true,
+        "description": "Eventos dos calendários ativos no intervalo: [{titulo, inicio, fim, dia_inteiro, local}].",
+        "parameters": [
+          { "name": "inicioISO", "type": "string" },
+          { "name": "fimISO", "type": "string" }
+        ]
+      }
+    ]
+  }
+]

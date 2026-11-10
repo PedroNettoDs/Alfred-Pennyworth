@@ -1,0 +1,60 @@
+{
+  "manifest_version": 2,
+  "name": "Alfred — redigir",
+  "description": "Botão na janela de composição: o Alfred redige o e-mail a partir do que você pede, da memória e da agenda, ou reformula o trecho selecionado.",
+  "version": "1.1.0",
+  "author": "Alfred-Pennyworth",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "redigir@alfred-pennyworth.local",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "compose",
+    "notifications",
+    "storage",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "scripts": [
+      "corpo.js",
+      "background.js"
+    ]
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "compose_action": {
+    "default_title": "Redigir e-mail com o Alfred",
+    "default_label": "Redigir e-mail com o Alfred",
+    "default_icon": "icone.svg",
+    "default_area": "maintoolbar",
+    "default_popup": "popup.html"
+  },
+  "experiment_apis": {
+    "alfredAgendaLeitura": {
+      "schema": "experiment/schema.json",
+      "parent": {
+        "scopes": [
+          "addon_parent"
+        ],
+        "paths": [
+          [
+            "alfredAgendaLeitura"
+          ]
+        ],
+        "script": "experiment/implementation.js"
+      }
+    }
+  },
+  "compose_scripts": [
+    {
+      "js": [
+        "selecao.js"
+      ]
+    }
+  ]
+}

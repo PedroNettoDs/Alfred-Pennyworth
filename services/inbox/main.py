@@ -648,6 +648,66 @@ def blog_resultado(pasta: str, arquivo: str, req: BlogResultadoRequest, authoriz
         raise HTTPException(status_code=404, detail=_msg_erro(e))
 
 
+import redigir  # noqa: E402
+
+
+class EventoCalendario(BaseModel):
+    titulo: str = ""
+    inicio: str
+    fim: Optional[str] = None
+    dia_inteiro: bool = False
+    local: str = ""
+
+
+class RedigirRequest(BaseModel):
+    de: str = ""
+    para: list[str] = []
+    assunto: str = ""
+    notas: str = ""
+    original: str = ""
+    tem_assinatura: bool = False
+    eventos: Optional[list[EventoCalendario]] = None   # None = a extensão não conseguiu ler o calendário
+
+
+@app.post("/redigir")
+def redigir_post(req: RedigirRequest, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    if not (req.assunto.strip() or req.notas.strip() or req.original.strip()):
+        raise HTTPException(status_code=422, detail="Escreva um assunto ou algumas notas primeiro.")
+    eventos = None if req.eventos is None else [e.model_dump() for e in req.eventos]
+    try:
+        return redigir.redigir(req.de, req.para, req.assunto, req.notas, req.original, req.tem_assinatura, eventos)
+    except redigir.RedigirErro as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+class ReformularRequest(BaseModel):
+    trecho: str
+    instrucao: str = ""
+    assunto: str = ""
+    corpo: str = ""
+
+
+@app.post("/reformular")
+def reformular_post(req: ReformularRequest, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    if not req.trecho.strip():
+        raise HTTPException(status_code=422, detail="Selecione um trecho primeiro.")
+    try:
+        return {"texto": redigir.reformular(req.trecho, req.instrucao, req.assunto, req.corpo)}
+    except redigir.RedigirErro as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/redigir/{rid}")
+def redigir_estado(rid: str, authorization: Optional[str] = Header(None)):
+    check_auth(authorization)
+    item = redigir.obter(rid)
+    if not item:
+        raise HTTPException(status_code=404, detail="Rascunho não encontrado.")
+    return {"status": item["status"], "texto": item["texto"] if item["status"] == "liberado" else ""}
+
+
 # Painel do Alfred (interface web local de aprovações) — rotas em painel.py (fora se faltar o jinja2)
 if painel is not None:
     app.include_router(painel.router)
@@ -655,6 +715,8 @@ if painel is not None:
     app.include_router(escrita.router)
     import painel_conversa  # noqa: E402  (aba Conversa do Painel: /painel/conversa)
     app.include_router(painel_conversa.router)
+    import painel_redigir  # noqa: E402  (e-mails que esperam liberação: /painel/redigir)
+    app.include_router(painel_redigir.router)
 
 
 if __name__ == "__main__":

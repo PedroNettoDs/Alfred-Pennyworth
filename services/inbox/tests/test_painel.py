@@ -1015,7 +1015,7 @@ class TestPolling(Base):
         self.assertIn("Carlos Fatec", depois); self.assertIn("Urgência alta", depois)
         self.assertRegex(depois, r">(agora|há \d+ (min|h|dias?))</time>")
         self.assertEqual(self.guardar(cli.get("/painel/api/contadores")).json(),
-                         {"aguardando": 1, "whatsapp": 1, "email": 0, "limpeza_aguardando": 0})
+                         {"aguardando": 1, "whatsapp": 1, "email": 0, "limpeza_aguardando": 0, "redigir_aguardando": 0})
         self.assertIn("Carlos Fatec", self.guardar(cli.get("/painel/parcial/inicio")).text)
         self.assertIn("Nada encontrado", self.guardar(cli.get("/painel/parcial/pendencias?tipo=email")).text)
         self.assertIn("Carlos Fatec", self.guardar(cli.get("/painel/parcial/pendencias?q=ORCAMENTO")).text)

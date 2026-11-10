@@ -8,6 +8,8 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 
 **Blog:** jornal, podcast e os briefings de `services/briefing` nascem com `Blogspot: none` no frontmatter. A extensão "Alfred — blog" do Thunderbird posta cada um no Blogspot por e-mail (`GET /blog/fila`), e o Alfred troca a propriedade por `postado <data>`. Ver [BLOG.md](BLOG.md).
 
+**Redigir:** o botão "Redigir e-mail com o Alfred", na janela de composição do Thunderbird, escreve o e-mail a partir das notas de Pedro, da memória e da agenda; evento e entrevista passam antes por `/painel/redigir`. Ver [REDIGIR.md](REDIGIR.md).
+
 ## Como rodar
 
 ```bash

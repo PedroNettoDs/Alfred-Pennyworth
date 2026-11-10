@@ -432,7 +432,13 @@ def _contadores() -> dict:
         lim = len(limpeza.listar_lotes("aguardando"))
     except Exception:   # limpeza.yml ilegível não derruba o painel
         lim = 0
-    return {"aguardando": len(aguard), "whatsapp": wa, "email": len(aguard) - wa, "limpeza_aguardando": lim}
+    try:
+        import redigir   # importado aqui: redigir.py não depende do painel, e o painel sobe mesmo sem ele
+        red = len(redigir.listar("aguardando"))
+    except Exception:
+        red = 0
+    return {"aguardando": len(aguard), "whatsapp": wa, "email": len(aguard) - wa, "limpeza_aguardando": lim,
+            "redigir_aguardando": red}
 
 
 def _pagina(request: Request, nome: str, ativo: str, status: int = 200, **ctx) -> HTMLResponse:
