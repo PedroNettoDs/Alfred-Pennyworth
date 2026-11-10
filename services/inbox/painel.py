@@ -722,6 +722,7 @@ def _motivo_lote(lote: dict) -> str:
 ROTULO_RESULTADO = {
     "movido": ("movido para a Lixeira", "movidos para a Lixeira"),
     "ja_na_lixeira": ("já estava na Lixeira", "já estavam na Lixeira"),
+    "fora_da_caixa": ("já tinha saído da caixa", "já tinham saído da caixa"),
     "simulado": ("simulado", "simulados"),
     "nao_encontrado": ("não encontrado no Thunderbird", "não encontrados no Thunderbird"),
     "recusado": ("recusado pela extensão", "recusados pela extensão"),
@@ -1632,7 +1633,9 @@ async def _acao_lote(request: Request, lid: str, acao: str):
         return _erro(500, str(e))
     if isinstance(r, Response):
         return r
-    if acao == "limpar":
+    if acao == "limpar" and r.get("status") == "concluido":
+        msg, fora = "Nada a mover: os e-mails que faltavam já saíram da caixa. Lote marcado como Excluído.", 0
+    elif acao == "limpar":
         n = r.get("a_mover")
         msg = (f"Limpeza pedida: {n} e-mail{'' if n == 1 else 's'} {'irá' if n == 1 else 'irão'} para a Lixeira "
                f"na próxima passada da extensão do Thunderbird.")

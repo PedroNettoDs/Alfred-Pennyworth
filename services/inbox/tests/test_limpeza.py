@@ -456,6 +456,97 @@ class TestExcluidos(BaseLimpeza):
         self.assertEqual([l["id"] for l in limpeza.listar_lotes()], [lote["id"]])
 
 
+class TestLimparSemNadaAMover(BaseLimpeza):
+    def parcial(self):
+        lote = limpeza.propor(notificar=False)
+        limpeza.limpar(lote["id"])
+        itens = limpeza.fila_execucao()[0]["itens"]
+        limpeza.registrar_resultado(lote["id"], [{"message_id": i["message_id"],
+                                                  "status": "movido" if n == 0 else "nao_encontrado"}
+                                                 for n, i in enumerate(itens)])
+        return lote["id"], [i["message_id"] for i in itens]
+
+    def test_tudo_fora_do_indice_conclui_sem_ir_a_fila(self):
+        lid, mids = self.parcial()
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        msf.write_bytes(_msf([e[0] for e in EMAILS if e[0] not in mids]))
+        r = limpeza.limpar(lid)
+        self.assertEqual((r["status"], r["a_mover"], r["contagem"]), ("concluido", 0, {"movido": 1, "fora_da_caixa": 3}))
+        self.assertEqual(sum(i["resultado"] == "fora_da_caixa" for i in r["itens"]), 3)
+        self.assertIsNotNone(limpeza.apagar_em(r))
+        self.assertEqual(limpeza.fila_execucao(), [])
+
+    def test_outro_motivo_continua_dando_erro(self):
+        lid, mids = self.parcial()
+        data = core._load_pend()   # um dos que faltam ganhou pendência; os outros saíram do índice
+        data["pendencias"].append({"id": "nova", "tipo": "contato", "status": "aguardando", "titulo": "z",
+                                   "email": {"message_id": mids[1]}})
+        core._save_pend(data)
+        msf = PERFIL / "ImapMail" / "outlook.office365.com" / "INBOX.msf"
+        msf.write_bytes(_msf([e[0] for e in EMAILS if e[0] not in mids[2:]]))
+        with self.assertRaisesRegex(ValueError, "nenhum item a mover"):
+            limpeza.limpar(lid)
+        self.assertEqual(limpeza.obter_lote(lid)["status"], "parcial")
+
+    def test_email_de_lote_parcial_nao_entra_em_lote_novo(self):
+        _lid, mids = self.parcial()
+        c = limpeza.candidatos(incluir_mantidos=True)
+        self.assertFalse(set(mids) & {i["message_id"] for i in c["candidatos"]})
+        self.assertEqual(c["mantidos"]["já está num lote aberto"], len(mids))
+
+
+class TestTermosProtegidos(BaseLimpeza):
+    def avaliar(self, assunto, de="naoresponda@empresa.com", nome="", cat="transacional", manifestos=None):
+        m = {"message_id": "x@y", "subject": assunto, "from_addr": de, "from_name": nome, "date": _data(90)}
+        _n, cfg, lc = limpeza.config()
+        return limpeza.avaliar(m, cfg, lc, {"x@y": {"categoria": cat}}, manifestos or {}, set())
+
+    def test_assunto_e_remetente_protegidos(self):
+        protegidos = [{"assunto": "O documento ACORDO DE CONFIDENCIALIDADE - vf pdf foi assinado por todos."},
+                      {"assunto": "Sua renovação foi confirmada"},
+                      {"assunto": "Sua autorização para pagamentos automáticos"},
+                      {"assunto": "Pix recebido"},
+                      {"assunto": "Sua Conta do Google foi recuperada"},
+                      {"assunto": "Sua Conta Internacional Nomad foi aprovada!"},
+                      {"assunto": "Alteração de senha da conta da Microsoft"},
+                      {"assunto": "A verificação de duas etapas foi desativada para sua conta"},
+                      {"assunto": "Braip | Solicitação de estorno tem uma nova mensagem!"},
+                      {"assunto": "Declaração de divulgação anual"},
+                      {"assunto": "Você tem um ou mais domínios prestes a expirar"},
+                      {"assunto": "RE: Inscrição confirmada para AI Builder Tour São Paulo"},
+                      {"assunto": "Thank you for your gift purchase!"},
+                      {"assunto": "Aviso", "de": "sign@d4sign.com.br"},
+                      {"assunto": "Aviso", "de": "naoresponda@acesso.gov.br"},
+                      {"assunto": "Aviso", "nome": "DocuSign"}]
+        for caso in protegidos:
+            self.assertEqual(self.avaliar(**caso), (None, "termo protegido"), caso)
+
+    def test_palavra_inteira(self):
+        for assunto in ("A empresa Darede contratou alguém na sua vizinhança", "Seu Pixel chegou", "Faturamento do mês",
+                        "Redefinir senha", "Score: confira", "713576 is your Sumsub ID sign-in code"):
+            self.assertTrue(self.avaliar(assunto)[0], assunto)
+
+    def test_so_vale_para_transacional(self):
+        self.assertTrue(self.avaliar("Pague sua fatura com desconto", cat="promocao")[0])
+
+    def test_termo_sempre_vale_para_qualquer_categoria(self):
+        self.assertEqual(self.avaliar("[FATEC] AWS - Prazo Final", cat="promocao"), (None, "termo protegido"))
+
+    def test_vence_o_manifesto(self):
+        self.assertEqual(self.avaliar("Recibo", manifestos={"x@y": "2026-W42"})[0], None)
+
+    def test_revalidacao_le_o_assunto_do_lote(self):
+        lote = limpeza.propor(notificar=False)
+        with limpeza._trava():
+            data = limpeza._load_lotes()
+            item = next(i for i in limpeza._pegar(data, lote["id"])["itens"] if i["message_id"] == "trans-velha@banco.com")
+            item["subject"] = "Recibo do seu pagamento"
+            limpeza._save_lotes(data)
+        r = limpeza.aprovar(lote["id"])
+        self.assertEqual([(x["message_id"], x["removido_por"]) for x in r["removidos_na_aprovacao"]],
+                         [("trans-velha@banco.com", "termo protegido")])
+
+
 class TestEstadoExtensao(BaseLimpeza):
     def test_nunca_ok_erro_sem_contato(self):
         self.assertEqual(limpeza.estado_extensao()["estado"], "nunca")

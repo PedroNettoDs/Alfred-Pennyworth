@@ -40,7 +40,7 @@ Estados do lote: `aguardando` → `aprovado` → `em_execucao` → `concluido` |
 Também existem `recusado` e `expirado` (sem resposta em `expirar_lote_dias`). Se um lote fica
 `em_execucao` por mais de 1h, ele volta para a fila. A extensão é idempotente: o que só existe na
 Lixeira vira `ja_na_lixeira` (desde a 1.2.0; antes, `nao_encontrado`). Um lote só fica `concluido` quando
-todos os itens foram `movido` ou `ja_na_lixeira`; tudo `simulado` dá `simulado`; qualquer mistura com ao
+todos os itens foram `movido`, `ja_na_lixeira` ou `fora_da_caixa` (ver "Botão Limpar"); tudo `simulado` dá `simulado`; qualquer mistura com ao
 menos um movido/simulado/já na Lixeira dá `parcial`.
 
 No Painel, `concluido` aparece como **Excluído**. `APAGAR_EXCLUIDOS_DIAS` (5) dias depois de
@@ -80,7 +80,10 @@ lote `aguardando`. Os dois pedem confirmação ("Mover os N e-mails para a Lixei
 
 - aprova antes, se o lote está `aguardando` (mesma revalidação de `aprovar`);
 - revalida de novo os itens que ainda não foram `movido` (quem perdeu a elegibilidade sai do lote);
-- marca `limpar: true` e `limpar_pedido_em` e devolve o lote à fila como `aprovado`.
+- marca `limpar: true` e `limpar_pedido_em` e devolve o lote à fila como `aprovado`;
+- se todos os itens que faltavam saíram do índice `.msf` (movidos por outro lote, apagados no celular,
+  fantasmas), não há o que mover: eles viram `fora_da_caixa` e o lote termina como `concluido`, sem passar
+  pela extensão. Se algum saiu por outro motivo (pendência nova, por exemplo), o Limpar continua dando erro.
 
 A fila manda `executar: true` para esses lotes, só com os itens ainda não movidos. A extensão move só
 esse lote de verdade, mesmo com "Executar de verdade" desligado. O **modo teste** e as demais travas
@@ -102,7 +105,19 @@ extensão "só simulou" um lote mandado limpar, a extensão carregada no Thunder
 - categorias `contato`, `evento` e `pessoal` (a config não consegue liberar essas: categorias fora de
   promocao/transacional/ignorado são descartadas);
 - e-mails ligados a uma pendência `aguardando` (`pendencias.yml → email.message_id`);
-- e-mails sem Message-ID ou já presentes num lote aberto;
+- `transacional` com termo de `TERMOS_PROTEGIDOS` (`limpeza.py`) no assunto, nome ou endereço do remetente: documentos e
+  assinaturas (contrato, acordo, assinado, d4sign, docusign), dinheiro (recibo, pagamento, pix, fatura, boleto, nota
+  fiscal, estorno, reembolso, compra, dividendo), conta e serviço (aprovada, recuperada, alteração de senha, duas
+  etapas, domínio, renovação, declaração, gov.br), equivalentes em inglês e respostas (`RE:`, `Res:`);
+- qualquer categoria com termo de `TERMOS_PROTEGIDOS_SEMPRE` (hoje, `fatec`).
+
+Nos dois casos vale palavra inteira, sem acento e com plural em -s ("contratou" não conta). As listas são fixas
+no código e podem deixar passar e-mail importante sem nenhum desses termos.
+
+Também ficam de fora:
+
+- e-mails sem Message-ID ou já presentes num lote aberto (`aguardando`, `aprovado`, `em_execucao`, `simulado`,
+  `parcial` ou `falhou`);
 - e-mails fora do índice `.msf` da pasta (fantasmas do mbox offline, ver "Limites conhecidos").
 - Na extensão: mensagens com estrela, Message-ID ambíguo, remetente ou assunto diferentes do lote,
   contas não marcadas, mensagens que já estão na Lixeira e contas sem Lixeira identificável.
@@ -200,7 +215,8 @@ node --test tests/test_executor.mjs                    # executor da extensão c
 `test_limpeza.py` monta um perfil do Thunderbird sintético (prefs.js + mbox + `INBOX.msf` com um fantasma),
 um vault, manifestos e um registro temporários. Também cobre o `.msf` ausente/ilegível e um Mork com
 escapes, quebras de linha e grupos de transação. O teste percorre o fluxo inteiro pela API: proposta → revalidação na aprovação →
-fila → resultado da extensão. Também cobre `ja_na_lixeira` → Excluído, a remoção do lote 5 dias depois,
+fila → resultado da extensão. Também cobre `ja_na_lixeira` → Excluído, os termos protegidos, o Limpar sem
+nada a mover, a remoção do lote 5 dias depois,
 o ping/"Verificar agora" e a categorização (classificador simulado). O teste em node garante que o executor
 nunca chama `messages.delete` e que só move mensagens para a pasta com `specialUse: trash`.
 

@@ -59,7 +59,7 @@
   {%- if l.nota %}<p class="pequeno">Nota: {{ l.nota }}</p>{% endif %}
   {%- if l.limpar_pedido %}<p class="pequeno">Limpeza pedida em {{ l.limpar_pedido }}: a extensão do Thunderbird move os e-mails para a Lixeira na próxima passada.</p>{% endif %}
   {%- if l.resultado %}<p class="pequeno">Resultado{% if l.executado %} ({{ l.executado }}){% endif %}: {{ l.resultado }}.</p>{% endif %}
-  {%- if l.apagar_em %}<p class="pequeno">Excluído: os e-mails estão na Lixeira da conta. Este registro sai da tela em {{ l.apagar_em }}.</p>{% endif %}
+  {%- if l.apagar_em %}<p class="pequeno">Excluído: nada deste lote continua na caixa; o que foi movido está na Lixeira da conta. Este registro sai da tela em {{ l.apagar_em }}.</p>{% endif %}
   {%- if l.extensao_antiga %}
   {{ m.aviso("aguardando", "Você pediu Limpar, mas a extensão do Thunderbird só simulou: ela está desatualizada. Recarregue-a no Thunderbird (LIMPEZA.md) e clique em Limpar de novo.") }}
   {%- endif %}

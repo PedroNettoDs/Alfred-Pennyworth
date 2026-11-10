@@ -894,6 +894,25 @@ class TestLimpeza(Base):
             self.assertIn(trecho, html)
         self.assertNotIn(f'/{lote["id"]}/limpar"', html)
 
+    def test_limpar_sem_nada_a_mover(self):
+        lote = self.propor(2)
+        cli = self.entrar()
+        token = self.csrf(cli)
+        url = f"/painel/api/limpeza/{lote['id']}/limpar"
+        with mock.patch.object(limpeza, "avaliar", lambda m, *a, **k: ("promocao há 85 dias", "")):
+            self.assertEqual(self.acao(cli, url, {}, csrf=token).status_code, 200)
+        limpeza.fila_execucao()
+        limpeza.registrar_resultado(lote["id"], [{"message_id": "promo-0@loja.com", "status": "movido"},
+                                                 {"message_id": "promo-1@loja.com", "status": "nao_encontrado"}])
+        fora = [{"message_id": "promo-1@loja.com", "removido_por": limpeza.FORA_DO_INDICE}]
+        with mock.patch.object(limpeza, "_revalidar", lambda *a: ([], fora)):
+            r = self.acao(cli, url, {}, csrf=token)
+        self.assertEqual(r.json()["mensagem"], "Nada a mover: os e-mails que faltavam já saíram da caixa. "
+                                               "Lote marcado como Excluído.")
+        html = self.guardar(cli.get("/painel/parcial/limpeza")).text
+        for trecho in ("Excluído", "1 movido para a Lixeira, 1 já tinha saído da caixa", "Este registro sai da tela em"):
+            self.assertIn(trecho, html)
+
 
 class TestAgenda(Base):
     def test_desfazer_como_o_cli(self):

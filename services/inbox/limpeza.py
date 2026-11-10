@@ -12,7 +12,8 @@ Fluxo:
                         ("posso apagar estes N e-mails?") e avisa o usuário
     aprovar(id)       → só por confirmação explícita (CLI / API / tool); revalida cada item
     limpar(id)        → botão "Limpar" do Painel: a extensão executa ESTE lote de verdade (mover para a
-                        Lixeira) mesmo com "Executar de verdade" desligado; lote aguardando é aprovado antes
+                        Lixeira) mesmo com "Executar de verdade" desligado; lote aguardando é aprovado antes;
+                        se tudo o que faltava já saiu da caixa, o lote vira concluido sem passar pela extensão
     fila_execucao()   → a extensão busca os lotes aprovados (GET /limpeza/fila)
     registrar_resultado(id, itens) ← a extensão relata movido | ja_na_lixeira | simulado | nao_encontrado |
                         recusado | erro; lote com tudo fora da caixa = concluido ("Excluído" no Painel), que sai
@@ -27,6 +28,8 @@ Regras (não configuráveis):
   - só entram (a) e-mails listados num manifesto do podcast semanal ou
     (b) categorias de LIMPAVEIS (promocao/transacional/ignorado) mais antigos que `dias_minimos`
   - nunca: contato, evento, pessoal, nem e-mail ligado a pendência aguardando — mesmo se estiver no manifesto
+  - nunca: transacional com termo de TERMOS_PROTEGIDOS no assunto ou remetente (contrato, recibo, pix…),
+    nem e-mail de qualquer categoria com termo de TERMOS_PROTEGIDOS_SEMPRE (fatec)
   - padrão é dry-run; sem aprovação explícita nada é executado
 
 A categoria de cada e-mail vem de logs/inbox_categorias.json, alimentado pelo ciclo do inbox
@@ -61,10 +64,28 @@ APAGAR_EXCLUIDOS_DIAS = 5                # lote Excluído (concluido) some do li
 
 LIMPAVEIS  = ("promocao", "transacional", "ignorado")
 PROTEGIDAS = ("contato", "evento", "pessoal")
-EXCLUIDOS = ("movido", "ja_na_lixeira")  # item fora da caixa: movido pela extensão ou já estava na Lixeira
+EXCLUIDOS = ("movido", "ja_na_lixeira", "fora_da_caixa")  # movido pela extensão, já na Lixeira ou saiu por outro caminho
 STATUS_ITEM_OK = ("movido", "simulado", "ja_na_lixeira")
 STATUS_LOTE_FINAIS = ("concluido", "simulado", "parcial", "falhou", "recusado", "expirado")
 STATUS_LIMPAR = ("aguardando", "aprovado", "simulado", "parcial", "falhou")   # onde o "Limpar" do Painel vale
+FORA_DO_INDICE = "fora do índice do Thunderbird"
+
+# transacional com um destes no assunto ou remetente fica na caixa (sem acento; palavra inteira, aceita plural em -s)
+TERMOS_PROTEGIDOS = ("contrato", "acordo", "assinado", "assinada", "recibo", "pagamento", "pix", "fatura", "boleto",
+                     "nota fiscal", "notas fiscais", "nfe", "nf-e", "renovacao", "renovacoes", "dividendo",
+                     "estorno", "reembolso", "compra", "declaracao", "declaracoes", "dominio",
+                     "aprovada", "aprovado", "recuperada", "recuperado", "alteracao de senha", "duas etapas",
+                     "contract", "agreement", "receipt", "payment", "invoice", "refund", "purchase",
+                     "re:", "res:", "gov.br", "d4sign", "docusign", "clicksign")
+TERMOS_PROTEGIDOS_SEMPRE = ("fatec",)   # estes valem para qualquer categoria
+
+
+def _regex_termos(termos: tuple) -> re.Pattern:
+    return re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, termos)) + r")s?(?!\w)")
+
+
+_RE_TERMOS_PROTEGIDOS = _regex_termos(TERMOS_PROTEGIDOS)
+_RE_TERMOS_SEMPRE = _regex_termos(TERMOS_PROTEGIDOS_SEMPRE)
 
 DEFAULTS = {
     "ativo": True,
@@ -205,9 +226,14 @@ def _ids_protegidos_por_pendencia() -> set[str]:
 def _ids_em_lotes_abertos() -> set[str]:
     ids = set()
     for l in _load_lotes()["lotes"]:
-        if l.get("status") in ("aguardando", "aprovado", "em_execucao"):
+        if l.get("status") in (*STATUS_LIMPAR, "em_execucao"):   # simulado/parcial/falhou ainda podem ir à fila pelo Limpar
             ids.update(i["message_id"] for i in l.get("itens") or [])
     return ids
+
+
+def _tem_termo(m: dict, regex: re.Pattern) -> bool:
+    texto = " ".join(m.get(c) or "" for c in ("subject", "from_name", "from_addr"))
+    return bool(regex.search(core._ascii(texto).lower()))
 
 
 def avaliar(m: dict, cfg: dict, lc: dict, registro: dict, manifestos: dict,
@@ -228,6 +254,8 @@ def avaliar(m: dict, cfg: dict, lc: dict, registro: dict, manifestos: dict,
         return None, f"categoria protegida ({cat})"
     if mid in protegidos:
         return None, "ligado a pendência aguardando"
+    if _tem_termo(m, _RE_TERMOS_SEMPRE) or (cat == "transacional" and _tem_termo(m, _RE_TERMOS_PROTEGIDOS)):
+        return None, "termo protegido"
 
     if lc.get("usar_manifestos") and mid in manifestos:
         return f"já virou podcast ({manifestos[mid]})", ""
@@ -264,7 +292,7 @@ def candidatos(inbox_name: Optional[str] = None, incluir_mantidos: bool = False)
             continue
         vistos.add(m["message_id"])
         if m.get("no_indice") is False:   # a extensão não acharia: relataria nao_encontrado
-            motivo, razao = None, "fora do índice do Thunderbird"
+            motivo, razao = None, FORA_DO_INDICE
         elif m["message_id"] in em_lote:
             motivo, razao = None, "já está num lote aberto"
         else:
@@ -500,9 +528,10 @@ def _revalidar(itens: list[dict], inbox: Optional[str]) -> tuple[list[dict], lis
     for i in itens:
         ids = indices[(i.get("conta", ""), i.get("pasta", ""))]
         if ids is not None and not i["message_id"].startswith("gen-") and i["message_id"] not in ids:
-            removidos.append({**i, "removido_por": "fora do índice do Thunderbird"})
+            removidos.append({**i, "removido_por": FORA_DO_INDICE})
             continue
-        m = {"message_id": i["message_id"], "from_addr": i["from"],
+        m = {"message_id": i["message_id"], "from_addr": i["from"], "from_name": i.get("from_name", ""),
+             "subject": i.get("subject", ""),
              "from_domain": i["from"].split("@")[-1] if "@" in i["from"] else "",
              "date": core._parse_dt(i["date"])}
         motivo, razao = avaliar(m, cfg, lc, registro, manifestos, protegidos, agora)
@@ -556,12 +585,29 @@ def recusar(lid: str, nota: str = "") -> dict:
         return lote
 
 
+def _concluir_fora_da_caixa(data: dict, lote: dict, fora: list[dict]) -> dict:
+    """Nada a mover: o que faltava já saiu da caixa (outro lote, celular, webmail). O lote termina como Excluído."""
+    ids = {r["message_id"] for r in fora}
+    contagem: dict = {}
+    for i in lote["itens"]:
+        if i["message_id"] in ids:
+            i["resultado"] = "fora_da_caixa"
+            i.pop("resultado_detalhe", None)
+        contagem[i["resultado"]] = contagem.get(i["resultado"], 0) + 1
+    lote.update({"status": "concluido", "executado_em": _now().isoformat(timespec="minutes"), "contagem": contagem})
+    _save_lotes(data)
+    _escrever_md(lote)
+    log(f"[limpeza] {lote['id']} → concluido {contagem} (nada a mover)")
+    return {**lote, "a_mover": 0, "removidos_agora": 0}
+
+
 def limpar(lid: str, nota: str = "") -> dict:
     """
     Botão "Limpar" do Painel (confirmação explícita): manda a extensão executar ESTE lote de verdade,
     movendo para a Lixeira, mesmo com "Executar de verdade" desligado nas opções dela (`limpar: true`
     → `executar` na fila). Lote aguardando é aprovado antes; aprovado/simulado/parcial/falhou volta à
-    fila só com os itens ainda não movidos, revalidados de novo.
+    fila só com os itens ainda não movidos, revalidados de novo. Se todos eles já saíram do índice,
+    não há o que mover e o lote termina como concluido.
     """
     with _trava():
         anterior = obter_lote(lid) or {}
@@ -574,6 +620,8 @@ def limpar(lid: str, nota: str = "") -> dict:
         mantidos, removidos = _revalidar([i for i in lote["itens"] if i.get("resultado") not in EXCLUIDOS],
                                          lote.get("inbox"))
         if not mantidos:
+            if removidos and all(r["removido_por"] == FORA_DO_INDICE for r in removidos):
+                return _concluir_fora_da_caixa(data, lote, removidos)
             raise ValueError(f"{lid}: nenhum item a mover continua elegível na revalidação")
         if removidos:
             fora = {r["message_id"] for r in removidos}
