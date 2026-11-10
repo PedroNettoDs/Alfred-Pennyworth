@@ -1,6 +1,6 @@
 # Alfred Pennyworth — Assistente Pessoal com IA Local
 
-![version](https://img.shields.io/badge/version-2.0-blue) ![status](https://img.shields.io/badge/status-active-brightgreen) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![version](https://img.shields.io/badge/version-2.0-blue) ![status](https://img.shields.io/badge/status-active-brightgreen) ![license](https://img.shields.io/badge/license-AGPL--3.0-lightgrey)
 
 Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de comandos no host, pesquisa web autônoma, vault Obsidian com memória persistente, RAG local (SQLite FTS5 + ChromaDB) e um Painel web para aprovar o que ele propõe.
 
@@ -25,6 +25,7 @@ Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de coma
 9. [Referência Rápida](#9-referência-rápida)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Roadmap — Próximos Poderes](#11-roadmap--próximos-poderes)
+12. [Licença](#12-licença)
 
 ---
 
@@ -862,3 +863,13 @@ Integração com WhatsApp via Evolution API: mensagens e áudios recebidos (tran
 | Redis              | Filas e cache para workflows N8N de alta frequência | 🔲 Planejado    |
 | Grafana            | Monitoramento de uso de GPU, RAM e saúde dos serviços | 🔲 Planejado  |
 | Traefik            | Reverse proxy com SSL automático para os containers | 🔲 Planejado    |
+
+---
+
+## 12. Licença
+
+Copyright (C) 2026 Pedro Henrique Netto dos Santos
+
+[GNU Affero General Public License v3.0 ou posterior](LICENSE) (AGPL-3.0-or-later). Pode usar, estudar, modificar e
+redistribuir, inclusive para fins comerciais. Quem distribuir uma versão modificada, ou oferecê-la como serviço pela
+rede (a API e o Painel contam), publica o código-fonte dela sob a mesma licença.
