@@ -51,18 +51,29 @@ def disponivel() -> bool:
         return False
 
 
-def decidir(estado: Estado, perguntas: dict, timeout: int = TIMEOUT) -> Optional[dict]:
+def decidir(estado: Estado, perguntas: dict, timeout: int = TIMEOUT, modelo: Optional[str] = None) -> Optional[dict]:
     """
     Chamada crua: POST /v1/systemone. Devolve o dict `answers` ({id: resposta}) ou None.
     `perguntas` segue o formato do Laya: {id: {"type": ..., "instructions": ..., "criteria": ...}}.
+    `modelo`: checkpoint treinado registrado no laya-serve (LAYA_EXTRA_MODELS); None = o padrão.
+    Pedir um nome que o servidor não conhece não dá erro, ele responde com um checkpoint genérico:
+    se quem respondeu não foi `modelo`, a resposta é descartada (None).
     """
     if os.getenv("LAYA_DESLIGADO", "").strip().lower() in ("1", "true", "yes", "on"):
         return None
     try:
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(f"{_url()}/v1/systemone", json={"state": estado, "questions": perguntas})
+            corpo = {"state": estado, "questions": perguntas}
+            if modelo:
+                corpo["model"] = modelo
+            resp = client.post(f"{_url()}/v1/systemone", json=corpo)
             resp.raise_for_status()
-            return resp.json().get("answers") or None
+            dados = resp.json()
+            respondeu = (dados.get("routing") or {}).get("model")
+            if modelo and respondeu != modelo:
+                log(f"[laya] pedi o checkpoint {modelo} e respondeu {respondeu}: resposta descartada")
+                return None
+            return dados.get("answers") or None
     except Exception as e:
         log(f"[laya] Erro: {e}")
         return None

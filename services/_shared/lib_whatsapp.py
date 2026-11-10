@@ -7,6 +7,8 @@ Configuração (.env):
   EVOLUTION_URL          http://localhost:8081 — vazio = modo simulado (nada sai da máquina)
   EVOLUTION_API_KEY      AUTHENTICATION_API_KEY do container (header `apikey`)
   EVOLUTION_INSTANCE     nome da instância pareada por QR code (default: alfred)
+                         Outras sessões: cada conta de perfis.yml → whatsapp: tem a sua `instancia`; as
+                         funções abaixo recebem `inst` (None = EVOLUTION_INSTANCE).
   WHATSAPP_NUMERO_PEDRO  número de Pedro com DDI, só dígitos — recebe os resumos/áudios
   WHATSAPP_DRY_RUN       true = simula mesmo com EVOLUTION_URL configurada
 
@@ -156,10 +158,11 @@ def _message_id(resposta) -> Optional[str]:
     return None
 
 
-def _registrar_simulado(tipo: str, numero: str, conteudo: str, extra: Optional[dict] = None) -> str:
+def _registrar_simulado(tipo: str, numero: str, conteudo: str, extra: Optional[dict] = None,
+                        inst: Optional[str] = None) -> str:
     mid = f"SIMULADO-{datetime.now():%Y%m%d%H%M%S%f}"
     reg = {"em": datetime.now().astimezone().isoformat(timespec="seconds"), "tipo": tipo, "numero": numero,
-           "instancia": instancia(), "conteudo": conteudo, "message_id": mid, **(extra or {})}
+           "instancia": inst or instancia(), "conteudo": conteudo, "message_id": mid, **(extra or {})}
     try:
         ENVIADOS_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(ENVIADOS_FILE, "a", encoding="utf-8") as f:
@@ -218,10 +221,12 @@ def segundos_desde_ultimo_envio() -> Optional[float]:
 
 # ── Envio ─────────────────────────────────────────────────────
 
-def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: int = 0) -> dict:
+def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: int = 0,
+                 inst: Optional[str] = None) -> dict:
     """
     POST /message/sendText. `numero` = dígitos com DDI ou JID de grupo.
     `quoted` = {"key": {...}, "message": {...}} da mensagem original → aparece como resposta no WhatsApp.
+    `inst` = instância (sessão) que envia; None = EVOLUTION_INSTANCE.
     Retorna {"ok", "simulado", "message_id", "status"?, "resposta"?, "erro"?}.
     """
     destino = numero if eh_grupo(numero) else so_digitos(numero)
@@ -234,17 +239,17 @@ def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: 
     if quoted and isinstance(quoted.get("key"), dict):
         body["quoted"] = {"key": quoted["key"], "message": quoted.get("message") or {}}
     if simulado():
-        mid = _registrar_simulado("texto", destino, texto, {"quoted": bool(quoted)})
+        mid = _registrar_simulado("texto", destino, texto, {"quoted": bool(quoted)}, inst)
         return {"ok": True, "simulado": True, "message_id": mid}
     _marcar_envio(None)              # antes do POST: o eco pode chegar antes da resposta
-    r = _post(f"/message/sendText/{instancia()}", body)
+    r = _post(f"/message/sendText/{inst or instancia()}", body)
     r["simulado"] = False
     r["message_id"] = _message_id(r.get("resposta"))
     _marcar_envio(r["message_id"])
     return r
 
 
-def enviar_audio(numero: str, audio: Union[Path, str, bytes], ptt: bool = True) -> dict:
+def enviar_audio(numero: str, audio: Union[Path, str, bytes], ptt: bool = True, inst: Optional[str] = None) -> dict:
     """
     POST /message/sendWhatsAppAudio — `audio` pode ser caminho de arquivo, bytes, base64 ou URL.
     `encoding: true` faz a Evolution converter para OGG/Opus (aparece como mensagem de voz).
@@ -263,11 +268,11 @@ def enviar_audio(numero: str, audio: Union[Path, str, bytes], ptt: bool = True) 
     if not conteudo:
         return {"ok": False, "simulado": simulado(), "erro": "áudio vazio"}
     if simulado():
-        mid = _registrar_simulado("audio", destino, f"<áudio {tamanho or len(conteudo)} bytes>")
+        mid = _registrar_simulado("audio", destino, f"<áudio {tamanho or len(conteudo)} bytes>", inst=inst)
         return {"ok": True, "simulado": True, "message_id": mid}
     body = {"number": destino, "audio": conteudo, "encoding": bool(ptt)}
     _marcar_envio(None)
-    r = _post(f"/message/sendWhatsAppAudio/{instancia()}", body, timeout=180)
+    r = _post(f"/message/sendWhatsAppAudio/{inst or instancia()}", body, timeout=180)
     r["simulado"] = False
     r["message_id"] = _message_id(r.get("resposta"))
     _marcar_envio(r["message_id"])
@@ -276,7 +281,7 @@ def enviar_audio(numero: str, audio: Union[Path, str, bytes], ptt: bool = True) 
 
 # ── Mídia recebida ────────────────────────────────────────────
 
-def baixar_midia(key: dict, message: Optional[dict] = None) -> dict:
+def baixar_midia(key: dict, message: Optional[dict] = None, inst: Optional[str] = None) -> dict:
     """
     POST /chat/getBase64FromMediaMessage → {"ok", "base64", "mimetype"}.
     Usado quando o webhook veio sem `base64`. `message` = bloco original do payload (com mediaKey);
@@ -289,7 +294,7 @@ def baixar_midia(key: dict, message: Optional[dict] = None) -> dict:
     if message:
         alvo["message"] = message
     body = {"message": alvo, "convertToMp4": False}
-    r = _post(f"/chat/getBase64FromMediaMessage/{instancia()}", body, timeout=120)
+    r = _post(f"/chat/getBase64FromMediaMessage/{inst or instancia()}", body, timeout=120)
     if not r.get("ok"):
         return r
     resp = r.get("resposta") or {}
@@ -299,18 +304,18 @@ def baixar_midia(key: dict, message: Optional[dict] = None) -> dict:
 
 # ── Instância (pareamento / webhook) ──────────────────────────
 
-def estado_instancia(timeout: float = 30) -> dict:
+def estado_instancia(timeout: float = 30, inst: Optional[str] = None) -> dict:
     """GET connectionState. `timeout` curto (painel, ~2 s) evita travar a tela com a Evolution fora do ar."""
-    r = _get(f"/instance/connectionState/{instancia()}", timeout=timeout)
+    r = _get(f"/instance/connectionState/{inst or instancia()}", timeout=timeout)
     if r.get("ok"):
         inst = (r.get("resposta") or {}).get("instance") or {}
         r["estado"] = inst.get("state") or "desconhecido"
     return r
 
 
-def qrcode_instancia() -> dict:
+def qrcode_instancia(inst: Optional[str] = None) -> dict:
     """GET /instance/connect → {"code": texto do QR, "base64": PNG data-URI, "pairingCode"?}."""
-    r = _get(f"/instance/connect/{instancia()}", timeout=60)
+    r = _get(f"/instance/connect/{inst or instancia()}", timeout=60)
     if r.get("ok"):
         resp = r.get("resposta") or {}
         r.update({"code": resp.get("code"), "base64": resp.get("base64"), "pairingCode": resp.get("pairingCode")})
@@ -318,12 +323,12 @@ def qrcode_instancia() -> dict:
 
 
 def criar_instancia(webhook_url: Optional[str] = None, webhook_headers: Optional[dict] = None,
-                    numero: Optional[str] = None) -> dict:
+                    numero: Optional[str] = None, inst: Optional[str] = None) -> dict:
     """
     POST /instance/create — integração Baileys (QR code). O `token` da instância é a própria
     EVOLUTION_API_KEY, assim o campo `apikey` que vem no webhook é validado pelo /whatsapp/webhook.
     """
-    body: dict = {"instanceName": instancia(), "integration": "WHATSAPP-BAILEYS", "qrcode": True,
+    body: dict = {"instanceName": inst or instancia(), "integration": "WHATSAPP-BAILEYS", "qrcode": True,
                   "token": api_key()}
     if numero:
         body["number"] = so_digitos(numero)
@@ -337,9 +342,16 @@ def _webhook_cfg(url: str, headers: Optional[dict] = None, base64_midia: bool = 
             "headers": headers or {}, "events": ["MESSAGES_UPSERT"]}
 
 
-def configurar_webhook(url: str, headers: Optional[dict] = None, base64_midia: bool = True) -> dict:
+def configurar_webhook(url: str, headers: Optional[dict] = None, base64_midia: bool = True,
+                       inst: Optional[str] = None) -> dict:
     """POST /webhook/set/{instancia}: só MESSAGES_UPSERT, com mídia em base64 no próprio payload."""
-    return _post(f"/webhook/set/{instancia()}", {"webhook": _webhook_cfg(url, headers, base64_midia)})
+    return _post(f"/webhook/set/{inst or instancia()}", {"webhook": _webhook_cfg(url, headers, base64_midia)})
+
+
+def obter_webhook(inst: Optional[str] = None) -> dict:
+    """GET /webhook/find/{instancia} → o webhook gravado ({url, enabled, headers, webhookBase64, ...}) ou {}."""
+    r = _get(f"/webhook/find/{inst or instancia()}", timeout=10)
+    return r["resposta"] if r.get("ok") and isinstance(r.get("resposta"), dict) else {}
 
 
 def ultimos_envios(n: int = 20) -> list[dict]:

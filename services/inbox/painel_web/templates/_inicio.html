@@ -1,7 +1,8 @@
 {#
   Miolo do Início (página e /painel/parcial/inicio).
   Vars: cont (contadores), recentes (linhas), alfred {ligado, desde}, wa {tom, rotulo, detalhe}, simulado,
-        lotes_aguardando, emails_limpeza, proximos (itens de agenda).
+        lotes_aguardando, emails_limpeza, proximos (itens de agenda),
+        recados (whatsapp.recados(): {id, contato, texto} do que deixaram no número do Alfred).
 #}
 {% import "_macros.html" as m %}
 {% from "_linha.html" import linha %}
@@ -56,6 +57,19 @@
     <p class="pequeno suave">A agenda está vazia.</p>
     {%- endif %}
   </a>
+
+  <section class="cartao" aria-labelledby="inicio-anotacoes">
+    <p class="cartao__rotulo" id="inicio-anotacoes">Anotações</p>
+    {%- if recados %}
+    <ul class="lista lista--solta pilha--curta">
+      {%- for r in recados %}
+      <li class="pequeno"><a href="/painel/pendencias/{{ r.id }}">{{ r.contato or "Contato" }}</a> · {{ r.texto|truncate(110) }}</li>
+      {%- endfor %}
+    </ul>
+    {%- else %}
+    <p class="pequeno suave">Nenhum recado no número do Alfred.</p>
+    {%- endif %}
+  </section>
 </div>
 
 <section class="cartao" aria-labelledby="inicio-recentes">

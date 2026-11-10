@@ -45,6 +45,7 @@ from _shared.lib_alfred import (
     log, slugify, ollama_generate, ollama_generate_json, ollama_embed, searxng_search, vault_write,
     deduplicate_by_url_and_title,
 )
+from _shared import lib_porta
 from _shared.perfis import get_perfil, load as carregar_perfis
 import _shared.lib_chromadb as chroma
 import _shared.lib_rag as rag
@@ -412,6 +413,7 @@ def _iniciar_profundo(req: ResearchRequest, topic: str, slug: str, topic_dir: Pa
     return _resposta_job(job)
 
 
+@lib_porta.origem("deep research job with a large model")
 def _executar_profundo(job: dict, req: ResearchRequest, topic_dir: Path) -> None:
     inicio = time.monotonic()
     try:

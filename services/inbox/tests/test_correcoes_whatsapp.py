@@ -29,7 +29,7 @@ core, whatsapp, painel, agenda, limpeza, lib_whatsapp = tp.core, tp.whatsapp, tp
 TEXTO_AUDIO = "Oi Pedro, aqui é o Carlos da Fatec. Consegue mandar o orçamento até sexta?"
 
 
-def _fake_transcrever(dados, mimetype, max_segundos=600):
+def _fake_transcrever(dados, mimetype, max_segundos=600, **kw):
     return {"texto": TEXTO_AUDIO, "metodo": "teste", "duracao_s": 5}
 
 
@@ -194,7 +194,7 @@ class TestAgruparAudio(tp.Base):
 class TestConexaoWhatsApp(tp.Base):
     def status_com(self, est):
         with mock.patch.dict(os.environ, {"EVOLUTION_URL": "http://127.0.0.1:9"}), \
-             mock.patch.object(lib_whatsapp, "estado_instancia", lambda timeout=30: est):
+             mock.patch.object(lib_whatsapp, "estado_instancia", lambda timeout=30, inst=None: est):
             st = whatsapp.status(timeout=1)
         return st, painel._conexao_whatsapp(st)
 
@@ -350,7 +350,7 @@ class TestCLI(tp.Base):
     def qrcode(self, est):
         criadas = []
         with mock.patch.dict(os.environ, {"EVOLUTION_URL": "http://127.0.0.1:9"}), \
-             mock.patch.object(lib_whatsapp, "estado_instancia", lambda timeout=30: est), \
+             mock.patch.object(lib_whatsapp, "estado_instancia", lambda timeout=30, inst=None: est), \
              mock.patch.object(lib_whatsapp, "criar_instancia", lambda *a, **k: criadas.append(1) or {"ok": False, "erro": "x"}):
             rc, out = self.rodar("whatsapp", "qrcode")
         return rc, out, criadas

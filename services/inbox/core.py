@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -111,6 +112,22 @@ SCHEMA_EVENTO = {
                  "link", "custo", "o_que_pedem", "prazo_resposta", "resumo", "requer_decisao"],
 }
 OPTS_JSON = {"temperature": 0.1, "num_predict": 1200}
+
+
+def ctx_do_chat(modelo: Optional[str] = None) -> dict:
+    """
+    {"num_ctx": o da Conversa} para a chamada que usa o modelo dela (`modelo` vazio = MODEL_CHAT); {} para outro.
+    Vai nas `options` das chamadas que o WhatsApp faz ou alcança (whatsapp.py, agenda.py).
+
+    O Ollama recarrega o modelo quando o num_ctx pedido muda (7 a 10 s) e perde o prompt que a Conversa deixou
+    avaliado (mais ~8 s). Sem isto essas chamadas pediam OLLAMA_NUM_CTX, e o turno seguinte da Conversa levava
+    ~17 s até a primeira palavra em vez de ~1,7 s (medido em 10/11/2026, about.md → Ordem do prompt).
+    """
+    import conversa   # aqui dentro: o conversa.py importa este módulo
+    c = conversa._cfg()
+    return {"num_ctx": c["num_ctx"]} if (modelo or os.getenv("MODEL_CHAT", "").strip()) == c["modelo"] else {}
+
+
 ACIONAVEIS = ("noticia", "evento", "contato")
 # Só estas categorias podem pular o LLM via lib_db (cache por remetente de envio em massa): errar uma delas
 # custa uma promoção a mais no jornal, nunca uma mensagem perdida.
@@ -155,6 +172,37 @@ def pend_dir() -> Path:
     d = vault() / "pendencias"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+FALA_DIR = Path(tempfile.gettempdir()) / "alfred-fala"   # .mp3 gerados na hora; nunca dentro do cofre
+
+
+def tem_audio(p: dict) -> bool:
+    """Há o que ouvir: o roteiro guardado (o .mp3 nasce na hora) ou um .mp3 antigo ainda no cofre."""
+    if (p.get("fala") or {}).get("texto"):
+        return True
+    mp3 = (p.get("arquivos") or {}).get("mp3")
+    return bool(mp3) and (vault() / mp3).is_file()
+
+
+def audio_da_pendencia(p: dict) -> Optional[Path]:
+    """O .mp3 do resumo, gerado na hora a partir do roteiro guardado em p["fala"] (~1 a 4 s de edge-tts).
+    Fica em FALA_DIR e é reaproveitado enquanto existir. Pendências antigas: o arquivo que está no cofre."""
+    mp3 = (p.get("arquivos") or {}).get("mp3")
+    if mp3 and (vault() / mp3).is_file():
+        return vault() / mp3
+    fala = p.get("fala") or {}
+    if not fala.get("texto"):
+        return None
+    destino = FALA_DIR / f"{p['id']}.mp3"
+    if destino.is_file() and destino.stat().st_size > 0:
+        return destino
+    return destino if tts_save(fala["texto"], fala.get("voz") or "", destino) else None
+
+
+def tocar_pendencia(p: dict, bloquear: bool = False) -> bool:
+    mp3 = audio_da_pendencia(p)
+    return bool(mp3) and tocar_audio(mp3, bloquear=bloquear)
 
 
 def pend_file() -> Path:
@@ -1031,12 +1079,13 @@ def criar_pendencia(m: dict, ev: dict, cfg: dict, inbox_name: str) -> dict:
         data = _load_pend()
         data["pendencias"].append(entry)
         _save_pend(data)
-    log(f"[pendencias] Criada {pid} ({ev['tipo']}) — md{' + mp3' if entry['arquivos']['mp3'] else ''}")
+    log(f"[pendencias] Criada {pid} ({ev['tipo']}) — md{' + roteiro de voz' if entry['fala'] else ''}")
     return entry
 
 
 def _montar_pendencia(pid: str, m: dict, ev: dict, cfg: dict, inbox_name: str) -> dict:
-    """Texto explicativo (.md) + áudio da pergunta → entrada de pendencias.yml (ainda não gravada)."""
+    """Texto explicativo (.md) + roteiro de voz da pergunta → entrada de pendencias.yml (ainda não gravada).
+    O .mp3 não é gerado aqui: nasce do roteiro quando alguém pede para ouvir (audio_da_pendencia)."""
     pcfg   = cfg.get("pendencias") or {}
     perfil = cfg.get("_perfil") or {}
     now    = _now()
@@ -1055,7 +1104,6 @@ def _montar_pendencia(pid: str, m: dict, ev: dict, cfg: dict, inbox_name: str) -
 
     pd = pend_dir()
     md_path  = pd / f"{pid}.md"
-    mp3_path = pd / f"{pid}.mp3"
 
     def _fm(v):
         return json.dumps(v, ensure_ascii=False) if isinstance(v, str) else ("null" if v is None else str(v).lower() if isinstance(v, bool) else v)
@@ -1102,7 +1150,6 @@ def _montar_pendencia(pid: str, m: dict, ev: dict, cfg: dict, inbox_name: str) -
                                               {"texto": texto, "tipo": ev["tipo"]}), timeout=120)
     if not roteiro:
         roteiro = limpar_para_fala(texto)
-    tem_audio = tts_save(roteiro, pcfg.get("tts_voice", "pt-BR-AntonioNeural"), mp3_path)
 
     entry = {
         "id":            pid,
@@ -1115,7 +1162,8 @@ def _montar_pendencia(pid: str, m: dict, ev: dict, cfg: dict, inbox_name: str) -
                                              "link", "custo", "o_que_pedem", "prazo_resposta", "resumo")},
         "email":         {"message_id": m["message_id"], "from": m["from_addr"], "from_name": m["from_name"],
                           "subject": m["subject"], "date": m["date_iso"]},
-        "arquivos":      {"md": f"pendencias/{md_path.name}", "mp3": f"pendencias/{mp3_path.name}" if tem_audio else None},
+        "arquivos":      {"md": f"pendencias/{md_path.name}", "mp3": None},
+        "fala":          {"texto": roteiro, "voz": pcfg.get("tts_voice", "pt-BR-AntonioNeural")} if roteiro.strip() else None,
         "resposta_links": None,
         "lembrado_em":   None,
         "respondido_em": None,
@@ -1178,14 +1226,14 @@ def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
             _notify("Alfred — WhatsApp",
                     f"{wa.get('contato') or entry['titulo']}: {(wa.get('texto') or '')[:120]}\n"
                     f"Responda: run.sh responder-texto {entry['id']} \"...\"")
-            if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and entry.get("arquivos", {}).get("mp3"):
-                tocar_audio(vault() / entry["arquivos"]["mp3"])
+            if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and tem_audio(entry):
+                tocar_pendencia(entry)
         return
     quando = entry.get("evento", {}).get("data_inicio") or "data não informada"
     _notify(f"Alfred — {'Convite' if entry['tipo'] == 'evento' else 'Contato profissional'}",
             f"{entry['titulo']}\n{quando}\nResponda: run.sh responder {entry['id']} vou | nao-vou")
-    if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and entry.get("arquivos", {}).get("mp3"):
-        tocar_audio(vault() / entry["arquivos"]["mp3"])
+    if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and tem_audio(entry):
+        tocar_pendencia(entry)
     if aguardar_resposta and _tem_gui():
         _iniciar_aguardador("_aguardar-resposta", entry["id"])
 

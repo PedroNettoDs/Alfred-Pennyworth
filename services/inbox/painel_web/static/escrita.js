@@ -173,6 +173,7 @@
     if (ev.tipo === "texto") {
       bruto += ev.texto;
       bloco.corpo.textContent = bruto;
+      document.dispatchEvent(new CustomEvent("alfred:texto", { detail: { texto: ev.texto } }));   // voz.js fala frase a frase
       rolar();
     } else if (ev.tipo === "ferramenta") {
       mostrarFerramenta(ev);
@@ -182,6 +183,7 @@
       bloco.corpo.classList.remove("resposta__corpo--stream");
       bloco.corpo.innerHTML = ev.html || "";
       if (ev.parado) bloco.appendChild(novo("p", "resposta__nota", "Interrompido."));
+      document.dispatchEvent(new CustomEvent("alfred:resposta", { detail: { texto: ev.texto || "", parado: !!ev.parado } }));
       encerrar();
       rolar();
     } else if (ev.tipo === "erro") {

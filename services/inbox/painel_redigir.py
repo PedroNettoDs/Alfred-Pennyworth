@@ -1,4 +1,7 @@
-"""Tela /painel/redigir: e-mails de evento/entrevista que esperam Pedro liberar. Mesma segurança do Painel (painel.py)."""
+"""
+Tela /painel/redigir: e-mails de evento/entrevista que esperam Pedro liberar. Mesma segurança do Painel (painel.py).
+Fica dentro de Ferramentas (painel_ferramentas.py): a navegação marca Ferramentas e o contador vai para lá.
+"""
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -15,7 +18,7 @@ def tela_redigir(request: Request):
     if not painel._nonce_da_sessao(request):
         return painel._para_login(request)
     itens = redigir.listar()
-    return painel._pagina(request, "redigir.html", "redigir",
+    return painel._pagina(request, "redigir.html", "ferramentas",
                           aguardando=[i for i in itens if i.get("status") == "aguardando"],
                           resolvidos=[i for i in itens if i.get("status") != "aguardando"][:10])
 

@@ -24,7 +24,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh responder <id> vou           # "vou" → cria tarefa em VAULT_ALFRED/tasks.yml
 ./run.sh responder <id> nao-vou --nota "conflito com a Fatec"
 ./run.sh responder-texto <id> "Carlos, mando até quinta."   # pendência de WhatsApp → envia ao contato
-./run.sh whatsapp status | qrcode | webhook URL | simular payload.json | notificar <id>
+./run.sh whatsapp status | qrcode | webhook URL | simular payload.json | notificar <id>   # qrcode / webhook: --sessao NOME
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
 ./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
 ./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa; no navegador, a aba Conversa do Painel
@@ -248,6 +248,7 @@ com o Alfred, sobre o motor `conversa.py` — ver [Conversa](#conversa-aba-do-pa
 | **Agenda** (`/painel/agenda`) | "Próximos" (por data) e "Desfeitos e cancelados": título, data/hora, origem (WhatsApp · contato / Nota para si mesmo / E-mail · assunto / Terminal / API / Manual), status e **Desfazer** quando cabe. Vazia: "A agenda está vazia." |
 | **Limpeza** (`/painel/limpeza`) | lotes com quantidade, inbox, status, data da proposta, expiração, motivo agregado, nota e a lista dos e-mails (remetente, assunto, data e, depois que a extensão passa, o resultado de cada um) recolhível; o resultado agregado da última passada (movidos para a Lixeira, não encontrados, recusados, com erro); **Aprovar**, **Aprovar e limpar** e **Recusar** (nota opcional) nos lotes aguardando; **Limpar** nos lotes aprovados, simulados, parciais ou que falharam (some enquanto a limpeza pedida espera a extensão) |
 | **Pesquisar** (`/painel/pesquisar`) | formulário (tema + **Rápido** ou **Profundo** + **Enviar as fontes para**: nenhum ou um notebook), **Notebooks no OpenNotebook** (nome, fontes, **Abrir** em nova aba, **Buscar mais fontes**) e as 20 pesquisas mais recentes de `VAULT_ALFRED/research/*/index.md` (título, data, modo). Cada uma abre `/painel/pesquisar/{slug}`: a síntese de `synthesis.md` no markdown seguro do painel (o mesmo da explicação do e-mail), a lista de fontes de `sources.md` e o botão **Abrir um notebook sobre isso** (OpenNotebook). O profundo abre `/painel/pesquisar/andamento/{job_id}` (etapa, mensagem, contagem, subperguntas), que se atualiza sozinho e vai para o resultado quando termina — ver [Pesquisar](#pesquisar) |
+| **Ferramentas** (`/painel/ferramentas`) | tudo o que o Alfred faz, por grupo (conversa e memória, e-mail e WhatsApp, agenda, notícias e pesquisa, sistema): cada função num cartão com resumo, **Documentação** e **Abrir** (a tela dela no Painel, quando tem). A documentação de cada uma (`/painel/ferramentas/{slug}`) vem de `painel_web/ferramentas.yml`: como usar, comandos, quando roda, as ferramentas da conversa ligadas a ela e onde está o código. No fim, as ferramentas da conversa extraídas do `lib_ferramentas` (descrição, parâmetros, "Pede aprovação"), sem lista à mão. A fila do **Redigir** (`/painel/redigir`) abre daqui, e o contador dela fica no item Ferramentas da navegação |
 | **Sistema** (`/painel/sistema`, só leitura) | Alfred ligado/desligado e pendências aguardando; WhatsApp (o mesmo dado de `/whatsapp/status`: conexão, instância, envios simulados ou reais, fila de espera); APIs — inbox, executor `127.0.0.1:${PORT_SHELL_EXECUTOR:-7071}/health`, researcher `127.0.0.1:${PORT_RESEARCHER:-7072}/health`; Ollama `${OLLAMA_BASE_URL}/api/version`; containers `alfred-evolution`, `-evolution-db`, `-searxng`, `-chromadb`, `-n8n` (`docker inspect`); próximos timers `alfred-*` (`systemctl --user list-timers --output=json`). Cada item é consultado em paralelo, com timeout curto; o que falhar aparece "Indisponível" sem quebrar a tela |
 
 O histórico do detalhe junta o que existir: recebida, criada (ou "entrou na espera"), mensagens agrupadas, resumo
@@ -318,6 +319,7 @@ recarrega a cada seta) e Enter ou **Buscar** aplicam.
 | POST `/painel/api/agenda/{id}/desfazer` · `/painel/api/limpeza/{id}/aprovar` · `/recusar` · `/limpar` `{nota}` | agenda e limpeza |
 | POST `/painel/api/pesquisar` `{tema, modo: rapido\|profundo, notebook: ""\|<id>}` | nova pesquisa; a resposta traz `url` (resultado ou andamento; com notebook e falha no envio, `?notebook=falhou`) |
 | POST `/painel/api/pesquisar/{slug}/notebook` `{notebook: ""\|<id>}` | `""`: cria ou reabre o notebook da pesquisa; id: manda a pesquisa para esse notebook. A resposta traz `url` (a interface, 127.0.0.1:8502) e `falhas` |
+| GET `/painel/ferramentas`, `/painel/ferramentas/{slug}` | aba Ferramentas: funções e ferramentas da conversa; documentação de uma função (slug desconhecido → 404 na própria tela) |
 | GET `/painel/conversa[?q=]`, `/painel/conversa/{id}` | aba Conversa: lista (com busca FTS5) e a conversa aberta com as mensagens; id desconhecido → 404 na própria tela |
 | POST `/painel/api/conversas` `{texto}` · `/painel/api/conversas/{id}/mensagens` `{texto}` | cria a conversa com a primeira mensagem / continua uma → `{conversa, titulo, turno, url, nova}`; 400 vazio ou > 20 mil caracteres; 409 com turno em andamento |
 | GET `/painel/api/turnos/{id}/eventos` (SSE) · POST `/painel/api/turnos/{id}/parar` · POST `/painel/api/aprovacoes/{id}/executar\|negar` · POST `/painel/api/conversas/{id}/apagar` | eventos do turno (`texto`, `ferramenta`, `aprovar`, `fim` com `html`, `erro`; turno já acabado e fila vazia → `fim` com `recarregar`), parar, cartão de aprovação (409 se já decidida), apagar (409 com turno em andamento) |
@@ -546,7 +548,19 @@ conflict device_removed`) e a Evolution fez logout da instância (`state: close`
 aparelho é removido em *Aparelhos conectados* no celular ou quando o WhatsApp encerra a sessão vinculada.
 O autostart não resolve: precisa parear de novo pelo QR code. O vigia agora avisa na hora.
 
-### Áudios de resumo do WhatsApp: apagados depois de 2 dias
+### Áudio do resumo: gerado na hora, do roteiro guardado
+
+Desde 10/11/2026 a pendência (e-mail e WhatsApp) não nasce com `.mp3`. Ela guarda o roteiro de voz em
+`pendencias.yml` (`fala: {texto, voz}`) e o áudio é gerado por `core.audio_da_pendencia()` só quando alguém
+precisa dele: ao avisar Pedro pelo WhatsApp (o arquivo é apagado logo depois do envio), no botão **Ouvir**,
+em `run.sh ouvir ID` e em `GET /pendencias/{id}/audio` (player do Painel, N8N). O arquivo fica em
+`/tmp/alfred-fala/`, fora do cofre, e é reaproveitado enquanto existir. Medido: 1,3 a 4,3 s de edge-tts por
+áudio de ~35 s (118 KB); isso sai da criação de toda pendência que não é enviada pelo WhatsApp. Sem rede não
+há áudio na hora: o roteiro continua lá e o texto do `.md` também.
+
+### Áudios antigos de resumo do WhatsApp: apagados depois de 2 dias
+
+Vale só para pendências criadas antes do áudio sob demanda, que ainda têm `.mp3` no cofre.
 
 O `.mp3` de cada pendência de WhatsApp já foi enviado a Pedro pelo WhatsApp, então o arquivo local some
 `audio_reter_dias` depois de criado (`perfis.yml → whatsapp.pedro_whatsapp.audio_reter_dias: 2`). O `.md` e a
@@ -613,6 +627,52 @@ responder_texto(id, texto)         → pendencias.yml: status=respondida, respos
 ```
 
 O webhook devolve `{"acao": pendencia_criada | agendada | agrupada | resposta_registrada | pendencia_ignorada | respondida_manual | fila_cancelada | duplicada | ignorada, "motivo", "classificacao", "transcricao", "pendencia", "notificacao"}` (+ `prazo` e `fila` quando `agendada`; `fila_cancelada` = ids que saíram da fila e `respondidas_na_espera` = ids dos itens `respondida_manual` registrados no lugar delas). Quem avisa Pedro é o orquestrador: o N8N (`n8n/alfred-whatsapp.json`) lê `notificacao` e manda texto + áudio pela Evolution; sem N8N, chame o webhook com `?notificar=1` (ou use `/whatsapp/webhook-async`, que já notifica) e o próprio Python envia.
+
+### Mais de uma sessão (número pessoal + número do Alfred)
+
+Cada conta de `perfis.yml → whatsapp:` é uma **sessão**: uma instância da Evolution (um número pareado por QR) com um **papel**. O webhook é o mesmo para todas; `processar_mensagem_whatsapp()` escolhe a sessão pelo campo `instance` do payload (instância desconhecida → conta padrão).
+
+| Papel | O que faz |
+|---|---|
+| `pessoal` | O número de Pedro: o fluxo acima (pendência "o que você quer responder?"). |
+| `assistente` | O número do Alfred (`_atender()`), descrito abaixo. Só uma sessão tem este papel. |
+
+O papel vem de `papel:` em `perfis.yml`; a escolha feita no Painel (**Ferramentas → Sessões do WhatsApp → Conectar WhatsApps**, `/painel/whatsapp`) fica em `logs/whatsapp_sessoes.json` e vale mais. A mesma tela pareia cada sessão (`?sessao=NOME`).
+
+```
+Sessão assistente
+    ├─ Pedro (WHATSAPP_NUMERO_PEDRO) escreve ou fala      → _pedido_de_pedro(): canal direto do motor da conversa
+    │     áudio → faster-whisper (o mesmo motor do microfone do Painel) · o pedido vira um turno de conversa.py,
+    │     com todas as ferramentas, e a resposta volta pelo número do Alfred
+    │     motor fora do ar e nada executado → agenda direta (sem data → lembrete de hoje)
+    │     citando um aviso do Alfred (ref: <id>)          → responder_texto(): a resposta sai pelo número do Alfred
+    └─ outra pessoa escreve                               → _recepcionar()
+          1ª mensagem                                     → UMA saudação (acao: saudacao)
+          avaliar_atendimento() — whatsapp_assistente.md: a conversa é séria? (perfil + memória de Pedro)
+             não, mas há o que responder (quem é o Alfred, o que Pedro faz, quer conversar) → fala curta
+                   (acao: apresentacao), no máximo `respostas_max` (8) por contato
+             não → silêncio (acao: ignorada)
+             sim → previsão de retorno (agenda dos próximos 3 dias) + site → pendência + aviso a Pedro
+          depois da previsão                              → o Alfred não fala mais por `silencio_horas`;
+                                                            mensagens novas entram na pendência e são repassadas
+```
+
+Toda mensagem do Alfred a um contato abre com `🎩 *Alfred:*`. Saudação, retorno e site são montados no código (`assistente.saudacao` / `retorno` / `site` em `perfis.yml`). Do LLM (`assistente.modelo`; vazio = o modelo padrão. O `gemma4:e4b` responde em ~1 s mas conversou pior no teste de 10/11) entram a previsão (uma linha, até 80 caracteres, sem link) e a fala do Alfred: até 500 caracteres, links removidos, escrita só com a `descricao` do perfil e `assistente.apresentacao`. A cada mensagem o modelo escreve também `situacao`, um resumo curto do chat (quem é, o que quer, o que já foi dito, o tom), guardado em `logs/whatsapp_atendimentos.json`. O prompt seguinte leva esse resumo e só as últimas 8 falas (as dele marcadas `ALFRED:`), em vez do histórico inteiro; no máximo `respostas_max` (8) falas por contato além da saudação. Conversa travada (o Alfred ia repetir uma fala, ou atingiu o teto e a pessoa continua) vira séria: o contato recebe "Vou passar a sua mensagem direto para o Pedro" com a previsão, e Pedro é avisado no WhatsApp e no computador. O prompt não recebe a memória de Pedro (o texto vai a desconhecidos) e recebe os horários ocupados sem título nem local. O Alfred fala como assistente, de Pedro na terceira pessoa, e não responde conversa fiada. Com o LLM fora do ar, Pedro é avisado e o contato recebe só a saudação. Estado por contato: `logs/whatsapp_atendimentos.json`.
+
+**Canal direto de Pedro.** Os pedidos caem numa conversa própria ("WhatsApp", visível na aba Conversa; outra é aberta depois de 6 h parada) e rodam numa thread fora da trava do webhook, com o mesmo prompt do Painel (um bloco extra de instruções fez o gemma4 parar de chamar ferramentas, medido em 10/11). Se o modelo diz que anotou algo sem ter usado ferramenta, o pedido cai na agenda direta. Ferramentas perigosas de `assistente.sem_aprovacao` (padrão: `criar_compromisso`, `completar_tarefa`, `salvar_nota`) rodam sem perguntar. As outras (`executar_comando`, `responder_pendencia`, `responder_limpeza`) mandam "⚠ Para executar … responda *sim* ou *não*" e esperam 5 min a resposta. Quem pode usar o canal é só o número de `WHATSAPP_NUMERO_PEDRO`.
+
+Ao parear uma sessão nova, a instância dela recebe o mesmo webhook da instância padrão (`_garantir_webhook`); sem webhook nenhuma mensagem chega ao Alfred.
+
+Uma sessão reconhece o número da outra (campo `sender` do webhook, guardado em `logs/whatsapp_sessoes.json`): o aviso do Alfred que chega no número pessoal não vira pendência.
+
+Para ligar o segundo número:
+
+```bash
+# 1. perfis.yml → whatsapp → alfred_whatsapp: confira `instancia` e preencha `assistente.site`
+./run.sh whatsapp qrcode --sessao alfred_whatsapp          # cria a instância e mostra o QR (ou use o Painel)
+./run.sh whatsapp webhook http://172.17.0.1:7073/whatsapp/webhook-async --sessao alfred_whatsapp
+systemctl --user restart alfred-inbox-api                  # a API relê perfis.yml
+```
 
 ### Espera antes de resumir (`atraso_minutos`)
 
@@ -937,13 +997,14 @@ escrita (`escrita.py`) e o terminal (`run.sh conversa`).
 ```
 enviar(conversa_id, texto) ── grava a pergunta ──► fila do chat (executor próprio, 1 worker — fora do threadpool
                                                    do FastAPI: em 31/10 uma rajada de webhooks esgotou o pool)
-   contexto: personalidade + bloco "Agora" + memória + RAG (heurística) + resumo + histórico
+   contexto: personalidade + resumo + histórico + mensagem do turno (bloco "Agora" + memória + RAG (heurística) + pedido)
    Ollama /api/chat (stream, tools=esquemas(), think: false, num_ctx 16384)
       │ texto ─────────────────► evento "texto"
       │ ferramenta segura ─────► executar() ─► evento "ferramenta" (rodando → ok | erro)
       │ ferramenta perigosa ───► evento "aprovar" ─► aprovar(id) | negar(id) | 5 min sem resposta = cancelada
       └ repete (no máximo 6 voltas de ferramenta; a 7ª chamada vai sem tools e tem de responder)
    grava a resposta ──► evento "fim" (ou "erro")          parar(turno_id) corta e grava o que já veio
+   depois do "fim": resumo (se passou de 32 mensagens) e _aquecer() — o começo do próximo prompt fica avaliado no Ollama
 ```
 
 ```bash
@@ -972,24 +1033,30 @@ em andamento) · `ocupado()`.
 
 O último evento de um turno é sempre `fim` ou `erro`.
 
-**Contexto de cada volta** (uma mensagem `system` + histórico + a pergunta):
+**Contexto de cada volta**, na ordem em que vai ao Ollama: do que nunca muda para o que muda a cada pergunta. O
+motivo da ordem está em [Ordem do prompt](#ordem-do-prompt-e-reaproveitamento-no-ollama-10112026).
 
-1. Personalidade: [`docs/alfred-system-prompt.md`](../../docs/alfred-system-prompt.md) como está, sem a linha
-   `/no_think` (o payload leva `think: false`). O texto ainda cita o Open WebUI e nomes antigos de ferramenta — a
-   revisão é a Fase 4.
-2. Bloco "Agora": data, hora e dia da semana em pt-BR; compromissos das próximas 48 h (`agenda.yml`, sem
-   desfeitos/cancelados); tarefas abertas vencidas ou de hoje (`tasks.yml`); pendências aguardando (total + as 3 mais
-   urgentes, na ordem do Painel: urgência alta, depois as mais recentes); estado do WhatsApp (`connectionState` com
-   timeout de 1,5 s e cache de 60 s — Evolution lenta vira "não respondeu agora"). Uma parte que falha some do
-   bloco, com log.
-3. Memória: `lib_memoria.contexto(pergunta)`.
-4. RAG automático: `lib_rag.contexto(pergunta, 1500)` só quando `_quer_rag(pergunta)` — regex para "minhas notas",
-   "anotei", "cofre", "estudei", "na aula", "certificação", "você já pesquisou"... No resto, o modelo usa
-   `buscar_cofre` / `ler_nota`. A função é isolada: o Laya assume essa decisão na Fase 5.
-5. Histórico: as mensagens de Pedro e do Alfred depois do resumo, inteiras — de 12 a 32. Passou de 32, o resumo é
+1. `system` fixo, só com a personalidade: [`docs/alfred-system-prompt.md`](../../docs/alfred-system-prompt.md) como
+   está, sem a linha `/no_think` (o payload leva `think: false`). O texto ainda cita o Open WebUI e nomes antigos de
+   ferramenta — a revisão é a Fase 4. O Ollama escreve os esquemas das ferramentas logo depois dele, no mesmo bloco.
+2. `system` com o resumo das mensagens antigas, quando há resumo.
+3. Histórico: as mensagens de Pedro e do Alfred depois do resumo, inteiras — de 12 a 32. Passou de 32, o resumo é
    refeito depois do `fim` (mesmo modelo e `num_ctx` do chat, formato de máquina, incremental) cobrindo todas menos
    as 12 últimas: ou seja, a cada ~20 mensagens. Chamadas e resultados de ferramenta de turnos anteriores não voltam
    (a resposta daquele turno já diz o que importava).
+4. A mensagem de Pedro deste turno: o que muda a cada pergunta e, no fim, `## Pedido de Pedro` com o pedido. No
+   histórico dos turnos seguintes volta só o pedido.
+   - Bloco "Agora": data, hora e dia da semana em pt-BR; compromissos das próximas 48 h (`agenda.yml`, sem
+     desfeitos/cancelados); tarefas abertas vencidas ou de hoje (`tasks.yml`); pendências aguardando (total + as 3
+     mais urgentes, na ordem do Painel: urgência alta, depois as mais recentes); estado do WhatsApp
+     (`connectionState` com timeout de 1,5 s e cache de 60 s — Evolution lenta vira "não respondeu agora"). Uma
+     parte que falha some do bloco, com log.
+   - Memória: `lib_memoria.contexto(pergunta)`.
+   - RAG automático: `lib_rag.contexto(pergunta, 1500)` só quando `_quer_rag(pergunta)` — regex para "minhas
+     notas", "anotei", "cofre", "estudei", "na aula", "certificação", "você já pesquisou"... No resto, o modelo usa
+     `buscar_cofre` / `ler_nota`. A função é isolada: o Laya assume essa decisão na Fase 5.
+   - Conversas anteriores, só quando `_quer_conversas(pergunta)` (ver abaixo), e o documento aberto, na janela de
+     escrita.
 
 **GPU e a fila do WhatsApp:** com turno na fila ou rodando, `ocupado()` é `True` e `whatsapp.processar_fila` segura
 o próximo item (ele espera a volta seguinte da thread `whatsapp-fila`, 60 s; não é descartado). Só vale dentro do
@@ -1030,11 +1097,76 @@ mensagens com alguma palavra de 4+ letras. `ler_conversa(id)` devolve a íntegra
 sem as chamadas de ferramenta). A conversa com turno em andamento nunca entra: a própria pergunta casaria com ela.
 
 **Contexto automático:** `_quer_conversas(pergunta)` reconhece "o que falamos", "aquela conversa", "você me disse",
-"lembra de", "da última vez"... Só então até 3 resumos entram no system (bloco "Conversas anteriores", teto de
+"lembra de", "da última vez"... Só então até 3 resumos entram na mensagem do turno (bloco "Conversas anteriores", teto de
 `RAG_CHARS`), buscados só por vetor. Sem ChromaDB o bloco não aparece, e o modelo ainda tem `buscar_conversas`.
 
 O job roda em processo separado: `ocupado()` não o enxerga, e por isso ele fica de madrugada. Com a máquina desligada
 às 04:00, roda ao ligar. Em modo jogo o `run.sh` recusa.
+
+### Ordem do prompt e reaproveitamento no Ollama (10/11/2026)
+
+Cada turno levava de 8 a 19 s até a primeira palavra, mesmo para "que horas são". As causas, medidas no log do Ollama
+(`journalctl -u ollama`) e nas durações que o `/api/chat` devolve no último pedaço do stream:
+
+| O que acontecia | Custo | Por quê |
+|---|---|---|
+| O prompt inteiro era reavaliado a cada turno | ~8 s (8 mil tokens a ~1000 tokens/s) | O Ollama só reaproveita o que já avaliou enquanto o começo do prompt for igual ao do turno anterior. O system trazia o bloco "Agora" (com a hora) e a memória logo depois da personalidade, e o Ollama escreve as ferramentas (~5 mil tokens) depois do system: dois turnos seguidos só coincidiam nos primeiros 2614 de 8226 tokens |
+| O modelo era recarregado | mais 8 a 11 s | Outra chamada ao `gemma4:12b` com `num_ctx` 8192 entre dois turnos (a fila do WhatsApp usa `OLLAMA_NUM_CTX`). O chat pede 16384, e contexto diferente é outro runner |
+
+O que mudou no `conversa.py` (o último item, em `core.py`, `whatsapp.py` e `agenda.py`):
+
+- **Ordem** (`montar_contexto`): personalidade, ferramentas, resumo e histórico primeiro; o que muda a cada pergunta
+  por último, dentro da mensagem de Pedro. Num `system` à parte, logo antes da pergunta, o tempo era o mesmo mas o
+  gemma4 largou a voz do Alfred: em 7 perguntas com temperatura 0, "senhor" apareceu em 0 respostas, contra 6 dentro
+  da mensagem de Pedro e 4 na ordem antiga.
+- **Aquecimento** (`_aquecer`): depois do `fim` e do resumo, uma chamada com `num_predict: 1` manda ao Ollama o
+  começo do próximo prompt (personalidade, ferramentas, resumo e histórico já com o turno que acabou). Só a ordem não
+  basta: o gemma4 usa atenção em janela deslizante, e com ela o `llama-server` do Ollama 0.34.4 só volta a um ponto
+  do prompt que ele guardou. Ele guarda dois por chamada, a 512 tokens do fim e a 4 do fim. Num turno, os dois caem
+  dentro da mensagem de Pedro, que não volta igual: com bloco + pedido acima de ~500 tokens (o normal, "Agora" +
+  memória) tudo era reavaliado de novo (medido: 8,0 s com um bloco de ~590 tokens). O prompt do aquecimento termina
+  no histórico, então o ponto guardado serve ao turno seguinte.
+- **Log do turno:** `1ª palavra X s; Ollama: carga, prompt, geração` (`load_duration`, `prompt_eval_duration` e
+  `eval_duration`, somados nas chamadas do turno). `prompt` perto de 8 s quer dizer que nada foi reaproveitado.
+- **Mesmo `num_ctx` nas chamadas do WhatsApp** (`core.ctx_do_chat`): as chamadas ao modelo da Conversa feitas pelo
+  `whatsapp.py` (transcrição pelo Ollama, classificação, rascunho, pergunta, roteiro do áudio, atendimento do
+  assistente) e as duas do `agenda.py` que esse fluxo alcança (`detectar_compromisso`, `resumir`) pedem o `num_ctx`
+  da seção `conversa:`. Antes pediam `OLLAMA_NUM_CTX`: o Ollama recarregava o modelo na chamada do WhatsApp e de
+  novo no turno seguinte da Conversa. Chamada com outro modelo (`MODEL_CLASSIFY`, `MODEL_TRANSCRIBE`, `modelo` do
+  assistente) fica como estava.
+
+Primeira palavra, do `enviar()` ao primeiro evento `texto` (motor num cofre temporário com agenda, tarefas,
+pendências e memória de teste, bloco do turno de ~590 tokens, `gemma4:12b`, `num_ctx` 16384):
+
+| Cenário | Antes | Depois |
+|---|---|---|
+| 2º turno curto em diante (23 turnos seguidos) | 8,3–9,1 s | 1,1–1,6 s |
+| Conversa nova, com o modelo carregado por outra conversa | 8,0–8,6 s | 1,3–1,4 s |
+| Turno logo depois de o resumo ser refeito | 9,2 s (só com a ordem nova) | 1,1 s |
+| Turno com uma volta de ferramenta | não medido | 2,2 s |
+| Outra chamada ao 12b com `num_ctx` 16384 entre os turnos | não medido | 1,7 s |
+| Outra chamada ao 12b com `num_ctx` 8192 entre os turnos | 16,5–18,7 s | 18,7–27 s: recarrega, não mudou |
+| Classificação e rascunho do WhatsApp entre os turnos | 16,7–17,0 s (pediam 8192) | 1,6–1,9 s; 2,1–2,2 s com o resumo da agenda junto |
+| 1º turno depois de carregar o modelo | ~8 s, mais a carga | igual |
+
+No log da API em 10/11, antes de o WhatsApp pedir o mesmo `num_ctx`: quatro de cinco turnos reais levaram 16,0 a
+19,5 s até a primeira palavra (carga de 7,3 a 9,5 s mais o prompt inteiro); o único sem recarga, 1,7 s. A própria
+classificação do WhatsApp caiu de ~16 s para ~8 s, porque também deixou de recarregar o modelo.
+
+O que custa e o que continua lento:
+
+- O aquecimento ocupa a GPU por ~1 s depois de cada resposta (~7 s na primeira depois de carregar o modelo). Nesse
+  tempo `ocupado()` segue `True` e a fila do WhatsApp espera; uma pergunta que chegue nesse intervalo espera também.
+- O `llama-server` guarda um ponto por turno na RAM (320 MiB cada, até 32): o processo chegou a 13,6 GB numa sessão
+  longa, contra ~10,7 GB antes. A VRAM não muda, e a RAM volta quando o Ollama descarrega o modelo.
+- **`num_ctx` diferente ainda recarrega o modelo.** O WhatsApp já pede o da Conversa (acima). Continuam com
+  `OLLAMA_NUM_CTX` as chamadas do ciclo de e-mail (`core.py`), das promessas (`promessas.py`) e do Redigir
+  (`redigir.py`): quando uma roda entre dois turnos, o turno seguinte custa 19 a 27 s. `OLLAMA_NUM_CTX=16384` no
+  `.env` cobre todas; é a pendência de 31/10 (abaixo), decisão de Pedro.
+- Depois de 5 minutos sem uso o Ollama descarrega o modelo: o turno seguinte paga a carga e os ~8 s.
+- Na janela de escrita o documento vai na mensagem do turno e é avaliado a cada pedido; o resto do prompt é
+  reaproveitado.
+- Os pontos guardados são detalhe do Ollama 0.34.4. Se uma versão nova mudar isso, o `prompt` do log do turno sobe.
 
 ### Medição na RTX 3060 12 GB (31/10/2026)
 
@@ -1079,8 +1211,9 @@ O que isso quer dizer:
 **Testes da compressão e da busca:** classe `TestConversasAnteriores` em `tests.test_conversa` (nota, memória só com as falas de Pedro, conversa recente, retomada, curta, LLM fora, apagar, heurística, contexto automático, ordem da busca) e em `tests.test_ferramentas` (`buscar_conversas`, `ler_conversa`).
 
 **Testes:** `venv/bin/python -m unittest tests.test_conversa -v` (offline: o Ollama é um roteiro trocado no lugar de
-`_stream_ollama`; vault e `conversas.db` temporários; memória, RAG e resumo mockados). Cobrem o contexto montado
-(bloco "Agora" com agenda, tarefas, pendências e WhatsApp; memória; RAG só pela heurística), o laço com ferramenta
+`_stream_ollama`; vault e `conversas.db` temporários; memória, RAG, resumo e aquecimento mockados). Cobrem o contexto
+montado (bloco "Agora" com agenda, tarefas, pendências e WhatsApp; memória; RAG só pela heurística; a ordem do prompt
+e o aquecimento do próximo), o laço com ferramenta
 segura (payload com `tools`, `think: false`, `num_ctx`; mensagem `tool`), aprovação aprovada / negada / expirada, o
 limite de 6 voltas, `parar` no meio do texto, durante a aprovação e na fila, o resumo do histórico, a persistência
 (título, busca, transação) e a fila do WhatsApp segurando o próximo item durante um turno.

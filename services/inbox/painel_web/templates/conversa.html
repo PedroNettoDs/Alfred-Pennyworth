@@ -13,6 +13,7 @@
 {% block head %}
   <link rel="stylesheet" href="/painel/static/conversa.css">
   <script src="/painel/static/conversa.js" defer></script>
+  <script src="/painel/static/voz.js" defer></script>
 {% endblock %}
 {% block conteudo %}
 {%- set subtitulo = conv.titulo if conv and conv.titulo else "Converse com o Alfred: pendências, agenda, e-mails, pesquisas e as notas do cofre." %}
@@ -94,6 +95,10 @@
                 autofocus{% if nao_encontrada %} disabled{% endif %}></textarea>
       <div class="chat__botoes">
         <p class="chat__dica">Enter envia · Shift+Enter quebra a linha</p>
+        <button id="audio-alfred" class="botao botao--discreto botao--pequeno" type="button" aria-pressed="false"
+                title="O Alfred fala as respostas (mesma voz dos resumos; o texto passa pelo serviço de voz)">Ativar áudio</button>
+        <button id="microfone" class="botao botao--pequeno" type="button" aria-pressed="false"
+                title="Falar em vez de digitar: a transcrição é feita nesta máquina">Falar</button>
         <button id="parar" class="botao botao--pequeno" type="button" hidden>Parar</button>
         <button id="enviar" class="botao botao--primario botao--pequeno" type="submit"{% if nao_encontrada or turno_ativo %} disabled{% endif %}>Enviar</button>
       </div>

@@ -22,26 +22,34 @@ responder_texto(). Se Pedro responder o contato direto do celular, a pendência 
 como "respondida_manual" (ou, se ainda estava na fila, sai dela e vira um registro respondida_manual
 com o rascunho que o Alfred proporia). "ignorar" fecha sem enviar nada.
 
+Mais de uma sessão: cada conta de perfis.yml → whatsapp: é uma instância da Evolution com um papel
+(sessoes()). "pessoal" segue o fluxo acima; "assistente" é o número do Alfred (_atender): Pedro manda
+ordens para a agenda e os outros são recepcionados — ver "Sessão assistente" mais abaixo.
+
 Reutiliza core.py (pendencias.yml, vault, templates, TTS, notificação). Nenhuma função
 levanta exceção por falha de LLM/rede: degrada com log() e segue.
 """
 
 import base64
+import difflib
 import functools
 import json
+import os
 import re
 import sys
+import queue
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared.lib_alfred import log, ollama_generate, ollama_generate_json  # noqa: E402
-from _shared import lib_db  # noqa: E402
+from _shared import lib_atividade, lib_db, lib_porta  # noqa: E402
 from _shared.lib_audio import transcrever_audio  # noqa: E402
 from _shared.lib_templates import render_template  # noqa: E402
-from _shared.lib_tts import tts_save, limpar_para_fala  # noqa: E402
+from _shared.lib_tts import limpar_para_fala  # noqa: E402
 from _shared.lib_whatsapp import (  # noqa: E402
     enviar_texto, enviar_audio, baixar_midia, jid_para_numero, eh_grupo, formatar_numero,
     numero_pedro, simulado, instancia as instancia_padrao,
@@ -128,6 +136,95 @@ def whatsapp_default() -> str:
 def carregar_cfg(nome: Optional[str] = None) -> tuple[str, dict]:
     nome = nome or whatsapp_default()
     return nome, get_whatsapp(nome)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Sessões — uma conta de perfis.yml = uma instância da Evolution (um número pareado) + um papel
+# ══════════════════════════════════════════════════════════════
+#   pessoal    — o número de Pedro: mensagens viram pendência "o que você quer responder?"
+#   assistente — o número do Alfred: Pedro manda ordens (agenda); os outros são recepcionados
+# O papel vem de perfis.yml (`papel:`); a escolha feita no Painel fica em SESSOES_FILE e vale mais.
+# SESSOES_FILE guarda também o número conectado em cada sessão (campo `sender` do webhook): é como uma
+# sessão reconhece a conversa com a outra e não trata o aviso do Alfred como mensagem de contato.
+
+PAPEIS = ("pessoal", "assistente")
+SESSOES_FILE = core.PROJECT_ROOT / "logs" / "whatsapp_sessoes.json"
+
+
+def _load_sessoes() -> dict:
+    try:
+        data = json.loads(SESSOES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {k: dict(data.get(k) or {}) for k in ("papeis", "numeros", "conversa")}
+
+
+def _save_sessoes(data: dict) -> None:
+    SESSOES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SESSOES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(SESSOES_FILE)
+
+
+def sessoes() -> list[dict]:
+    """→ [{nome, instancia, papel, numero}] — uma por conta de perfis.yml. Sem `instancia:` na conta, a conta
+    padrão usa EVOLUTION_INSTANCE e as outras usam o próprio nome."""
+    nomes = list_all().get("whatsapp", [])
+    if not nomes:
+        return []
+    est, padrao = _load_sessoes(), whatsapp_default()
+    out = []
+    for nome in nomes:
+        cfg = get_whatsapp(nome)
+        papel = est["papeis"].get(nome) or cfg.get("papel")
+        out.append({"nome": nome,
+                    "instancia": str(cfg.get("instancia") or "").strip() or (instancia_padrao() if nome == padrao else nome),
+                    "papel": papel if papel in PAPEIS else "pessoal",
+                    "numero": est["numeros"].get(nome) or ""})
+    return out
+
+
+def obter_sessao(nome: Optional[str] = None) -> dict:
+    """Sessão pelo nome da conta (None = a padrão). KeyError se não existe."""
+    nome = nome or whatsapp_default()
+    s = next((s for s in sessoes() if s["nome"] == nome), None)
+    if not s:
+        raise KeyError(f"Sessão de WhatsApp não encontrada em perfis.yml: {nome}")
+    return s
+
+
+def _sessao_da_instancia(inst) -> Optional[dict]:
+    return next((s for s in sessoes() if s["instancia"] == inst), None)
+
+
+def definir_papel(nome: str, papel: str) -> list[dict]:
+    """Grava o papel da sessão. Só uma é a assistente (é dela que saem os avisos a Pedro): escolher outra
+    devolve a anterior a "pessoal". KeyError (sessão) / ValueError (papel). → sessoes()."""
+    if papel not in PAPEIS:
+        raise ValueError(f"Papel inválido: {papel} (use {' ou '.join(PAPEIS)})")
+    with core.trava_arquivo(SESSOES_FILE):
+        todas = sessoes()
+        if nome not in [s["nome"] for s in todas]:
+            raise KeyError(f"Sessão de WhatsApp não encontrada em perfis.yml: {nome}")
+        est = _load_sessoes()
+        for s in todas:
+            if s["nome"] == nome:
+                est["papeis"][nome] = papel
+            elif papel == "assistente" and s["papel"] == "assistente":
+                est["papeis"][s["nome"]] = "pessoal"
+        _save_sessoes(est)
+    log(f"[whatsapp] sessão {nome} → papel {papel}")
+    return sessoes()
+
+
+def _anotar_numero(sessao: dict, dono: str) -> None:
+    if not dono or sessao.get("numero") == dono:
+        return
+    with core.trava_arquivo(SESSOES_FILE):
+        est = _load_sessoes()
+        est["numeros"][sessao["nome"]] = dono
+        _save_sessoes(est)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -288,13 +385,14 @@ def _contato_legivel(msg: dict) -> str:
 #  Transcrição
 # ══════════════════════════════════════════════════════════════
 
-def transcrever_mensagem(msg: dict, cfg: dict) -> dict:
-    """Áudio do webhook (base64) ou baixado da Evolution → transcrever_audio()."""
+def transcrever_mensagem(msg: dict, cfg: dict, motor: str = "ollama", dica: str = "") -> dict:
+    """Áudio do webhook (base64) ou baixado da Evolution → transcrever_audio(). `motor`/`dica`: ver lib_audio
+    (o canal direto de Pedro usa motor="whisper")."""
     audio = msg.get("audio") or {}
     b64 = audio.get("base64")
     mimetype = audio.get("mimetype") or "audio/ogg"
     if not b64:
-        r = baixar_midia(msg.get("key") or {}, audio.get("mensagem"))
+        r = baixar_midia(msg.get("key") or {}, audio.get("mensagem"), inst=msg.get("instancia"))
         if r.get("ok"):
             b64, mimetype = r.get("base64"), r.get("mimetype") or mimetype
         else:
@@ -306,7 +404,9 @@ def transcrever_mensagem(msg: dict, cfg: dict) -> dict:
     except Exception as e:
         return {"texto": "", "metodo": "", "erro": f"base64 inválido: {e}"}
     log(f"[whatsapp] transcrevendo áudio de {_contato_legivel(msg)} ({audio.get('segundos') or '?'}s, {len(dados)} bytes)")
-    r = transcrever_audio(dados, mimetype, max_segundos=int(cfg.get("audio_max_segundos", 600)))
+    r = transcrever_audio(dados, mimetype, max_segundos=int(cfg.get("audio_max_segundos", 600)),
+                          **core.ctx_do_chat(os.getenv("MODEL_TRANSCRIBE", "").strip()),
+                          **({"motor": motor, "dica": dica} if motor != "ollama" else {}))
     if r.get("texto"):
         log(f"[whatsapp] transcrição ({r['metodo']}): {r['texto'][:100]!r}")
     return r
@@ -401,7 +501,9 @@ def classificar_whatsapp(msg: dict, cfg: dict, texto: Optional[str] = None) -> d
         "perfil_descricao": perfil.get("descricao", ""),
     })
     data = ollama_generate_json(prompt, model=core._modelo_classificacao(), timeout=120,
-                                schema=SCHEMA_CLASSIFICACAO_WA, options={**core.OPTS_JSON, "num_predict": 400})
+                                schema=SCHEMA_CLASSIFICACAO_WA,
+                                options={**core.OPTS_JSON, "num_predict": 400,
+                                         **core.ctx_do_chat(core._modelo_classificacao())})
     if not isinstance(data, dict):
         # classificador mudo: trata como profissional que requer resposta — perder mensagem é pior
         return {"categoria": "profissional", "confianca": 0.0, "requer_resposta": True, "urgencia": "media",
@@ -534,7 +636,8 @@ def gerar_rascunho(contato: str, conteudo: str, tipo_msg: str, cfg: dict) -> dic
         "mensagem":         conteudo[:2000],
     })
     data = ollama_generate_json(prompt, timeout=120, schema=SCHEMA_RASCUNHO_WA,
-                                options={**core.OPTS_JSON, "temperature": 0.3, "num_predict": 300})
+                                options={**core.OPTS_JSON, "temperature": 0.3, "num_predict": 300,
+                                         **core.ctx_do_chat()})
     if not isinstance(data, dict):
         return {"rascunho": "", "compromisso": None}
     comp = data.get("compromisso") if isinstance(data.get("compromisso"), dict) else {}
@@ -567,7 +670,7 @@ def criar_pendencia_whatsapp(msg: dict, cat: dict, cfg: dict, nome: str, transcr
         data["pendencias"].append(entry)
         core._save_pend(data)
     log(f"[whatsapp] Pendência {pid} criada ({cat.get('categoria')}, {cat.get('urgencia')}) — "
-        f"md{' + mp3' if entry['arquivos']['mp3'] else ''}")
+        f"md{' + roteiro de voz' if entry['fala'] else ''}")
     return entry
 
 
@@ -596,11 +699,11 @@ def _montar_pendencia_whatsapp(pid: str, msg: dict, cat: dict, cfg: dict, nome: 
             msg.get("remote_jid"), n=5, excluir=[x.get("message_id") for x in mensagens]) or "nenhuma",
     })
     log(f"[whatsapp] Escrevendo pergunta para '{titulo[:60]}'...")
-    texto = ollama_generate(prompt, timeout=180) or _texto_fallback_wa(msg, cat, conteudo)
+    texto = ollama_generate(prompt, timeout=180, options=core.ctx_do_chat()) or _texto_fallback_wa(msg, cat, conteudo)
     sugestao = gerar_rascunho(contato, conteudo, desc, cfg)
 
     pd = core.pend_dir()
-    md_path, mp3_path = pd / f"{pid}.md", pd / f"{pid}.mp3"
+    md_path = pd / f"{pid}.md"
 
     def _fm(v):
         return json.dumps(v, ensure_ascii=False) if isinstance(v, str) else ("null" if v is None else str(v).lower() if isinstance(v, bool) else v)
@@ -657,10 +760,10 @@ def _montar_pendencia_whatsapp(pid: str, msg: dict, cat: dict, cfg: dict, nome: 
     md_path.write_text(md, encoding="utf-8")
 
     roteiro = ollama_generate(render_template(pcfg.get("template_audio", "audio_pergunta_whatsapp"),
-                                              {"texto": texto, "contato": contato}), timeout=120)
+                                              {"texto": texto, "contato": contato}), timeout=120,
+                              options=core.ctx_do_chat())
     if not roteiro:
         roteiro = limpar_para_fala(texto)
-    tem_audio = tts_save(roteiro, pcfg.get("tts_voice", "pt-BR-AntonioNeural"), mp3_path)
 
     entry = {
         "id":        pid,
@@ -700,7 +803,9 @@ def _montar_pendencia_whatsapp(pid: str, msg: dict, cat: dict, cfg: dict, nome: 
             "compromisso": sugestao["compromisso"],
             "agenda":      None,
         },
-        "arquivos":       {"md": f"pendencias/{md_path.name}", "mp3": f"pendencias/{mp3_path.name}" if tem_audio else None},
+        "arquivos":       {"md": f"pendencias/{md_path.name}", "mp3": None},
+        # o .mp3 nasce deste roteiro só na hora de enviar ou de ouvir (core.audio_da_pendencia)
+        "fala":           {"texto": roteiro, "voz": pcfg.get("tts_voice", "pt-BR-AntonioNeural")} if roteiro.strip() else None,
         "resposta_links": None,
         "lembrado_em":    None,
         "respondido_em":  None,
@@ -993,13 +1098,11 @@ def mensagem_para_pedro(entry: dict, agrupada: Optional[dict] = None) -> dict:
                    f"ref: {entry['id']}"]
         texto = "\n".join(linhas)
     pedro = numero_pedro()
-    mp3 = (entry.get("arquivos") or {}).get("mp3")
     return {
         "numero":       pedro or None,
         "texto":        texto,
         "pendencia_id": entry["id"],
-        "audio_url":    f"/pendencias/{entry['id']}/audio" if (mp3 and not agrupada) else None,
-        "audio_path":   str(core.vault() / mp3) if (mp3 and not agrupada) else None,
+        "audio_url":    f"/pendencias/{entry['id']}/audio" if (core.tem_audio(entry) and not agrupada) else None,
     }
 
 
@@ -1019,7 +1122,8 @@ def notificar_pedro(pid: str, agrupada: Optional[dict] = None, enviar: bool = Tr
         log("[whatsapp] WHATSAPP_NUMERO_PEDRO vazio — não sei para quem mandar o resumo")
         res["erro"] = "WHATSAPP_NUMERO_PEDRO não definido"
         return res
-    r = enviar_texto(destino, notif["texto"])   # rede fora da trava
+    inst = (entry.get("whatsapp") or {}).get("instancia")   # a sessão que recebeu a mensagem é a que avisa
+    r = enviar_texto(destino, notif["texto"], inst=inst)   # rede fora da trava
     res["envio_texto"] = r
     if r.get("ok") and r.get("message_id") and not agrupada:
         with core.trava_pendencias():
@@ -1029,8 +1133,11 @@ def notificar_pedro(pid: str, agrupada: Optional[dict] = None, enviar: bool = Tr
                 atual.setdefault("whatsapp", {})["pergunta_msg_id"] = r["message_id"]
                 atual["lembrado_em"] = core._now().isoformat(timespec="minutes")
                 core._save_pend(data)
-    if notif.get("audio_path") and Path(notif["audio_path"]).exists():
-        res["envio_audio"] = enviar_audio(destino, Path(notif["audio_path"]))
+    mp3 = core.audio_da_pendencia(entry) if notif.get("audio_url") else None   # gerado agora, do roteiro
+    if mp3:
+        res["envio_audio"] = enviar_audio(destino, mp3, inst=inst)
+        if mp3.parent == core.FALA_DIR:   # já está no WhatsApp de Pedro; para ouvir de novo, gera na hora
+            mp3.unlink(missing_ok=True)
     return res
 
 
@@ -1103,7 +1210,7 @@ def responder_texto(pid: str, texto: str, enviar: bool = True, origem: str = "",
     if enviar:
         destino = wa.get("remote_jid") if wa.get("grupo") else (wa.get("numero") or jid_para_numero(wa.get("remote_jid")))
         quoted = {"key": wa.get("key"), "message": wa.get("quoted_message") or {}} if wa.get("key") else None
-        r = enviar_texto(destino, texto, quoted=quoted)
+        r = enviar_texto(destino, texto, quoted=quoted, inst=wa.get("instancia"))
         resultado = {
             "ok": bool(r.get("ok")), "simulado": bool(r.get("simulado")), "message_id": r.get("message_id"),
             "erro": None if r.get("ok") else (r.get("erro") or str(r.get("resposta"))[:200]),
@@ -1634,9 +1741,11 @@ def limpar_audios(dias: Optional[float] = None, simular: bool = False) -> dict:
             "simulado": simular}
 
 
-def _nota_para_mim(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: bool) -> dict:
-    """Pedro escreveu para si mesmo: se for lembrete/tarefa/evento com data, vai para a agenda."""
-    if _eco_do_alfred(msg):
+def _nota_para_mim(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: bool, assistente: bool = False) -> dict:
+    """Pedro escreveu para si mesmo: se for lembrete/tarefa/evento com data, vai para a agenda.
+    `assistente` = Pedro escreveu para o número do Alfred: é ordem — sem data vira lembrete de hoje, e a
+    confirmação (ou o aviso de que não deu para entender) volta para o número de Pedro."""
+    if not assistente and _eco_do_alfred(msg):
         res["motivo"] = "eco de mensagem enviada pelo Alfred (conversa você)"
         return res
     texto = msg.get("texto") or ""
@@ -1645,6 +1754,19 @@ def _nota_para_mim(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: boo
         res["transcricao"] = {k: tr.get(k) for k in ("texto", "metodo", "duracao_s", "erro")}
         texto = tr.get("texto") or ""
     ag = _detectar_e_agendar(texto, "Pedro", msg, para_mim=True)
+    destino = msg.get("numero") if assistente else (msg.get("dono") or numero_pedro())
+    if not ag and assistente:
+        if texto.strip() and agenda._cfg()["notas_para_mim"]:
+            ag = agenda.adicionar(texto.strip()[:120], core._now(), dia_inteiro=True, tipo="lembrete",
+                                  descricao=f"Você pediu ao Alfred no WhatsApp: “{texto[:600]}”",
+                                  origem={"canal": "whatsapp-eu", "contato": "Pedro", "pendencia_id": None,
+                                          "message_id": msg.get("message_id"), "confianca": None})
+        elif not texto.strip():
+            res["motivo"] = "pedido de Pedro sem texto legível"
+            if notificar and enviar and destino:
+                res["envio_confirmacao"] = enviar_texto(destino, "✖ Não consegui entender. Pode mandar em texto?",
+                                                        inst=msg.get("instancia"))
+            return res
     if not ag:
         res["motivo"] = "nota de Pedro para si mesmo sem compromisso com data"
         return res
@@ -1652,10 +1774,9 @@ def _nota_para_mim(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: boo
     res.update(acao="agenda", motivo="lembrete anotado por Pedro")
     conf = (f"📅 Anotado na agenda: *{ag['titulo']}* — {agenda._quando_legivel(ag)}"
             + ("" if ag.get("_novo") else " (já estava)"))
-    destino = msg.get("dono") or numero_pedro()
     res["notificacao"] = {"numero": destino, "texto": conf, "pendencia_id": None, "audio_url": None}
     if notificar and enviar and destino:
-        res["envio_confirmacao"] = enviar_texto(destino, conf)
+        res["envio_confirmacao"] = enviar_texto(destino, conf, inst=msg.get("instancia"))
     return res
 
 
@@ -1676,6 +1797,426 @@ def _registrar_enviada(msg: dict, cfg: dict) -> None:
     if _conversa_comigo(msg) or (numero_pedro() and msg.get("numero") == numero_pedro()):
         return
     _registrar_historico(msg, msg.get("texto") or f"({msg.get('tipo_msg') or 'mensagem'} enviada)", cfg)
+
+
+def _resposta_de_pedro(msg: dict, cfg: dict, res: dict, ref: str, enviar: bool, notificar: bool) -> dict:
+    """Pedro respondeu citando a pergunta do Alfred (`ref` = id da pendência): envia ao contato e confirma."""
+    texto = msg.get("texto") or ""
+    if msg.get("tipo_msg") == "audio":
+        tr = transcrever_mensagem(msg, cfg)
+        res["transcricao"] = tr
+        texto = tr.get("texto") or ""
+        if not texto:
+            res.update(acao="ignorada", motivo="áudio de resposta não transcrito — responda em texto")
+            return res
+    try:
+        entry = responder_texto(ref, texto, enviar=enviar, origem="via WhatsApp")
+    except (KeyError, ValueError) as e:
+        res.update(acao="ignorada", motivo=f"resposta não aceita: {e}")
+        return res
+    res["pendencia"] = entry
+    wa = entry.get("whatsapp") or {}
+    if entry["status"] == "ignorada":
+        res.update(acao="pendencia_ignorada", motivo="Pedro pediu para ignorar")
+        conf = f"✔ Ok, não respondo a {wa.get('contato')}.\nref: {ref}"
+    elif entry["status"] == "respondida":
+        res.update(acao="resposta_registrada", envio=wa.get("envio"))
+        conf = (f"✔ Enviado a *{wa.get('contato')}*" + (" (simulado)" if (wa.get('envio') or {}).get('simulado') else "")
+                + f":\n“{texto[:300]}”\nref: {ref}")
+    else:
+        res.update(acao="ignorada", motivo=f"envio falhou: {(wa.get('envio') or {}).get('erro')}", envio=wa.get("envio"))
+        conf = f"✖ Não consegui enviar a {wa.get('contato')}: {(wa.get('envio') or {}).get('erro')}\nref: {ref}"
+    res["notificacao"] = {"numero": numero_pedro() or msg.get("dono") or None, "texto": conf,
+                          "pendencia_id": ref, "audio_url": None}
+    if notificar and res["notificacao"]["numero"] and enviar:
+        res["envio_confirmacao"] = enviar_texto(res["notificacao"]["numero"], conf, inst=msg.get("instancia"))
+    return res
+
+
+# ══════════════════════════════════════════════════════════════
+#  Sessão assistente — o número do Alfred
+# ══════════════════════════════════════════════════════════════
+#
+# Pedro escreve (ou fala) para o número do Alfred → é ordem: lembrete/tarefa/evento vai para a agenda.
+# Outra pessoa escreve → o Alfred recepciona com UMA saudação. Quando a conversa se mostra séria (quem julga
+# é o LLM, com o perfil e a memória de Pedro), ele olha a agenda, passa a previsão de retorno + o site, abre
+# a pendência e avisa Pedro. Depois disso fica em silêncio por `silencio_horas`: o que chegar só é repassado.
+# O texto que vai ao contato é montado aqui (perfis.yml → assistente:); do LLM só entra a previsão (uma
+# linha, ≤ 80 caracteres, sem link) — agenda e memória de Pedro não vazam para um desconhecido.
+
+ATENDIMENTOS_FILE = core.PROJECT_ROOT / "logs" / "whatsapp_atendimentos.json"   # {remote_jid: {contato, estagio, em, mensagens}}
+SAUDACAO_PADRAO = "Olá! Aqui é o Alfred, assistente do Pedro Netto. Como posso ajudar?"
+RETORNO_PADRAO = ("O Pedro não está disponível agora. Pela agenda dele, a previsão de retorno é {previsao}. "
+                  "Já avisei ele da sua mensagem.")
+SITE_PADRAO = "Enquanto isso, você encontra mais informações em {site}"
+ASSINATURA = "🎩 *Alfred:* "   # abre toda mensagem do Alfred a um contato: quem fala é o assistente, não Pedro
+TRAVOU = "Entendi. Vou passar a sua mensagem direto para o Pedro."   # a conversa não anda: Pedro é chamado
+FALAS_NO_PROMPT = 8           # só as últimas falas vão ao modelo; o que veio antes fica na `situacao` que ele escreve
+RESPOSTAS_MAX = 8             # respostas do Alfred por contato além da saudação (assistente.respostas_max)
+SCHEMA_ATENDIMENTO = {
+    "type": "object",
+    "properties": {
+        "seria":    {"type": "boolean"},
+        "resposta": {"type": "string"},
+        "situacao": {"type": "string"},
+        "previsao": {"type": "string"},
+        "resumo":   {"type": "string"},
+        "motivo":   {"type": "string"},
+        "urgencia": {"type": "string", "enum": list(_URGENCIAS)},
+    },
+    "required": ["seria", "resposta", "situacao", "previsao", "resumo", "motivo", "urgencia"],
+}
+
+
+def _load_atendimentos() -> dict:
+    try:
+        data = json.loads(ATENDIMENTOS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _salvar_atendimento(jid: str, dados: dict) -> None:
+    with core.trava_arquivo(ATENDIMENTOS_FILE):
+        limite = core._now() - timedelta(days=7)
+        todos = {j: a for j, a in _load_atendimentos().items() if (core._parse_dt(a.get("em")) or limite) > limite}
+        todos[jid] = dados
+        ATENDIMENTOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ATENDIMENTOS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(todos, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(ATENDIMENTOS_FILE)
+
+
+def _ocupacao(agora: datetime, dias: int = 3) -> str:
+    """Horários ocupados de Pedro nos próximos dias, SEM título nem local: o prompt lê texto de desconhecidos."""
+    fim_janela = agora + timedelta(days=dias)
+    duracao = timedelta(minutes=agenda._cfg()["duracao_min"])
+    linhas = []
+    for i in agenda.listar():
+        if i.get("status") in ("desfeito", "cancelado", "desfazer") or i.get("tipo") != "evento":
+            continue
+        try:
+            if i.get("dia_inteiro"):
+                d = datetime.fromisoformat(str(i.get("inicio"))[:10]).date()
+                if agora.date() <= d <= fim_janela.date():
+                    linhas.append((d.isoformat(), f"- {d:%d/%m} o dia todo"))
+                continue
+            ini = datetime.fromisoformat(str(i.get("inicio")))
+            fim = datetime.fromisoformat(str(i["fim"])) if i.get("fim") else ini + duracao
+        except (TypeError, ValueError):
+            continue
+        ini = ini if ini.tzinfo else ini.replace(tzinfo=agora.tzinfo)
+        fim = fim if fim.tzinfo else fim.replace(tzinfo=agora.tzinfo)
+        if fim >= agora and ini <= fim_janela:
+            linhas.append((ini.isoformat(), f"- {ini:%d/%m} das {ini:%H:%M} às {fim:%H:%M}"))
+    return "\n".join(l for _, l in sorted(linhas)) or "nenhum compromisso marcado"
+
+
+def avaliar_atendimento(contato: str, mensagens: list[dict], cfg: dict, situacao: str = "") -> Optional[dict]:
+    """A conversa é séria? Quando Pedro retorna? O que o Alfred responde sobre Pedro? →
+    {seria, resposta, situacao, previsao, resumo, motivo, urgencia}; None = LLM fora. `situacao` = o resumo curto
+    do chat que o próprio modelo escreveu na vez anterior e reescreve agora (a memória da conversa: o prompt leva
+    ela + as últimas FALAS_NO_PROMPT falas, não o histórico inteiro). O prompt NÃO leva a memória de Pedro:
+    `resposta` é texto livre que vai a um desconhecido, e só pode sair do perfil e de assistente.apresentacao."""
+    # com as falas do próprio Alfred: sem elas o modelo repetia a mesma resposta a cada mensagem (10/11)
+    conversa = "\n".join(f"{'ALFRED' if m.get('de') == 'alfred' else 'CONTATO'}: {m.get('texto') or '(mensagem sem texto)'}"
+                         for m in mensagens[-FALAS_NO_PROMPT:])[-3000:]
+    acfg = cfg.get("assistente") or {}
+    agora = core._now()
+    prompt = render_template("whatsapp_assistente", {
+        "agora":            agora.strftime("%Y-%m-%d (%A) %H:%M"),
+        "perfil_descricao": (cfg.get("_perfil") or {}).get("descricao", ""),
+        "apresentacao":     str(acfg.get("apresentacao") or "").strip() or "nada além do contexto acima",
+        "ocupacao":         _ocupacao(agora),
+        "contato":          contato,
+        "situacao":         situacao or "conversa começando agora",
+        "conversa":         conversa,
+    })
+    data = ollama_generate_json(prompt, model=str(acfg.get("modelo") or "").strip() or None, timeout=120,
+                                schema=SCHEMA_ATENDIMENTO,
+                                options={**core.OPTS_JSON, "num_predict": 400,
+                                         **core.ctx_do_chat(str(acfg.get("modelo") or "").strip())})
+    if not isinstance(data, dict):
+        return None
+    resposta = " ".join(re.sub(r"(https?://|www\.)\S+", "", str(data.get("resposta") or "")).split())[:500]
+    previsao = " ".join(str(data.get("previsao") or "").split())
+    previsao = re.sub(r"^a previsão de retorno é\s*", "", previsao, flags=re.I)[:80]   # o gemma4:e4b repete o molde
+    if not previsao or re.search(r"https?:|www\.", previsao, re.I):
+        previsao = "assim que possível"
+    return {"seria": bool(data.get("seria")), "resposta": resposta, "previsao": previsao,
+            "situacao": " ".join(re.sub(r"(https?://|www\.)\S+", "", str(data.get("situacao") or "")).split())[:400],
+            "resumo": str(data.get("resumo") or "").strip()[:300], "motivo": str(data.get("motivo") or "").strip()[:200],
+            "urgencia": data.get("urgencia") if data.get("urgencia") in _URGENCIAS else "media"}
+
+
+def _abrir_pendencia(msg: dict, cat: dict, cfg: dict, nome: str, transcricao: Optional[dict], mensagens: list[dict],
+                     res: dict, enviar: bool, notificar: bool, notificar_desktop: bool) -> dict:
+    junta = {**msg, "texto": "\n".join(m["texto"] for m in mensagens if m.get("texto"))}
+    entry = criar_pendencia_whatsapp(junta, cat, cfg, nome, transcricao, mensagens=mensagens)
+    res.update(acao="pendencia_criada", pendencia=entry, notificacao=mensagem_para_pedro(entry))
+    if notificar_desktop:
+        core.notificar_pendencia(entry)
+    if notificar and enviar:
+        res["envio"] = notificar_pedro(entry["id"], enviar=True)   # sai do número do Alfred para o de Pedro
+    return res
+
+
+@lib_porta.origem("reply to a whatsapp message from a contact")
+def _recepcionar(msg: dict, nome: str, cfg: dict, res: dict, enviar: bool, notificar: bool,
+                 notificar_desktop: bool) -> dict:
+    """Outra pessoa escreveu para o número do Alfred. Ações: saudacao | pendencia_criada | agrupada | ignorada."""
+    acfg = cfg.get("assistente") or {}
+    descarte = _descarte_sem_texto(msg, cfg)   # contatos_ignorar, reação, figurinha
+    if descarte:
+        res["motivo"] = descarte["resumo"]
+        return res
+    conteudo, transcricao = msg.get("texto") or "", None
+    if msg.get("tipo_msg") == "audio":
+        transcricao = transcrever_mensagem(msg, cfg)
+        res["transcricao"] = {k: transcricao.get(k) for k in ("texto", "metodo", "duracao_s", "segmentos", "cortado", "erro")}
+        conteudo = transcricao.get("texto") or ""
+    _registrar_historico(msg, conteudo, cfg)
+    contato, jid, agora = _contato_legivel(msg), msg.get("remote_jid"), core._now()
+    nova = {"message_id": msg.get("message_id"), "tipo": msg.get("tipo_msg"), "texto": conteudo,
+            "em": msg.get("timestamp")}
+    at = _load_atendimentos().get(jid)
+    silencio = timedelta(hours=float(acfg.get("silencio_horas", 12) or 0))
+    if at and agora - (core._parse_dt(at.get("em")) or agora) > silencio:
+        at = None   # conversa antiga: recomeça pela saudação
+
+    if at and at.get("estagio") == "informado":   # já tem a previsão: o Alfred não fala mais, só repassa
+        aberta = _pendencia_aguardando_do_jid(jid)
+        erro_tr = "" if conteudo else str((transcricao or {}).get("erro") or "")
+        entry = agrupar_mensagem(aberta["id"], msg, conteudo, erro=erro_tr) if aberta else None
+        if not entry:
+            cat = _heuristica("profissional", conteudo or _descricao_tipo(msg, transcricao),
+                              "contato já atendido pelo Alfred", requer=True, urg="media")
+            return _abrir_pendencia(msg, cat, cfg, nome, transcricao, [nova], res, enviar, notificar, notificar_desktop)
+        agr = {"tipo_msg": msg.get("tipo_msg"),
+               "texto": conteudo or (f"(áudio não transcrito: {erro_tr})" if erro_tr else "")}
+        res.update(acao="agrupada", motivo="contato já atendido pelo Alfred — repassado a Pedro", pendencia=entry,
+                   notificacao=mensagem_para_pedro(entry, agrupada=agr))
+        if notificar and enviar:
+            res["envio"] = notificar_pedro(entry["id"], agrupada=agr, enviar=True)
+        return res
+
+    mensagens = ((at or {}).get("mensagens") or []) + [nova]
+    aval = avaliar_atendimento(contato, mensagens, cfg, situacao=(at or {}).get("situacao") or "")
+    res["classificacao"] = aval
+    respostas = int((at or {}).get("respostas") or 0)
+    if at and aval and not aval["seria"]:
+        # enrosco: o Alfred ia repetir o que já disse, ou já falou o que podia e a pessoa continua → Pedro decide
+        ditas = [m.get("texto") or "" for m in mensagens if m.get("de") == "alfred"]
+        repete = aval["resposta"] and any(
+            difflib.SequenceMatcher(None, aval["resposta"].lower(), d.lower()).ratio() > 0.7 for d in ditas)
+        if repete or respostas >= int(acfg.get("respostas_max", RESPOSTAS_MAX)):
+            aval = {**aval, "seria": True, "resposta": TRAVOU, "urgencia": "media",
+                    "resumo": f"{aval['resumo']} — a conversa com o Alfred travou e a pessoa insiste",
+                    "motivo": "o Alfred ia se repetir" if repete else "o Alfred já respondeu o que podia"}
+            res["classificacao"] = aval
+    seria = aval is None or aval["seria"]   # LLM fora do ar: Pedro é avisado, o contato não recebe previsão
+    partes = [] if at else [str(acfg.get("saudacao") or SAUDACAO_PADRAO)]
+    if at and aval and aval["resposta"]:
+        partes.append(aval["resposta"])   # o Alfred responde como assistente: apresenta Pedro, não bate papo
+        respostas += 1
+    if aval and aval["seria"]:
+        partes.append(str(acfg.get("retorno") or RETORNO_PADRAO).replace("{previsao}", aval["previsao"]))
+        if acfg.get("site"):
+            partes.append(SITE_PADRAO.replace("{site}", str(acfg["site"]).strip()))
+    texto = ASSINATURA + "\n\n".join(partes) if partes else ""
+    do_contato = mensagens   # o que vai para a pendência de Pedro: só o que o contato escreveu
+    if partes:
+        mensagens = mensagens + [{"de": "alfred", "texto": "\n\n".join(partes), "em": agora.isoformat(timespec="minutes")}]
+    res["resposta_ao_contato"] = texto or None
+    if texto and enviar:
+        res["envio_contato"] = enviar_texto(msg.get("numero"), texto, inst=msg.get("instancia"))
+        log(f"[whatsapp] assistente → {contato[:24]}: {texto[:160]!r}")
+    _salvar_atendimento(jid, {"contato": contato, "estagio": "informado" if seria else "saudado",
+                              "em": agora.isoformat(timespec="minutes") if (texto or not at) else at["em"],
+                              "respostas": respostas, "mensagens": mensagens[-20:],
+                              "situacao": (aval or {}).get("situacao") or (at or {}).get("situacao") or ""})
+    log(f"[whatsapp] assistente: {contato[:24]} → {'séria' if seria else 'não séria'}"
+        + (f" ({aval['motivo'][:80]})" if aval else " (modelo fora do ar)"))
+    if not seria:
+        res.update(acao="saudacao" if not at else "apresentacao" if texto else "ignorada",
+                   motivo="primeira mensagem: só a saudação" if not at else
+                          "o Alfred apresentou Pedro" if texto else f"conversa ainda não é séria: {aval['motivo']}")
+        return res
+    if aval:
+        resumo = f"{aval['resumo']} — o Alfred passou a previsão de retorno: {aval['previsao']}."
+    else:
+        resumo = (conteudo[:200] or _descricao_tipo(msg, transcricao)) + " — o Alfred não avaliou (modelo fora do ar) e não passou previsão."
+    cat = _heuristica("profissional", resumo, (aval or {}).get("motivo") or "sem avaliação do modelo",
+                      requer=True, urg=(aval or {}).get("urgencia") or "media")
+    return _abrir_pendencia(msg, cat, cfg, nome, transcricao, [m for m in do_contato if m.get("de") != "alfred"],
+                            res, enviar, notificar, notificar_desktop)
+
+
+def recados() -> list[dict]:
+    """Recados deixados no número do Alfred que ainda esperam Pedro: as pendências aguardando da sessão assistente,
+    da mais nova para a mais antiga. → [{id, titulo, contato, texto, quando}] (Início do Painel e post-its do Pestinha)."""
+    insts = {s["instancia"] for s in sessoes() if s["papel"] == "assistente"}
+    saida = []
+    for p in core.listar_pendencias("aguardando"):
+        wa = p.get("whatsapp") or {}
+        if p.get("tipo") == "whatsapp" and wa.get("instancia") in insts:
+            saida.append({"id": p["id"], "titulo": p.get("titulo") or "", "contato": wa.get("contato") or "",
+                          "texto": (p.get("evento") or {}).get("resumo") or wa.get("texto") or "",
+                          "quando": p.get("criado_em") or ""})
+    return sorted(saida, key=lambda r: r["quando"], reverse=True)
+
+
+def _atender(msg: dict, nome: str, cfg: dict, res: dict, enviar: bool, notificar: bool, notificar_desktop: bool) -> dict:
+    """Mensagem que chegou na sessão assistente (o número do Alfred)."""
+    if msg.get("from_me"):
+        res["motivo"] = "mensagem enviada pelo número do Alfred"
+        return res
+    if msg.get("grupo"):
+        res["motivo"] = "a sessão assistente não atende grupos"
+        return res
+    mid = msg.get("message_id") or ""
+    seen = core.load_seen(SEEN_FILE)
+    if mid and mid in seen:
+        res.update(acao="duplicada", motivo="mensagem já processada")
+        return res
+    if mid:
+        seen[mid] = datetime.now().isoformat(timespec="minutes")
+        core.save_seen(seen, SEEN_FILE)
+    if numero_pedro() and msg.get("numero") == numero_pedro():
+        lib_atividade.notado("whatsapp")
+        ref = _ref_citada(msg)
+        if ref:
+            return _resposta_de_pedro(msg, cfg, res, ref, enviar, notificar)
+        res.update(acao="pedido", motivo="pedido de Pedro ao Alfred")
+        if not PEDIDO_EM_THREAD:
+            return _pedido_de_pedro(msg, cfg, res, enviar, notificar)
+        # fora da trava do webhook: o turno leva de segundos a minutos e o "sim" da aprovação chega por outro webhook
+        threading.Thread(target=_pedido_de_pedro, args=(msg, cfg, dict(res), enviar, notificar),
+                         name="whatsapp-pedido", daemon=True).start()
+        return res
+    return _recepcionar(msg, nome, cfg, res, enviar, notificar, notificar_desktop)
+
+
+# ── Pedro → número do Alfred: canal direto do motor da conversa (conversa.py) ──
+PEDIDO_EM_THREAD = True     # os testes desligam: o pedido roda dentro da chamada
+PEDIDO_ESPERA_S = 900       # teto de um pedido (inclui os 5 min de uma aprovação)
+CONVERSA_OCIOSA_H = 6       # parado há mais que isso, o próximo pedido abre outra conversa
+TERMOS_VOZ = "Alfred, Fatec, Thunderbird, Obsidian."   # o mesmo padrão do microfone do Painel (VOZ_TERMOS no .env)
+# ferramentas perigosas que rodam sem perguntar neste canal (perfis.yml → assistente.sem_aprovacao troca)
+SEM_APROVACAO_PADRAO = ("criar_compromisso", "completar_tarefa", "salvar_nota")
+_SIM = {"sim", "s", "pode", "ok", "executar", "execute", "manda", "confirmo"}
+_NAO = {"não", "nao", "n", "cancela", "cancelar", "negativo"}
+# o modelo às vezes responde "tarefa adicionada" sem ter chamado ferramenta nenhuma (visto em 10/11 com o gemma4:12b)
+_DIZ_QUE_FEZ = re.compile(r"\b(adicionad|anotad|agendad|criad|registrad|marcad|salv[oa]|lembrarei|lembrete)", re.I)
+COBRANCA = ("Nenhuma ferramenta foi chamada, então nada foi gravado. Chame agora a ferramenta certa para o meu "
+            "pedido anterior e só depois responda.")
+_APROVACAO_WA: dict = {}    # {"id": aprovação do conversa.py esperando o "sim"/"não" de Pedro}
+
+
+def _conversa_do_whatsapp() -> str:
+    """Id da conversa (conversa.py) em que caem os pedidos de Pedro pelo WhatsApp; nova depois de CONVERSA_OCIOSA_H."""
+    import conversa
+    with core.trava_arquivo(SESSOES_FILE):
+        est = _load_sessoes()
+        c = conversa.obter_conversa(est["conversa"].get("id") or "")
+        try:
+            velha = (datetime.now().astimezone() - datetime.fromisoformat(c["atualizada_em"])
+                     > timedelta(hours=CONVERSA_OCIOSA_H))
+        except Exception:
+            velha = True
+        if velha:
+            c = conversa.nova_conversa("WhatsApp")
+            est["conversa"] = {"id": c["id"]}
+            _save_sessoes(est)
+    return c["id"]
+
+
+def _acompanhar(turno, dizer, livres) -> tuple[Optional[str], bool]:
+    """Espera o turno acabar. Ferramenta perigosa: roda direto se está em `livres`; senão pergunta a Pedro e
+    espera o "sim"/"não" (que chega por outro webhook). → (resposta | None se o turno falhou, usou ferramenta?)."""
+    import conversa
+    limite, usou = time.monotonic() + PEDIDO_ESPERA_S, False
+    try:
+        while True:
+            try:
+                ev = turno.fila.get(timeout=max(1.0, limite - time.monotonic()))
+            except queue.Empty:
+                conversa.parar(turno.id)
+                return "✖ O pedido demorou demais e foi interrompido.", usou
+            if ev["tipo"] == "aprovar":
+                if ev["nome"] in livres:
+                    conversa.aprovar(ev["id"])
+                else:
+                    _APROVACAO_WA["id"] = ev["id"]
+                    args = json.dumps(ev.get("argumentos") or {}, ensure_ascii=False)[:300]
+                    dizer(f"⚠ Para executar *{ev['nome']}* {args}, responda *sim* ou *não* (5 min).")
+            elif ev["tipo"] == "ferramenta" and ev.get("estado") == "ok":
+                usou = True
+            elif ev["tipo"] == "fim":
+                return ev.get("texto") or ("Interrompido." if ev.get("parado") else "Feito."), usou
+            elif ev["tipo"] == "erro":
+                log(f"[whatsapp] pedido de Pedro: o turno falhou ({ev.get('erro')})")
+                return None, usou
+    finally:
+        _APROVACAO_WA.clear()
+
+
+@lib_porta.origem("whatsapp message the owner sent to Alfred", dono=True)
+def _pedido_de_pedro(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: bool) -> dict:
+    """Pedro escreveu ou falou com o número do Alfred: transcreve (Whisper) e entrega ao motor da conversa, que usa
+    as ferramentas e responde no próprio WhatsApp. Motor fora do ar e nada executado → cai na agenda direta."""
+    destino, inst = msg.get("numero"), msg.get("instancia")
+
+    def dizer(texto: str):
+        if notificar and enviar and destino:
+            return enviar_texto(destino, texto[:3500], inst=inst)
+        return None
+
+    texto = msg.get("texto") or ""
+    if msg.get("tipo_msg") == "audio":
+        tr = transcrever_mensagem(msg, cfg, motor="whisper", dica=os.getenv("VOZ_TERMOS", "").strip() or TERMOS_VOZ)
+        res["transcricao"] = {k: tr.get(k) for k in ("texto", "metodo", "duracao_s", "erro")}
+        texto = tr.get("texto") or ""
+    texto = texto.strip()
+    if not texto:
+        res["motivo"] = "pedido de Pedro sem texto legível"
+        res["envio_confirmacao"] = dizer("✖ Não consegui entender. Pode mandar em texto?")
+        return res
+    import conversa
+    pendente = _APROVACAO_WA.get("id")
+    palavra = texto.lower().strip(" .!?")
+    if pendente and palavra in _SIM | _NAO:
+        _APROVACAO_WA.clear()
+        if not (conversa.aprovar if palavra in _SIM else conversa.negar)(pendente):
+            dizer("Esse pedido de confirmação já expirou.")
+        res.update(acao="aprovacao", motivo="Pedro respondeu a um pedido de confirmação")
+        return res
+    log(f"[whatsapp] pedido de Pedro: {texto[:100]!r}")
+    try:
+        turno = conversa.enviar(_conversa_do_whatsapp(), texto)   # sem `contexto`: com ele o gemma4 parou de usar as ferramentas (10/11)
+    except RuntimeError:
+        res["motivo"] = "pedido anterior ainda em andamento"
+        res["envio_confirmacao"] = dizer("Ainda estou no pedido anterior. Mande de novo em instantes.")
+        return res
+    livres = (cfg.get("assistente") or {}).get("sem_aprovacao")
+    livres_ = SEM_APROVACAO_PADRAO if livres is None else livres
+    resposta, usou = _acompanhar(turno, dizer, livres_)
+    if resposta and not usou and _DIZ_QUE_FEZ.search(resposta):   # cobra uma vez antes de desistir do motor
+        log(f"[whatsapp] pedido de Pedro: o modelo disse que fez sem usar ferramenta ({resposta[:80]!r}) → cobrando")
+        try:
+            resposta, usou = _acompanhar(conversa.enviar(turno.conversa_id, COBRANCA), dizer, livres_)
+        except Exception as e:
+            log(f"[whatsapp] pedido de Pedro: a cobrança falhou ({e})")
+        if not usou:
+            log("[whatsapp] pedido de Pedro: de novo sem ferramenta → agenda direta")
+            resposta = None
+    if resposta is None and not usou:   # motor fora do ar ou resposta sem ação: ao menos o lembrete não se perde
+        return _nota_para_mim({**msg, "texto": texto, "tipo_msg": "texto"}, cfg, res, enviar, notificar, assistente=True)
+    resposta = resposta or "✖ Deu erro depois de eu começar a executar. Confira no Painel antes de repetir."
+    res["resposta"] = resposta
+    res["notificacao"] = {"numero": destino, "texto": resposta, "pendencia_id": None, "audio_url": None}
+    res["envio_confirmacao"] = dizer(resposta)
+    return res
 
 
 @_serializado
@@ -1699,6 +2240,9 @@ def processar_mensagem_whatsapp(
     vencido — com as mesmas opções enviar/notificar/notificar_desktop. Um fromMe de Pedro na conversa antes
     do prazo tira o contato da fila ("fila_cancelada": [message_ids]) e grava um item respondida_manual
     ("respondidas_na_espera": [ids]; no caso só-fila, "pendencia" = esse item).
+    A sessão é a da instância que mandou o webhook (sessoes()); na de papel "assistente" quem trata é
+    _atender(): acao = saudacao | pendencia_criada | agrupada | agenda | resposta_registrada | ignorada, com
+    "resposta_ao_contato" / "envio_contato" quando o Alfred falou com a pessoa.
     """
     res: dict = {"acao": "ignorada", "motivo": "", "mensagem": None, "classificacao": None,
                  "transcricao": None, "pendencia": None, "notificacao": None, "envio": None}
@@ -1710,8 +2254,17 @@ def processar_mensagem_whatsapp(
         res["motivo"] = msg["ignorar"]
         return res
     res["mensagem"] = _resumo_msg(msg)
-    nome, cfg = carregar_cfg(cfg_name)
+    sessao = None if cfg_name else _sessao_da_instancia(msg.get("instancia"))   # instância desconhecida → conta padrão
+    nome, cfg = carregar_cfg(cfg_name or (sessao or {}).get("nome"))
     mid = msg.get("message_id") or ""
+    if sessao:
+        _anotar_numero(sessao, msg.get("dono"))
+        if sessao["papel"] == "assistente":
+            return _atender(msg, nome, cfg, res, enviar, notificar, notificar_desktop)
+        if not msg.get("grupo") and msg.get("numero") in [s["numero"] for s in sessoes()
+                                                          if s["numero"] and s["nome"] != sessao["nome"]]:
+            res["motivo"] = "conversa com outra sessão do Alfred (tratada por ela)"
+            return res
 
     # ── eco de algo que o próprio Alfred enviou ─────────────────
     if msg.get("from_me") and mid:
@@ -1759,38 +2312,10 @@ def processar_mensagem_whatsapp(
 
     # ── mensagem de Pedro ───────────────────────────────────────
     if _eh_pedro(msg):
+        lib_atividade.notado("whatsapp")
         ref = _ref_citada(msg)
         if ref:
-            texto = msg.get("texto") or ""
-            if msg.get("tipo_msg") == "audio":
-                tr = transcrever_mensagem(msg, cfg)
-                res["transcricao"] = tr
-                texto = tr.get("texto") or ""
-                if not texto:
-                    res.update(acao="ignorada", motivo="áudio de resposta não transcrito — responda em texto")
-                    return res
-            try:
-                entry = responder_texto(ref, texto, enviar=enviar, origem="via WhatsApp")
-            except (KeyError, ValueError) as e:
-                res.update(acao="ignorada", motivo=f"resposta não aceita: {e}")
-                return res
-            res["pendencia"] = entry
-            wa = entry.get("whatsapp") or {}
-            if entry["status"] == "ignorada":
-                res.update(acao="pendencia_ignorada", motivo="Pedro pediu para ignorar")
-                conf = f"✔ Ok, não respondo a {wa.get('contato')}.\nref: {ref}"
-            elif entry["status"] == "respondida":
-                res.update(acao="resposta_registrada", envio=wa.get("envio"))
-                conf = (f"✔ Enviado a *{wa.get('contato')}*" + (" (simulado)" if (wa.get('envio') or {}).get('simulado') else "")
-                        + f":\n“{texto[:300]}”\nref: {ref}")
-            else:
-                res.update(acao="ignorada", motivo=f"envio falhou: {(wa.get('envio') or {}).get('erro')}", envio=wa.get("envio"))
-                conf = f"✖ Não consegui enviar a {wa.get('contato')}: {(wa.get('envio') or {}).get('erro')}\nref: {ref}"
-            res["notificacao"] = {"numero": numero_pedro() or msg.get("dono") or None, "texto": conf,
-                                  "pendencia_id": ref, "audio_url": None}
-            if notificar and res["notificacao"]["numero"] and enviar:
-                res["envio_confirmacao"] = enviar_texto(res["notificacao"]["numero"], conf)
-            return res
+            return _resposta_de_pedro(msg, cfg, res, ref, enviar, notificar)
         if _conversa_comigo(msg):
             return _nota_para_mim(msg, cfg, res, enviar=enviar, notificar=notificar)
         if msg.get("from_me") and not msg.get("grupo"):
@@ -1899,13 +2424,23 @@ def status(timeout: Optional[float] = None) -> dict:
         est = estado_instancia() if timeout is None else estado_instancia(timeout=timeout)
         # 404 = a Evolution respondeu, mas a instância não existe (falta ./run.sh whatsapp qrcode);
         # "erro" (sem status) = rede/timeout; outros códigos ficam "HTTP nnn" (401/403: chave recusada)
-        cfg["estado_instancia"] = est.get("estado") or ("outro serviço" if _nao_e_evolution(est) else
-                                                        "inexistente" if est.get("status") == 404 else
-                                                        est.get("erro") or f"HTTP {est.get('status')}")
+        cfg["estado_instancia"] = _estado_legivel(est)
+        # demais sessões (cada uma é uma instância): mesma leitura de estado
+        cfg["sessoes"] = [{**s, "estado": cfg["estado_instancia"] if s["instancia"] == cfg["instancia"] else
+                           _estado_legivel(estado_instancia(inst=s["instancia"], **({} if timeout is None else {"timeout": timeout})))}
+                          for s in sessoes()]
+    else:
+        cfg["sessoes"] = [{**s, "estado": None} for s in sessoes()]
     aguard = [p for p in core.listar_pendencias("aguardando") if p.get("tipo") == "whatsapp"]
     cfg["pendencias_whatsapp_aguardando"] = len(aguard)
     cfg["fila_espera"] = listar_fila()
     return cfg
+
+
+def _estado_legivel(est: dict) -> str:
+    return est.get("estado") or ("outro serviço" if _nao_e_evolution(est) else
+                                 "inexistente" if est.get("status") == 404 else
+                                 est.get("erro") or f"HTTP {est.get('status')}")
 
 
 def _nao_e_evolution(r: dict) -> bool:
@@ -1913,15 +2448,31 @@ def _nao_e_evolution(r: dict) -> bool:
     return r.get("status") == 404 and "raw" in (r.get("resposta") or {})
 
 
-def obter_qrcode() -> dict:
+def _garantir_webhook(inst: Optional[str]) -> None:
+    """Instância de outra sessão sem webhook: copia o da instância padrão (sem ele nenhuma mensagem chega ao Alfred)."""
+    from _shared import lib_whatsapp as lw
+    if not inst or inst == lw.instancia() or lw.obter_webhook(inst).get("url"):
+        return
+    padrao = lw.obter_webhook()
+    if not padrao.get("url"):
+        log(f"[whatsapp] instância {inst} sem webhook e a padrão também: rode ./run.sh whatsapp webhook URL --sessao …")
+        return
+    r = lw.configurar_webhook(padrao["url"], headers=padrao.get("headers") or {},
+                              base64_midia=bool(padrao.get("webhookBase64", True)), inst=inst)
+    log(f"[whatsapp] webhook da instância {inst} → {padrao['url']} ({'ok' if r.get('ok') else 'falhou'})")
+
+
+def obter_qrcode(sessao: Optional[str] = None) -> dict:
     """
-    QR code para parear a instância (CLI `whatsapp qrcode`, painel e botão do vigia).
+    QR code para parear a instância (CLI `whatsapp qrcode`, painel e botão do vigia). `sessao` = conta de
+    perfis.yml (None = a padrão); KeyError se não existe.
     → {"ok", "erro"?, "criando"?, "conectado"?, "base64"?, "code"?, "pairingCode"?}; "erro" já vem em texto para Pedro.
     """
     from _shared import lib_whatsapp as lw
+    inst = obter_sessao(sessao)["instancia"] if sessao else None
     if not lw.configurado():
         return {"ok": False, "erro": "EVOLUTION_URL / EVOLUTION_API_KEY não configurados no .env"}
-    est = lw.estado_instancia()
+    est = lw.estado_instancia(inst=inst)
     if not est.get("ok") and est.get("status") in (401, 403):
         return {"ok": False, "erro": f"A Evolution API recusou a chave (HTTP {est['status']}) — "
                                      f"confira EVOLUTION_API_KEY no .env."}
@@ -1934,12 +2485,13 @@ def obter_qrcode() -> dict:
                                      f"confira se o container está no ar."}
     criando = not est.get("ok")
     if criando:
-        r = lw.criar_instancia()
+        r = lw.criar_instancia(inst=inst)
         if not r.get("ok"):
             return {"ok": False, "criando": True, "erro": f"Falha ao criar instância: {r.get('erro') or r.get('resposta')}"}
-    elif est.get("estado") == "open":
+    _garantir_webhook(inst)
+    if not criando and est.get("estado") == "open":
         return {"ok": True, "conectado": True}
-    r = lw.qrcode_instancia()
+    r = lw.qrcode_instancia(inst=inst)
     if not r.get("ok"):
         return {"ok": False, "criando": criando, "erro": f"Falha ao obter QR code: {r.get('erro') or r.get('resposta')}"}
     return {"ok": True, "criando": criando, "base64": r.get("base64") or "", "code": r.get("code") or "",

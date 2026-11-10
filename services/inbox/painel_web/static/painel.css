@@ -693,6 +693,29 @@ textarea.entrada { resize: vertical; }
 .sistema-item__nome { font-weight: 600; }
 .sistema-item__detalhe { color: var(--texto-suave); overflow-wrap: anywhere; }
 
+/* ── Ferramentas ────────────────────────────────────────────────────────── */
+.indice__lista { list-style: none; margin: 0 0 var(--e-5); padding: 0; display: flex; flex-wrap: wrap; gap: var(--e-2) var(--e-4); font-size: var(--t-sm); }
+.funcao { display: flex; flex-direction: column; gap: var(--e-2); }
+.funcao__titulo { font-size: var(--t-md); }
+.funcao__titulo a { color: var(--texto); text-decoration: none; }
+.funcao__titulo a:hover { text-decoration: underline; }
+.funcao__resumo { margin: 0; color: var(--texto-suave); font-size: var(--t-sm); }
+.funcao__acoes { margin-top: auto; padding-top: var(--e-2); display: flex; flex-wrap: wrap; gap: var(--e-2); }
+.ferramenta__descricao { margin-top: var(--e-2); }
+.ferramenta__codigo { margin-top: var(--e-3); overflow-wrap: anywhere; }
+.recolhivel__corpo .tabela { margin-top: var(--e-3); }
+.tabela--parametros th:first-child, .tabela--parametros td:first-child { white-space: nowrap; }
+.tabela--parametros td:nth-child(2) { min-width: 8rem; }
+.doc h2 { margin-top: var(--e-5); }
+.doc h2:first-child { margin-top: 0; }
+.doc pre {
+  margin: var(--e-3) 0 0; padding: var(--e-3) var(--e-4);
+  background: var(--superficie-2); border: 1px solid var(--borda); border-radius: var(--raio);
+  overflow-x: auto; font-size: var(--t-sm);
+}
+.lista-caminhos { margin: 0; padding-left: var(--e-5); font-size: var(--t-sm); }
+.lista-caminhos li { overflow-wrap: anywhere; }
+
 /* ── Login ──────────────────────────────────────────────────────────────── */
 .login {
   min-height: 100vh;

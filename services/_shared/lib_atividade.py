@@ -6,9 +6,11 @@ arquivos locais para quem quiser mostrar (o Pestinha desenha isso na tela — se
 logs/atividade/
   agora/<pid>-<id>.json    uma atividade em andamento; só o processo dono grava e apaga
   eventos/<ms>-<id>.json   aviso pontual (pendência nova)
-  pedidos/<ms>-<id>.json   pedido de fora (pet, CLI): enfileirar | frente | cancelar
+  pedidos/<ms>-<id>.json   pedido de fora (pet, CLI): enfileirar | frente | cancelar | recado_feito
   fila.json                fila pedida pelo usuário
-  estado.json              retrato para quem lê: agora, fila, agendadas, catálogo, eventos
+  notado.json              última vez que Pedro usou o Alfred (painel, conversa, WhatsApp, terminal)
+  estado.json              retrato para quem lê: agora, fila, agendadas, catálogo, eventos, recados,
+                           negligência, notado
 
 Só o Despachante (uma thread da API) grava fila.json e estado.json; os outros processos só deixam arquivos
 novos nas pastas. Por isso não há trava. A gravação é temporário + os.replace, sem fsync: o estado é
@@ -37,6 +39,7 @@ BATIMENTO_S = 5          # estado.json é regravado ao menos a cada tanto: quem 
 SISTEMA_A_CADA_S = 30    # units instaladas e próximos horários dos timers
 EVENTO_VALE_S = 120      # um aviso fica no estado por este tempo e depois é apagado
 MAX_FILA = 20
+NOTADO_A_CADA_S = 5      # usos seguidos dentro deste tempo contam como um só
 
 # unit do systemd → (tipo, rótulo): as rotinas que podem entrar na fila e o nome que aparece para cada uma.
 CATALOGO = {
@@ -53,6 +56,19 @@ CATALOGO = {
 
 def pasta() -> Path:
     return Path(os.getenv("ALFRED_ATIVIDADE_DIR") or PROJECT_ROOT / "logs" / "atividade")
+
+
+RECADOS_A_CADA_S = 5     # de quanto em quanto o Despachante relê os recados
+AO_RECADO_FEITO = None   # função (id) que encerra o recado na origem; quem sobe a API registra (main.py)
+FONTE_RECADOS = None     # função sem argumentos → [{id, texto, link, detalhe}]; quem sobe a API registra (main.py)
+NEGLIGENCIA_A_CADA_S = 30   # de quanto em quanto o Despachante relê o que Pedro deixou vencer
+FONTE_NEGLIGENCIA = None    # função sem argumentos → {nivel 0..1, motivo, texto, link} ou None; idem
+
+
+def links() -> dict:
+    """Endereços locais que quem acompanha pode abrir no navegador: o Painel, a conversa e a Escrita."""
+    painel = f"http://127.0.0.1:{os.getenv('PORT_INBOX') or '7073'}/painel"
+    return {"painel": painel, "conversa": f"{painel}/conversa", "escrita": f"{painel}/escrita"}
 
 
 def _gravar(caminho: Path, dados: dict) -> None:
@@ -117,6 +133,19 @@ def passo(texto: str, feito: Optional[int] = None, total: Optional[int] = None) 
 def evento(tipo: str, texto: str) -> None:
     """Aviso pontual para quem acompanha (ex.: "pendencia", título)."""
     _tentar(_novo, "eventos", {"tipo": tipo, "texto": str(texto)[:200], "quando": time.time()})
+
+
+_notado_em = 0.0
+
+
+def notado(origem: str) -> None:
+    """Pedro acabou de usar o Alfred (`origem`: painel, whatsapp, terminal...). O pet lê isso como atenção."""
+    global _notado_em
+    agora = time.time()
+    if agora - _notado_em < NOTADO_A_CADA_S:
+        return
+    _notado_em = agora
+    _tentar(_gravar, pasta() / "notado.json", {"quando": agora, "origem": str(origem)[:40]})
 
 
 def pedir(acao: str, **campos) -> str:
@@ -220,6 +249,10 @@ class Despachante:
             "agendadas": self.agendadas,
             "catalogo": [{"tipo": tipo, "rotulo": rotulo} for tipo, (_unit, rotulo) in self.catalogo.items()],
             "eventos": self._eventos(agora),
+            "recados": self._recados(agora),
+            "negligencia": self._negligencia(agora),
+            "notado": (_ler(self.base / "notado.json") or {}).get("quando"),
+            "links": links(),
         }
         if estado != self._publicado or agora - self._publicado_em >= BATIMENTO_S:
             _gravar(self.base / "estado.json", {"versao": VERSAO, "atualizado": agora, **estado})
@@ -241,6 +274,7 @@ class Despachante:
         for f in sorted((self.base / "pedidos").glob("*.json")):
             p = _ler(f) or {}
             f.unlink(missing_ok=True)
+            notado("fila")                # pedido do pet ou do terminal: é Pedro mexendo na fila
             acao, tipo, alvo = p.get("acao"), p.get("tipo"), p.get("id")
             if acao == "enfileirar" and tipo in self.catalogo and len(self.fila) < MAX_FILA:
                 item = {"id": f.stem, "tipo": tipo, "rotulo": self.catalogo[tipo][1]}
@@ -250,6 +284,12 @@ class Despachante:
                 self.fila = [i for i in self.fila if i["id"] != alvo]
                 if acao == "frente":
                     self.fila = achados + self.fila
+            elif acao == "recado_feito" and AO_RECADO_FEITO and alvo in {r["id"] for r in getattr(self, "_recados_lidos", [])}:
+                try:                      # só um recado que está publicado: o pet não fecha outra coisa
+                    AO_RECADO_FEITO(alvo)
+                except Exception as e:
+                    log(f"[atividade] recado {alvo} não encerrado ({e})")
+                self._recados_em = -1e9   # relê os recados já na próxima publicação
 
     def _agora(self, rodando: set) -> list:
         vivos = []
@@ -265,6 +305,32 @@ class Despachante:
                 vivos.append({"id": unit, "tipo": tipo, "rotulo": rotulo, "passo": "", "feito": None,
                               "total": None, "inicio": None})
         return vivos
+
+    def _recados(self, agora: float) -> list:
+        """Recados que esperam Pedro (FONTE_RECADOS), relidos a cada RECADOS_A_CADA_S; fonte com erro → os últimos."""
+        if FONTE_RECADOS and agora - getattr(self, "_recados_em", -1e9) >= RECADOS_A_CADA_S:
+            self._recados_em = agora
+            try:
+                self._recados_lidos = [{"id": str(r["id"]), "tipo": "recado", "texto": str(r.get("texto") or "")[:200],
+                                        "link": str(r.get("link") or ""),
+                                        "detalhe": str(r.get("detalhe") or "")[:600]} for r in FONTE_RECADOS()][:10]
+            except Exception as e:
+                log(f"[atividade] recados indisponíveis ({e})")
+        return getattr(self, "_recados_lidos", [])
+
+    def _negligencia(self, agora: float) -> Optional[dict]:
+        """O que Pedro deixou vencer (FONTE_NEGLIGENCIA), relido a cada NEGLIGENCIA_A_CADA_S; fonte com erro → o último."""
+        if FONTE_NEGLIGENCIA and agora - getattr(self, "_negligencia_em", -1e9) >= NEGLIGENCIA_A_CADA_S:
+            self._negligencia_em = agora
+            try:
+                n = FONTE_NEGLIGENCIA()
+                self._negligencia_lida = n and {"nivel": max(0.0, min(1.0, float(n["nivel"]))),
+                                                "motivo": str(n.get("motivo") or "")[:40],
+                                                "texto": str(n.get("texto") or "")[:200],
+                                                "link": str(n.get("link") or "")}
+            except Exception as e:
+                log(f"[atividade] negligência indisponível ({e})")
+        return getattr(self, "_negligencia_lida", None)
 
     def _eventos(self, agora: float) -> list:
         vivos = []

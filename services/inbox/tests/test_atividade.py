@@ -114,6 +114,41 @@ class TestPublicar(Base):
         la.evento("pendencia", "z")
 
 
+class TestNegligencia(Base):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, la, "FONTE_NEGLIGENCIA", la.FONTE_NEGLIGENCIA)
+
+    def test_sem_fonte_publica_none(self):
+        la.Despachante(self.sis).tick(1.0)
+        self.assertIsNone(self.estado()["negligencia"])
+
+    def test_publica_limpo_e_rele_so_de_tempos_em_tempos(self):
+        lidas = []
+
+        def fonte():
+            lidas.append(1)
+            return {"nivel": 7, "motivo": "promessa", "texto": "x" * 500, "link": "http://127.0.0.1:7073/painel/agenda",
+                    "quantos": 2}
+
+        la.FONTE_NEGLIGENCIA = fonte
+        d = la.Despachante(self.sis)
+        n = d.tick(100.0)["negligencia"]
+        self.assertEqual((n["nivel"], n["motivo"], len(n["texto"]), n["link"]),
+                         (1.0, "promessa", 200, "http://127.0.0.1:7073/painel/agenda"))
+        d.tick(100.0 + la.NEGLIGENCIA_A_CADA_S - 1)
+        self.assertEqual(len(lidas), 1)
+        la.FONTE_NEGLIGENCIA = lambda: None                       # Pedro resolveu tudo
+        self.assertIsNone(d.tick(100.0 + la.NEGLIGENCIA_A_CADA_S)["negligencia"])
+
+    def test_fonte_com_erro_mantem_a_ultima(self):
+        la.FONTE_NEGLIGENCIA = lambda: {"nivel": 0.5, "motivo": "tarefa", "texto": "Pagar boleto"}
+        d = la.Despachante(self.sis)
+        d.tick(100.0)
+        la.FONTE_NEGLIGENCIA = lambda: 1 / 0
+        self.assertEqual(d.tick(200.0)["negligencia"]["nivel"], 0.5)
+
+
 class TestFila(Base):
     def test_catalogo_e_agendadas_so_das_units_instaladas(self):
         est = la.Despachante(self.sis).tick(1.0)
@@ -148,6 +183,19 @@ class TestFila(Base):
         d.tick(2.0)
         self.assertEqual(self.sis.iniciadas, [INBOX])
 
+    def test_recado_feito_so_encerra_recado_publicado(self):
+        recados, encerrados = [{"id": "p1", "texto": "Marina"}], []
+        def encerrar(pid):
+            encerrados.append(pid)
+            recados.clear()
+        with mock.patch.object(la, "FONTE_RECADOS", lambda: recados), mock.patch.object(la, "AO_RECADO_FEITO", encerrar):
+            d = la.Despachante(self.sis)
+            self.assertEqual([r["id"] for r in d.tick(1.0)["recados"]], ["p1"])
+            la.pedir("recado_feito", id="outra-pendencia")
+            la.pedir("recado_feito", id="p1")
+            self.assertEqual(d.tick(2.0)["recados"], [])          # relido na mesma volta, sem esperar os 5 s
+        self.assertEqual(encerrados, ["p1"])
+
     def test_frente_cancelar_e_fila_sobrevive_ao_reinicio(self):
         d = la.Despachante(self.sis)
         self.sis.ativas = {RAG}                           # segura a fila para dar tempo de mexer nela
@@ -170,6 +218,24 @@ class TestFila(Base):
         self.assertEqual(self.estado()["atualizado"], 10.0 + la.BATIMENTO_S)
         self.assertEqual(la.estado()["versao"], la.VERSAO)
 
+    def test_links_do_painel_seguem_a_porta(self):
+        with mock.patch.dict(os.environ, {"PORT_INBOX": "7999"}):
+            la.Despachante(self.sis).tick(1.0)
+        self.assertEqual(self.estado()["links"], {"painel": "http://127.0.0.1:7999/painel",
+                                                  "conversa": "http://127.0.0.1:7999/painel/conversa",
+                                                  "escrita": "http://127.0.0.1:7999/painel/escrita"})
+
+
+    def test_notado_vai_para_o_estado_e_usos_seguidos_contam_como_um(self):
+        d = la.Despachante(self.sis)
+        self.assertIsNone(d.tick(1.0)["notado"])
+        with mock.patch.object(la, "_notado_em", 0.0), mock.patch.object(la.time, "time", return_value=500.0):
+            la.notado("painel")
+            la.notado("painel")                     # dentro de NOTADO_A_CADA_S: não regrava
+        self.assertEqual(d.tick(2.0)["notado"], 500.0)
+        with mock.patch.object(la, "_notado_em", 0.0), mock.patch.object(la.time, "time", return_value=900.0):
+            la.pedir("enfileirar", tipo="rag")      # mexer na fila também é uso
+            self.assertEqual(d.tick(3.0)["notado"], 900.0)
 
 if __name__ == "__main__":
     unittest.main()

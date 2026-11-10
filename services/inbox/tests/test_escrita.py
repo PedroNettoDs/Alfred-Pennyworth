@@ -183,6 +183,7 @@ class BaseConversa(Base):
                "SHELL_EXECUTOR_TOKEN": TOKEN}
         for p in (mock.patch.dict(os.environ, env),
                   mock.patch.object(conversa, "_stream_ollama", ollama),
+                  mock.patch.object(conversa, "_aquecer", lambda *a, **k: None),   # chamada extra depois do turno
                   mock.patch.object(conversa, "_cfg", lambda: {"modelo": "m", "modelo_ferramentas": "", "num_ctx": 16384}),
                   mock.patch.object(conversa.lib_memoria, "contexto", lambda *a, **k: ""),
                   mock.patch.object(conversa.lib_rag, "contexto", lambda *a, **k: ""),
@@ -218,7 +219,7 @@ class TestConversa(BaseConversa):
         cid = conversa.nova_conversa()["id"]
         self.ate_o_fim(conversa.enviar(cid, "primeira", contexto="## BLOCO DO DOC"))
         self.ate_o_fim(conversa.enviar(cid, "segunda"))
-        self.assertEqual(self.payloads[-1]["messages"][-1]["content"], "segunda")
+        self.assertTrue(self.payloads[-1]["messages"][-1]["content"].endswith("\n\n## Pedido de Pedro\nsegunda"))
         self.assertNotIn("BLOCO DO DOC", json.dumps(self.payloads[-1]["messages"]))
 
 

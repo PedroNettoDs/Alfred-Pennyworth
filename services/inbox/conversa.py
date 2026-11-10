@@ -5,8 +5,10 @@ Um turno:
     enviar(conversa_id, texto)            grava a mensagem de Pedro e põe o turno na fila do chat: um executor
         ↓                                 próprio, 1 worker, fora do threadpool do FastAPI (em 31/10 uma rajada
         ↓                                 de webhooks esgotou o threadpool e travou a API)
-    montar_contexto()                     personalidade (docs/alfred-system-prompt.md) + bloco "Agora" + memória
-        ↓                                 + RAG (só pela heurística _quer_rag) + resumo + histórico
+    montar_contexto()                     personalidade (docs/alfred-system-prompt.md) + resumo + histórico + a
+        ↓                                 mensagem do turno: bloco "Agora" + memória + RAG (só pela heurística
+        ↓                                 _quer_rag) + o pedido. Do que não muda para o que muda: o Ollama
+        ↓                                 reaproveita o começo igual ao do turno anterior
     Ollama /api/chat em stream, tools=esquemas(), think: false, num_ctx de perfis.yml → conversa:
         │ texto ──────────────────► evento "texto"
         │ ferramenta segura ──────► executar() → evento "ferramenta" (estado rodando → ok | erro)
@@ -14,6 +16,8 @@ Um turno:
         │                           em APROVACAO_S (5 min) a ação é cancelada
         └ repete até a resposta final; depois de MAX_VOLTAS voltas de ferramenta, a chamada seguinte vai sem tools
     grava a resposta → evento "fim"       (ou "erro"); parar(turno_id) interrompe e grava o que já tinha chegado
+    _atualizar_resumo() e _aquecer()      depois do "fim": o resumo, se passou de 32 mensagens, e o começo do
+                                          próximo prompt já avaliado no Ollama (o turno seguinte responde em ~1 s)
 
 Eventos: dicts {"tipo", "turno", "n", ...} em turno.fila (queue.Queue) — a Fase 3 serve isso por SSE. O último
 evento de um turno é sempre "fim" ou "erro".
@@ -55,7 +59,7 @@ import httpx
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from _shared import lib_ferramentas, lib_memoria, lib_rag, lib_wordcraft  # noqa: E402
+from _shared import lib_ferramentas, lib_memoria, lib_porta, lib_rag, lib_wordcraft  # noqa: E402
 from _shared.lib_alfred import DEFAULT_MODEL_CHAT, DEFAULT_OLLAMA_URL, gravar_atomico, log, ollama_generate  # noqa: E402
 from _shared.lib_titulo import extrair_titulo_manchete  # noqa: E402
 
@@ -434,15 +438,33 @@ def _historico(conversa_id: str, ate_id: Optional[int] = None) -> tuple[str, lis
     return conv["resumo"], [dict(r) for r in rows][-(HISTORICO + RESUMO_A_CADA):]
 
 
+def _estavel(conversa_id: str, ate_id: Optional[int] = None) -> list[dict]:
+    """O começo do prompt, que volta igual no turno seguinte: [system fixo, system do resumo?, histórico...]."""
+    resumo, historico = _historico(conversa_id, ate_id)
+    msgs = [{"role": "system", "content": _personalidade()}]
+    if resumo:
+        msgs.append({"role": "system", "content": f"## Resumo da conversa até aqui\n{resumo}"})
+    return msgs + [{"role": m["papel"], "content": m["texto"]} for m in historico]
+
+
 def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = None, contexto: str = "") -> list[dict]:
     """
-    Mensagens do /api/chat: [system, histórico..., user]. O system junta personalidade, bloco "Agora", memória
-    (lib_memoria.contexto), RAG (só se _quer_rag), conversas anteriores (só se _quer_conversas) e o resumo das
-    mensagens antigas. `ate_id` = id da mensagem de
-    Pedro deste turno (o histórico pega só as anteriores a ela). `contexto` = bloco só deste turno (o documento
-    aberto na janela de escrita); vai junto da pergunta porque, no fim de um system longo, o modelo não o usava.
+    Mensagens do /api/chat: [system fixo, system do resumo?, histórico..., user]. A ordem é do que nunca muda
+    para o que muda a cada pergunta, porque o Ollama só reaproveita o que já avaliou enquanto o começo do prompt
+    for igual ao do turno anterior (medido em 10/11 — ver about.md, "Ordem do prompt"):
+      1. system fixo: só a personalidade. O Ollama escreve as ferramentas (~5 mil tokens) logo depois dele, no mesmo
+         bloco: uma letra diferente aqui e o turno reavalia tudo (~8 s na 3060).
+      2. resumo das mensagens antigas: muda a cada ~20 mensagens, junto com o corte do histórico.
+      3. histórico: só cresce entre um resumo e outro.
+      4. a mensagem de Pedro deste turno, que leva antes do pedido o que muda a cada pergunta: bloco "Agora",
+         memória (lib_memoria.contexto), RAG (só se _quer_rag), conversas anteriores (só se _quer_conversas) e
+         `contexto` (o documento aberto na janela de escrita). No histórico dos turnos seguintes volta só o pedido.
+         Vai na mensagem de Pedro e não num system à parte: com um system logo antes da pergunta o gemma4 largou
+         a voz do Alfred ("senhor" em 0 de 7 respostas, contra 6 de 7 assim e 4 de 7 na ordem antiga).
+    1 a 3 saem de _estavel(), que _aquecer() também usa. `ate_id` = id da mensagem de
+    Pedro deste turno (o histórico pega só as anteriores a ela).
     """
-    partes = [_personalidade(), bloco_agora()]
+    partes = [bloco_agora()]
     try:
         partes.append(lib_memoria.contexto(pergunta))
     except Exception as e:
@@ -457,12 +479,10 @@ def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = Non
             partes.append(_bloco_anteriores(pergunta, conversa_id))
         except Exception as e:
             log(f"[conversa] conversas anteriores fora do contexto ({_curto(e)})")
-    resumo, historico = _historico(conversa_id, ate_id)
-    if resumo:
-        partes.append(f"## Resumo da conversa até aqui\n{resumo}")
-    msgs = [{"role": "system", "content": "\n\n".join(p for p in partes if p)}]
-    msgs += [{"role": m["papel"], "content": m["texto"]} for m in historico]
-    msgs.append({"role": "user", "content": f"{contexto}\n\n## Pedido de Pedro\n{pergunta}" if contexto else pergunta})
+    partes.append(contexto)
+    msgs = _estavel(conversa_id, ate_id)
+    bloco = "\n\n".join(p for p in partes if p)
+    msgs.append({"role": "user", "content": f"{bloco}\n\n## Pedido de Pedro\n{pergunta}"})
     return msgs
 
 
@@ -639,6 +659,8 @@ class Turno:
         self.estado = "na_fila"
         self.terminado: Optional[float] = None
         self._n = 0
+        # onde o tempo do turno foi (somado nas chamadas ao /api/chat): 1º texto emitido e as durações do Ollama
+        self.medidas = {"primeira": None, "carga_s": 0.0, "prompt_s": 0.0, "geracao_s": 0.0}
 
 
 class _Aprovacao:
@@ -817,8 +839,9 @@ def _stream_ollama(payload: dict) -> Iterator[dict]:
     """POST /api/chat em stream → um dict por linha. HTTP != 200, {"error"} ou Ollama fora do ar → RuntimeError."""
     url = os.getenv("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_URL
     try:
-        with httpx.stream("POST", f"{url}/api/chat", json=payload,
-                          timeout=httpx.Timeout(TIMEOUT_OLLAMA, connect=5)) as r:
+        with lib_porta.passagem(payload["model"], payload["options"]["num_ctx"]), \
+                httpx.stream("POST", f"{url}/api/chat", json=payload,
+                             timeout=httpx.Timeout(TIMEOUT_OLLAMA, connect=5)) as r:
             if r.status_code != 200:
                 r.read()
                 raise RuntimeError(f"Ollama respondeu {r.status_code}: {r.text[:200]}")
@@ -852,13 +875,37 @@ def _chamar(turno: Turno, msgs: list[dict], modelo: str, ferramentas: Optional[l
             if msg.get("content"):
                 partes.append(msg["content"])
                 if emitir:
+                    turno.medidas["primeira"] = turno.medidas["primeira"] or time.monotonic()
                     _emitir(turno, "texto", texto=msg["content"])
             chamadas += msg.get("tool_calls") or []
             if pedaco.get("done"):
                 r["entrada"], r["saida"] = int(pedaco.get("prompt_eval_count") or 0), int(pedaco.get("eval_count") or 0)
+                for chave, campo in (("carga_s", "load_duration"), ("prompt_s", "prompt_eval_duration"),
+                                     ("geracao_s", "eval_duration")):   # o Ollama manda em nanossegundos
+                    turno.medidas[chave] += int(pedaco.get(campo) or 0) / 1e9
     finally:
         pedacos.close()   # parar no meio fecha a conexão: o Ollama para de gerar
     return {**r, "texto": "".join(partes), "tool_calls": chamadas}
+
+
+def _aquecer(conversa_id: str, modelo: str, ferramentas: list, num_ctx: int) -> None:
+    """
+    Deixa avaliado no Ollama o começo do próximo prompt desta conversa: personalidade, ferramentas, resumo e
+    histórico já com o turno que acabou. Roda depois do "fim", com Pedro lendo (ou ouvindo) a resposta.
+
+    Sem isto a ordem do montar_contexto() não basta. O gemma4 usa atenção em janela deslizante, e com ela o
+    llama-server do Ollama 0.34 só volta a um ponto do prompt que ele guardou; ele guarda dois por chamada, a 512
+    tokens do fim e a 4 do fim. Num turno os dois caem dentro da mensagem de Pedro, que no turno seguinte volta
+    sem o bloco: com bloco + pedido acima de ~500 tokens (o normal: "Agora" + memória) o turno seguinte
+    reavaliava tudo (~8 s). O prompt desta chamada termina no histórico, então o ponto guardado serve ao próximo
+    turno, que avalia só 512 tokens mais o bloco e o pedido (~1,2 s). Mesmo modelo, ferramentas e num_ctx do
+    turno: mudou um, o prompt (ou o modelo carregado) é outro. Custa ~1 s de GPU (~7 s logo depois de carregar o
+    modelo).
+    """
+    payload = {"model": modelo, "messages": _estavel(conversa_id), "tools": ferramentas, "stream": True,
+               "think": False, "options": {"num_ctx": num_ctx, "num_predict": 1}}
+    for _ in _stream_ollama(payload):
+        pass
 
 
 def _terminar(turno: Turno, estado: str, tipo: str, **dados) -> None:
@@ -869,6 +916,7 @@ def _terminar(turno: Turno, estado: str, tipo: str, **dados) -> None:
     _emitir(turno, tipo, **dados)
 
 
+@lib_porta.origem("chat turn typed by the owner in the panel", dono=True)
 def _rodar(turno: Turno) -> None:
     global _ATIVOS
     try:
@@ -934,14 +982,22 @@ def _turno(turno: Turno) -> None:
         with closing(_conectar()) as con, con:
             mid = _gravar_mensagem(con, turno.conversa_id, "assistant", texto, turno.id, modelo=turno.modelo,
                                    tokens_entrada=entrada, tokens_saida=saida, tempo_ms=tempo_ms)
+    m = turno.medidas
+    primeira = f"{m['primeira'] - t0:.1f} s" if m["primeira"] else "—"
     log(f"[conversa] turno {turno.id} ({turno.modelo}): {voltas} volta(s) de ferramenta, {entrada} tokens de "
-        f"entrada, {saida} de saída, {tempo_ms / 1000:.1f} s" + (" — interrompido" if parado else ""))
+        f"entrada, {saida} de saída, {tempo_ms / 1000:.1f} s (1ª palavra {primeira}; Ollama: carga "
+        f"{m['carga_s']:.1f} s, prompt {m['prompt_s']:.1f} s, geração {m['geracao_s']:.1f} s)"
+        + (" — interrompido" if parado else ""))
     _terminar(turno, "parado" if parado else "fim", "fim", mensagem_id=mid, texto=texto, parado=parado,
               modelo=turno.modelo, tokens_entrada=entrada, tokens_saida=saida, tempo_ms=tempo_ms, voltas=voltas)
     try:   # depois do "fim": Pedro já tem a resposta; o worker (e ocupado()) segura só mais um pouco
         _atualizar_resumo(turno.conversa_id, turno.modelo, cfg["num_ctx"])
     except Exception as e:
         log(f"[conversa] resumo falhou ({_curto(e)})")
+    try:   # depois do resumo: se ele cortou o histórico, o prompt que vem é o novo
+        _aquecer(turno.conversa_id, modelo_f, ferramentas, cfg["num_ctx"])
+    except Exception as e:
+        log(f"[conversa] aquecimento do próximo prompt falhou ({_curto(e)})")
 
 
 # ══════════════════════════════════════════════════════════════

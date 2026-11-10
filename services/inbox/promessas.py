@@ -255,6 +255,41 @@ def _vencida(p: dict, agora: datetime) -> bool:
     return agora.date() > prazo.date() if p.get("dia_inteiro") else agora > prazo
 
 
+# base, por dia de atraso e teto do peso de cada item vencido; a soma (até 1) é o nível que o pet recebe
+PESO_PROMESSA = (0.4, 0.1, 0.7)
+PESO_TAREFA = (0.25, 0.05, 0.5)
+
+
+def negligencia(agora: Optional[datetime] = None) -> Optional[dict]:
+    """
+    O quanto Pedro deixou vencer: promessas abertas e tarefas de tasks.yml com prazo passado.
+    → {nivel 0..1, motivo "promessa"|"tarefa", texto do item que mais pesa, quantos}, ou None sem nada vencido.
+    """
+    from _shared import lib_ferramentas   # aqui dentro: só esta função usa, e o módulo é pesado
+    agora = agora or core._now()
+    itens = []   # (peso, motivo, título, dias de atraso)
+    for p in listar():
+        if p.get("status") in ABERTAS and _vencida(p, agora):
+            dias = (agora.date() - _prazo_dt(p).date()).days
+            itens.append((PESO_PROMESSA, "promessa", _titulo(p), dias))
+    try:
+        tarefas = lib_ferramentas._ler_tasks()["tasks"]
+    except RuntimeError:
+        tarefas = []          # tasks.yml ilegível: quem avisa disso é a conversa; aqui só não conta
+    for t in tarefas:
+        d = lib_ferramentas._data_ou_none(t.get("due_date")) if t.get("status") == "open" and t.get("due_date") else None
+        if d and d < agora.date().isoformat():
+            itens.append((PESO_TAREFA, "tarefa", str(t.get("title") or ""), (agora.date() - datetime.fromisoformat(d).date()).days))
+    if not itens:
+        return None
+    pesados = sorted(((min(teto, base + por_dia * dias), motivo, titulo, dias)
+                      for (base, por_dia, teto), motivo, titulo, dias in itens), key=lambda i: -i[0])
+    _peso, motivo, titulo, dias = pesados[0]
+    atraso = "vencida hoje" if dias < 1 else f"vencida há {dias} dia{'s' if dias > 1 else ''}"
+    return {"nivel": round(min(1.0, sum(i[0] for i in pesados)), 2), "motivo": motivo,
+            "texto": f"{titulo}, {atraso}", "quantos": len(pesados)}
+
+
 def _quando(p: dict) -> str:
     prazo = _prazo_dt(p)
     if not prazo:

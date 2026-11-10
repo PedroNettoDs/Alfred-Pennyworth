@@ -91,6 +91,7 @@ class Base(unittest.TestCase):
                "OLLAMA_BASE_URL": "http://127.0.0.1:9", "SHELL_EXECUTOR_TOKEN": TOKEN}
         for p in (mock.patch.dict(os.environ, env),
                   mock.patch.object(conversa, "_stream_ollama", ollama),
+                  mock.patch.object(conversa, "_aquecer", lambda *a, **k: None),   # chamada extra depois do turno
                   mock.patch.object(conversa, "_cfg", lambda: {"modelo": "m", "modelo_ferramentas": "", "num_ctx": 16384}),
                   mock.patch.object(conversa.lib_memoria, "contexto", lambda *a, **k: ""),
                   mock.patch.object(conversa.lib_rag, "contexto", lambda *a, **k: ""),
@@ -182,12 +183,13 @@ class TestTela(Base):
         self.assertIn("Às ordens, senhor.", html)
         self.assertIn('id="dialogo-apagar"', html)
         self.assertRegex(html, r'<form id="apagar" data-acao="" [^>]*hidden>')   # sem conversa aberta, nada a apagar
-        # mesma segurança das outras telas: CSP sem inline, dois scripts (painel.js + conversa.js), nada de on*/style=
+        # mesma segurança das outras telas: CSP sem inline, três scripts (painel.js, conversa.js e voz.js, o do
+        # microfone), nada de on*/style=
         self.assertEqual(r.headers["content-security-policy"], painel.CSP)
         self.assertEqual(r.headers["x-frame-options"], "DENY")
         self.assertEqual(re.findall(r'<script src="([^"]+)" defer>', html),
-                         ["/painel/static/painel.js", "/painel/static/conversa.js"])
-        self.assertEqual(html.count("<script"), 2)
+                         ["/painel/static/painel.js", "/painel/static/conversa.js", "/painel/static/voz.js"])
+        self.assertEqual(html.count("<script"), 3)
         self.assertNotRegex(html, r"\son[a-z]+\s*=")
         self.assertNotRegex(html, r"\sstyle\s*=|<style")
         self.assertNotIn(TOKEN, html)
@@ -245,7 +247,7 @@ class TestFluxo(Base):
         self.assertEqual(self.eventos(d2["turno"])[-1]["texto"], "Pois não.")
         msgs = self.payloads[-1]["messages"]
         self.assertEqual([m["role"] for m in msgs], ["system", "user", "assistant", "user"])
-        self.assertEqual(msgs[-1]["content"], "e as tarefas?")
+        self.assertTrue(msgs[-1]["content"].endswith("\n\n## Pedido de Pedro\ne as tarefas?"))
         self.assertEqual(self.payloads[-1]["model"], "m")
 
     def test_validacoes(self):

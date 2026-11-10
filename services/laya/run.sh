@@ -26,6 +26,13 @@ export LAYA_PRELOAD="${LAYA_PRELOAD:-1}"
 export LAYA_MODELS="${LAYA_MODELS:-multilingual}"
 export LAYA_DEFAULT_MODEL="${LAYA_DEFAULT_MODEL:-multilingual}"
 export LAYA_MAX_LOADED="${LAYA_MAX_LOADED:-1}"
+# Checkpoint treinado da porta da GPU (treino/gerar_porta.py + laya-train, ver about.md): se existe, é servido
+# como "porta" e fica na memória junto com o multilingual (~650 MB de RAM cada; trocar a cada pedido custa segundos).
+if [[ -d "treino/dados/modelo-porta" && -z "${LAYA_EXTRA_MODELS:-}" ]]; then
+    export LAYA_EXTRA_MODELS="{\"porta\": \"$SCRIPT_DIR/treino/dados/modelo-porta\"}"
+    export LAYA_MODELS="$LAYA_MODELS,porta"
+    [[ "$LAYA_MAX_LOADED" -lt 2 ]] && export LAYA_MAX_LOADED=2
+fi
 # CPU por padrão: a GPU de 12 GB fica para o Ollama (gemma4:12b + bge-m3 não cabem com o Laya ao lado).
 # LAYA_THREADS ≤ núcleos físicos (6 no Ryzen 5 4500); passar disso piora muito (ver docstring de laya.serve).
 export LAYA_DEVICE="${LAYA_DEVICE:-cpu}"

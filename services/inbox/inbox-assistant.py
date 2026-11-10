@@ -16,8 +16,9 @@ Uso:
     inbox-assistant.py responder ID vou|nao-vou|ignorar [--nota "..."]
     inbox-assistant.py responder-texto ID "texto" [--sem-enviar]   → pendência de WhatsApp: registra e envia ao contato
     inbox-assistant.py whatsapp status                              → Evolution API: config, instância, fila
-    inbox-assistant.py whatsapp qrcode                              → QR code para parear (salva logs/evolution_qr.png)
-    inbox-assistant.py whatsapp webhook URL                         → aponta o webhook da instância para URL
+    inbox-assistant.py whatsapp qrcode [--sessao NOME]              → QR code para parear (salva logs/evolution_qr.png)
+    inbox-assistant.py whatsapp webhook URL [--sessao NOME]         → aponta o webhook da instância para URL
+                                                                      (--sessao = conta de perfis.yml; sem ela, a padrão)
     inbox-assistant.py whatsapp simular payload.json [--notificar] [--sem-enviar] [--imediato]  → processa um webhook gravado
     inbox-assistant.py whatsapp notificar ID                        → manda a Pedro o resumo + áudio da pergunta
     inbox-assistant.py whatsapp fila                                → mensagens esperando atraso_minutos (prazo, textos)
@@ -49,7 +50,7 @@ import core  # noqa: E402
 import whatsapp  # noqa: E402
 from _shared import lib_db  # noqa: E402
 from _shared import lib_atividade  # noqa: E402
-from _shared.lib_tts import tocar_audio, iniciar_audio, parar_audio, tocando  # noqa: E402
+from _shared.lib_tts import iniciar_audio, parar_audio, tocando  # noqa: E402
 
 
 def _msg_erro(e: Exception) -> str:
@@ -163,12 +164,10 @@ def cmd_ouvir(args):
     if not p:
         print(f"Pendência não encontrada: {args.id}")
         return 1
-    mp3 = (p.get("arquivos") or {}).get("mp3")
-    if not mp3:
+    if not core.tem_audio(p):
         print("Essa pendência não tem áudio.")
         return 1
-    ok = tocar_audio(core.vault() / mp3, bloquear=True)
-    return 0 if ok else 1
+    return 0 if core.tocar_pendencia(p, bloquear=True) else 1
 
 
 def cmd_responder(args):
@@ -211,15 +210,16 @@ def cmd_whatsapp(args):
     if sub == "status":
         print(json.dumps(whatsapp.status(), ensure_ascii=False, indent=2))
         return 0
+    inst = whatsapp.obter_sessao(args.sessao)["instancia"] if args.sessao else lw.instancia()
     if sub == "qrcode":
-        r = whatsapp.obter_qrcode()
+        r = whatsapp.obter_qrcode(args.sessao)
         if r.get("criando"):
-            print(f"Instância '{lw.instancia()}' não existe ainda — criando...")
+            print(f"Instância '{inst}' não existe ainda — criando...")
         if not r.get("ok"):
             print(r["erro"])
             return 1
         if r.get("conectado"):
-            print(f"Instância '{lw.instancia()}' já está conectada (open). Nada a parear.")
+            print(f"Instância '{inst}' já está conectada (open). Nada a parear.")
             return 0
         if r.get("pairingCode"):
             print(f"Código de pareamento (WhatsApp → Aparelhos conectados → Conectar com número): {r['pairingCode']}")
@@ -243,7 +243,7 @@ def cmd_whatsapp(args):
         if not url:
             print("Uso: whatsapp webhook http://172.17.0.1:7073/whatsapp/webhook-async  (ou a URL do Webhook do N8N)")
             return 1
-        r = lw.configurar_webhook(url, headers={"apikey": lw.api_key()})
+        r = lw.configurar_webhook(url, headers={"apikey": lw.api_key()}, inst=inst)
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
         return 0 if r.get("ok") else 1
     if sub == "simular":
@@ -389,12 +389,12 @@ def cmd_aguardar_resposta(args):
     if ev.get("resumo"):
         corpo += f"\n\n{ev['resumo'][:300]}"
     corpo += "\n\nVou ou não vou?"
-    mp3 = (p.get("arquivos") or {}).get("mp3")
+    tem_audio = core.tem_audio(p)
 
     for _ in range(4):  # no máximo 4 reaberturas (Ouvir)
-        escolha = _perguntar_gui(titulo, corpo, bool(mp3))
-        if escolha == "ouvir" and mp3:
-            tocar_audio(core.vault() / mp3, bloquear=True)
+        escolha = _perguntar_gui(titulo, corpo, tem_audio)
+        if escolha == "ouvir" and tem_audio:
+            core.tocar_pendencia(p, bloquear=True)
             continue
         if escolha in ("vou", "nao"):
             _registrar_escolha(args.id, escolha, "via notificação")
@@ -593,11 +593,12 @@ def cmd_aguardar_whatsapp(args):
             return 0
         wa = p.get("whatsapp") or {}
         contato = wa.get("contato") or p["titulo"]
-        mp3 = (p.get("arquivos") or {}).get("mp3")
-        mp3_ok = bool(mp3) and (core.vault() / mp3).exists()
-        # o resumo em áudio começa junto com a notificação (perfis.yml: pendencias.tocar_ao_notificar)
+        mp3_ok = core.tem_audio(p)
+        # o resumo em áudio começa junto com a notificação (perfis.yml: pendencias.tocar_ao_notificar);
+        # o .mp3 é gerado aqui, do roteiro guardado (~1 a 4 s na primeira vez)
         if primeira and mp3_ok and _tocar_ao_notificar():
-            player = iniciar_audio(core.vault() / mp3)
+            mp3 = core.audio_da_pendencia(p)
+            player = iniciar_audio(mp3) if mp3 else None
         primeira = False
         escolha = _menu_whatsapp_gui(f"Alfred — WhatsApp de {contato}", _corpo_whatsapp(p), mp3_ok,
                                      audio_tocando=tocando(player))
@@ -612,7 +613,8 @@ def cmd_aguardar_whatsapp(args):
             continue
         if escolha == "ouvir" and mp3_ok:
             parar_audio(player)
-            player = iniciar_audio(core.vault() / mp3)
+            mp3 = core.audio_da_pendencia(p)
+            player = iniciar_audio(mp3) if mp3 else None
             continue
         if escolha == "enviar":
             texto = _caixa_texto_gui(f"Alfred — resposta para {contato}",
@@ -644,8 +646,8 @@ def _perguntar_whatsapp(p: dict, ouvir: bool) -> str:
     print(f"  de: {wa.get('contato')} ({wa.get('numero')})   {wa.get('tipo_msg')} · {wa.get('categoria')} · urgência {wa.get('urgencia')}")
     if wa.get("texto"):
         print("  ❝ " + wa["texto"][:400].replace("\n", "\n    ") + " ❞")
-    if ouvir and (p.get("arquivos") or {}).get("mp3"):
-        tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
+    if ouvir:
+        core.tocar_pendencia(p, bloquear=True)
     while True:
         try:
             r = input("  O que você quer responder? (texto | ignorar | ouvir | ver | pular | sair) › ").strip()
@@ -657,8 +659,8 @@ def _perguntar_whatsapp(p: dict, ouvir: bool) -> str:
             return "sair"
         if low in ("pular", "p", "", "depois"):
             return "pular"
-        if low in ("ouvir", "o") and (p.get("arquivos") or {}).get("mp3"):
-            tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
+        if low in ("ouvir", "o") and core.tem_audio(p):
+            core.tocar_pendencia(p, bloquear=True)
             continue
         if low in ("ver", "v"):
             md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")
@@ -700,8 +702,8 @@ def cmd_perguntar(args):
         print(f"  quando: {ev.get('data_inicio') or 'não informado'}   local: {ev.get('local') or ('online' if ev.get('online') else 'não informado')}")
         if ev.get("resumo"):
             print(f"  {ev['resumo']}")
-        if args.ouvir and (p.get("arquivos") or {}).get("mp3"):
-            tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
+        if args.ouvir:
+            core.tocar_pendencia(p, bloquear=True)
         while True:
             try:
                 r = input("  Vou ou não vou? › ").strip().lower()
@@ -712,8 +714,8 @@ def cmd_perguntar(args):
                 return 0
             if r in ("pular", "p", "", "depois"):
                 break
-            if r in ("ouvir", "o") and (p.get("arquivos") or {}).get("mp3"):
-                tocar_audio(core.vault() / p["arquivos"]["mp3"], bloquear=True)
+            if r in ("ouvir", "o") and core.tem_audio(p):
+                core.tocar_pendencia(p, bloquear=True)
                 continue
             if r in ("ver", "v"):
                 md = core.vault() / ((p.get("arquivos") or {}).get("md") or "")
@@ -771,6 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
                                          "notificar ID | fila | processar-fila")
     sp.add_argument("acao", choices=("status", "qrcode", "webhook", "simular", "notificar", "fila", "processar-fila",
                                      "limpar-audios"))
+    sp.add_argument("--sessao", default=None, help="qrcode / webhook: conta de perfis.yml → whatsapp: (default: a padrão)")
     sp.add_argument("--dias", type=float, default=None, help="limpar-audios: idade mínima (default: audio_reter_dias)")
     sp.add_argument("--simular", action="store_true", help="limpar-audios: só lista o que seria apagado")
     sp.add_argument("arg", nargs="?", default=None)
@@ -818,6 +821,8 @@ def main() -> int:
     if not argv or argv[0].startswith("-"):
         argv = ["ciclo"] + argv
     args = build_parser().parse_args(argv)
+    if sys.stdin.isatty():              # Pedro no terminal, e não um timer do systemd
+        lib_atividade.notado("terminal")
 
     if args.cmd == "ciclo":
         return cmd_ciclo(args)

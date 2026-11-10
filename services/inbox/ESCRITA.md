@@ -31,6 +31,9 @@ O WordCraft não tem API de plugin nem cliente MCP: quem controla é o Alfred, p
 A cada mensagem o documento é lido na hora, e o bloco vai junto da pergunta só naquele turno (não fica no histórico).
 Com mais de 12 mil caracteres o turno usa `num_ctx` 32768; o limite é 60 mil.
 
+O botão **Falar** grava pelo microfone e põe a transcrição (feita na máquina) na caixa de mensagem; ver
+[PESTINHA.md](PESTINHA.md), "Microfone".
+
 ## Edições
 
 `documento_substituir` pede aprovação e entra como alteração rastreada do autor "Alfred"; Pedro aceita ou rejeita no

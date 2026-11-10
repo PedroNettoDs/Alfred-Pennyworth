@@ -1,0 +1,59 @@
+{#
+  Documentação de uma função do Alfred (painel_ferramentas.py, /painel/ferramentas/{slug}).
+  Variáveis: f (entrada do ferramentas.yml; None → 404), doc (Markup do _markdown_seguro),
+             ligadas (ferramentas da conversa desta função, no formato de _ferramenta_conversa.html), contadores.
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}{{ f.nome if f else "Não encontrada" }}{% endblock %}
+{% block conteudo %}
+{%- set voltar = ("/painel/ferramentas", "Ferramentas") %}
+{%- if not f %}
+{{ m.cabecalho("Função não encontrada", none, voltar=voltar) }}
+{{ m.vazio("Não encontrei essa função, senhor. Veja a lista em Ferramentas.", "ferramentas") }}
+{%- else %}
+{%- set n = contadores.get(f.contador, 0) if f.contador else 0 %}
+{%- if f.tela %}
+{% call m.cabecalho(f.nome, f.resumo, voltar=voltar) %}
+  {{ m.botao((f.abrir or "Abrir") ~ ((" (" ~ n ~ " aguardando)") if n else ""), "primario", href=f.tela) }}
+{% endcall %}
+{%- else %}
+{{ m.cabecalho(f.nome, f.resumo, voltar=voltar) }}
+{%- endif %}
+<div class="pilha">
+  <section class="cartao" aria-label="Documentação">
+    <div class="prosa doc">{{ doc }}</div>
+  </section>
+
+  {%- if ligadas %}
+  <section class="cartao" aria-labelledby="c-ligadas">
+    <h2 class="cartao__titulo" id="c-ligadas">Ferramentas da conversa</h2>
+    <p class="suave pequeno">O que o Alfred usa desta função quando você pede na conversa.</p>
+    <div class="pilha pilha--curta">
+      {%- for t in ligadas %}
+      {% include "_ferramenta_conversa.html" %}
+      {%- endfor %}
+    </div>
+  </section>
+  {%- endif %}
+
+  {%- if f.arquivos or f.docs %}
+  <section class="cartao" aria-labelledby="c-onde">
+    <h2 class="cartao__titulo" id="c-onde">Onde está</h2>
+    {%- if f.arquivos %}
+    <h3 class="cartao__rotulo">Código</h3>
+    <ul class="lista-caminhos">
+      {%- for c in f.arquivos %}<li><code>{{ c }}</code></li>{% endfor %}
+    </ul>
+    {%- endif %}
+    {%- if f.docs %}
+    <h3 class="cartao__rotulo">Documentação no repositório</h3>
+    <ul class="lista-caminhos">
+      {%- for c in f.docs %}<li><code>{{ c }}</code></li>{% endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+  {%- endif %}
+</div>
+{%- endif %}
+{% endblock %}

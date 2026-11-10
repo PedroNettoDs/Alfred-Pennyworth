@@ -25,6 +25,7 @@ Sobreposições das tools antigas, juntas aqui:
   - search_vault do vault_reader e do vault_writer → buscar_cofre, que passa por _buscar() (lib_rag)
 """
 
+import contextvars
 import copy
 import importlib
 import inspect
@@ -218,7 +219,10 @@ def executar(nome: str, argumentos=None) -> str:
             resultado["erro"] = e
 
     try:
-        t = threading.Thread(target=rodar, name=f"ferramenta-{nome}", daemon=True)
+        # copy_context: a thread herda a origem de quem chamou (lib_porta); sem isso uma ferramenta que usa o
+        # modelo pediria a placa como rotina de fundo e esperaria o próprio turno que a chamou
+        t = threading.Thread(target=contextvars.copy_context().run, args=(rodar,), name=f"ferramenta-{nome}",
+                             daemon=True)
         t.start()
         t.join(f["timeout"])
     except Exception as e:

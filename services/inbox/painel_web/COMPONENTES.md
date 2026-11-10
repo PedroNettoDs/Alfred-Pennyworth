@@ -32,7 +32,7 @@ Guia objetivo para quem escreve `painel.py` e os templates de cada tela. A lingu
 | Variável | Tipo | Uso |
 |---|---|---|
 | `csrf` | str | `<meta name="csrf-token">`, que o JS manda em `X-CSRF-Token` em todo POST |
-| `ativo` | `"inicio"`, `"conversa"`, `"pendencias"`, `"agenda"`, `"limpeza"`, `"pesquisar"` ou `"sistema"` | `aria-current="page"` no item da navegação |
+| `ativo` | `"inicio"`, `"conversa"`, `"pesquisar"`, `"pendencias"`, `"agenda"`, `"ferramentas"`, `"limpeza"`, `"integracoes"` ou `"sistema"` | `aria-current="page"` no item da navegação |
 | `contadores` | dict (opcional) | mesmo JSON de `/painel/api/contadores`; valor inicial dos contadores da navegação (`aguardando`, `limpeza_aguardando`) |
 | `simulado` | bool (opcional) | mostra o selo "Modo simulado" no rodapé da navegação |
 
@@ -55,7 +55,7 @@ começa com `/painel` e não com `//`). O campo `token` é `type=password` e nun
 
 | Macro | Gera |
 |---|---|
-| `icone(nome, rotulo=none)` | SVG decorativo (`aria-hidden`). Nomes: `sucesso erro aguardando info alerta simulado ponto whatsapp email inicio conversa pendencias agenda limpeza sistema sair externo voltar audio audio-off busca pessoa marca` |
+| `icone(nome, rotulo=none)` | SVG decorativo (`aria-hidden`). Nomes: `sucesso erro aguardando info alerta simulado ponto whatsapp email inicio conversa pendencias agenda limpeza sistema ferramentas sair externo voltar audio audio-off busca pessoa marca` |
 | `selo(tom, texto, nome_icone=none)` | `.selo.selo--{sucesso,aguardando,simulado,erro,neutro}` com ícone + texto |
 | `selo_status(status)` | selo de status de pendência, item de agenda ou lote (`aguardando`, `respondida`, `respondida_manual`, `vou`, `nao_vou`, `ignorada`, `expirada`, `pendente`, `no_calendario`, `em_execucao`, `desfazer`, `desfeito`, `cancelado`, `erro`, `aprovado`, `recusado`, `expirado`, `concluido`, `simulado`, `parcial`, `falhou`) |
 | `selo_urgencia(u)` | `alta` → vermelho "Urgência alta"; `media`/`baixa` → neutro; vazio → nada |

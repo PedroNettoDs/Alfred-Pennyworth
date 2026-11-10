@@ -24,7 +24,7 @@ import yaml
 
 import agenda
 import core
-from _shared import lib_laya, lib_memoria, lib_rag
+from _shared import lib_laya, lib_memoria, lib_porta, lib_rag
 from _shared.lib_alfred import log, ollama_generate_json
 from _shared.lib_templates import render_template
 
@@ -294,6 +294,7 @@ def _escrever(pedido: dict, contexto: str, verificacao: Optional[dict]) -> str:
     return corpo
 
 
+@lib_porta.origem("the owner asked Alfred to draft an e-mail and is watching", dono=True)
 def redigir(de: str, para: list[str], assunto: str, notas: str, original: str, tem_assinatura: bool,
             eventos: Optional[list]) -> dict:
     """→ {"status": "pronto", "contexto", "texto"} ou a entrada "aguardando" gravada para o painel."""
@@ -317,6 +318,7 @@ def redigir(de: str, para: list[str], assunto: str, notas: str, original: str, t
     return item
 
 
+@lib_porta.origem("rewriting a text the owner selected in the editor", dono=True)
 def reformular(trecho: str, instrucao: str, assunto: str, corpo: str) -> str:
     """Reescreve só o trecho selecionado. Sem passar pelo painel: quem pediu está olhando para o texto."""
     consulta_corpo = f"{instrucao} {trecho}"[:NOTAS_MAX]

@@ -219,3 +219,13 @@
   .chat__mensagens { min-height: 18rem; }
   .chat__dica { display: none; }
 }
+
+/* Janela estreita (a caixinha que o Pestinha abre, ~440 px): só a conversa. O menu do Painel, o seletor de modo e
+   a lista de conversas voltam quando a janela é alargada. */
+@media (max-width: 599px) {
+  .lateral, .modos, .chat__lista, .conteudo--cheio .tela-subtitulo { display: none; }
+  .conteudo--cheio { height: 100vh; min-height: 0; padding: var(--e-3); }
+  .conteudo--cheio .tela-cabecalho { margin-bottom: var(--e-2); align-items: center; }
+  .conteudo--cheio .tela-titulo { font-size: var(--t-md); }
+  .chat__mensagens { min-height: 0; }
+}

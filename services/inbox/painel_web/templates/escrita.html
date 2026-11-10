@@ -7,6 +7,7 @@
 {%- block head %}
   <link rel="stylesheet" href="/painel/static/escrita.css">
   <script src="/painel/static/escrita.js" defer></script>
+  <script src="/painel/static/voz.js" defer></script>
 {%- endblock -%}
 {%- block pagina %}
   <main class="escrita">
@@ -34,6 +35,10 @@
       <label class="sr-only" for="texto">Mensagem para Alfred</label>
       <textarea id="texto" class="escrita__campo" rows="3" placeholder="Pergunte sobre o trecho, peça uma revisão ou uma pesquisa…"></textarea>
       <div class="escrita__botoes">
+        <button id="audio-alfred" class="botao botao--discreto botao--pequeno" type="button" aria-pressed="false"
+                title="O Alfred fala as respostas (mesma voz dos resumos; o texto passa pelo serviço de voz)">Ativar áudio</button>
+        <button id="microfone" class="botao botao--pequeno" type="button" aria-pressed="false"
+                title="Falar em vez de digitar: a transcrição é feita nesta máquina">Falar</button>
         <button id="parar" class="botao botao--discreto botao--pequeno" type="button" hidden>Parar</button>
         <button id="enviar" class="botao botao--primario botao--pequeno" type="submit">Enviar</button>
       </div>

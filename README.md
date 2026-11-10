@@ -2,6 +2,14 @@
 
 ![version](https://img.shields.io/badge/version-2.0-blue) ![status](https://img.shields.io/badge/status-active-brightgreen) ![license](https://img.shields.io/badge/license-AGPL--3.0-lightgrey)
 
+O Alfred é a prova do que eu defendo: um assistente que lê meu e-mail e meu WhatsApp, pesquisa na web e lembra das coisas — sem mandar nada para uma API de IA de terceiros.
+
+- **Conversa com ferramentas** — executa comandos no host sob whitelist, faz pesquisa profunda e consulta o RAG local (SQLite FTS5 + ChromaDB).
+- **E-mail** — lê o Thunderbird, monta um jornal diário das newsletters e cria pendências "vou / não vou". Uma extensão do Thunderbird redige as respostas.
+- **WhatsApp** — via Evolution API, transcreve áudios localmente e pergunta "o que você quer responder?". Nada sai sem a minha aprovação.
+- **Laya** — classificador ModernBERT local para decisões rápidas e tipadas.
+- **Painel web** para aprovar o que ele propõe, **memória** num vault do Obsidian e o **Pestinha**, um pet de tela que reage à atividade dele.
+
 Assistente pessoal 100% local baseado em LLMs via Ollama, com execução de comandos no host, pesquisa web autônoma, vault Obsidian com memória persistente, RAG local (SQLite FTS5 + ChromaDB) e um Painel web para aprovar o que ele propõe.
 
 **Autor:** Pedro Henrique Netto dos Santos  
@@ -458,6 +466,11 @@ nunca recebe exceção). Código do repositório é chamado direto; HTTP só par
 
 De onde veio cada uma (as antigas tools do Open WebUI) e as regras de cada ferramenta:
 [services/_shared/about.md](services/_shared/about.md).
+
+No Painel, a aba **Ferramentas** (`/painel/ferramentas`) mostra tudo o que o Alfred faz, cada função com a sua
+documentação (texto em [`services/inbox/painel_web/ferramentas.yml`](services/inbox/painel_web/ferramentas.yml)), e
+esta lista de ferramentas da conversa, extraída do `lib_ferramentas` (descrição, parâmetros e quais pedem aprovação).
+A fila do Redigir abre de lá.
 
 ---
 

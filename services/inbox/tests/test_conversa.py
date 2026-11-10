@@ -99,8 +99,10 @@ class Base(unittest.TestCase):
         self.memoria = mock.Mock(return_value="")
         self.rag = mock.Mock(return_value="")
         self.resumo = mock.Mock(return_value="")
+        self.aquecer = mock.Mock()   # a chamada extra depois de cada turno não entra nos roteiros
         for p in (mock.patch.dict(os.environ, env),
                   mock.patch.object(conversa, "_stream_ollama", self.ollama),
+                  mock.patch.object(conversa, "_aquecer", self.aquecer),
                   mock.patch.object(conversa, "_cfg", lambda: dict(self.cfg)),
                   mock.patch.object(conversa.lib_memoria, "contexto", self.memoria),
                   mock.patch.object(conversa.lib_rag, "contexto", self.rag),
@@ -167,7 +169,8 @@ class TestContexto(Base):
         self.assertEqual(msgs[0]["role"], "system")
         self.assertIn("Alfred Pennyworth", msgs[0]["content"])
         self.assertNotIn("/no_think", msgs[0]["content"])
-        self.assertEqual(msgs[-1], {"role": "user", "content": "oi"})
+        self.assertEqual(msgs[-1]["role"], "user")
+        self.assertTrue(msgs[-1]["content"].endswith("\n\n## Pedido de Pedro\noi"))
 
     def test_bloco_agora(self):
         agora = datetime(2026, 10, 30, 9, 0, tzinfo=BRT)   # sexta-feira
@@ -241,10 +244,10 @@ class TestContexto(Base):
         msgs = conversa.montar_contexto(cid, "quais pendências tenho?")
         self.memoria.assert_called_once_with("quais pendências tenho?")
         self.rag.assert_not_called()
-        self.assertIn("estuda na FATEC", msgs[0]["content"])
+        self.assertIn("estuda na FATEC", msgs[-1]["content"])
         msgs = conversa.montar_contexto(cid, "o que eu anotei sobre docker nas minhas notas?")
         self.rag.assert_called_once_with("o que eu anotei sobre docker nas minhas notas?", 1500)
-        self.assertIn("[1] docker.md (pedro)", msgs[0]["content"])
+        self.assertIn("[1] docker.md (pedro)", msgs[-1]["content"])
 
     def test_quer_rag(self):
         sim = ["o que eu anotei sobre RAG?", "resume minhas notas de redes", "o que estudei na aula de física?",
@@ -259,14 +262,34 @@ class TestContexto(Base):
     def test_falha_na_memoria_nao_derruba(self):
         self.memoria.side_effect = RuntimeError("Ollama caiu")
         msgs = conversa.montar_contexto(conversa.nova_conversa()["id"], "oi")
-        self.assertIn("## Agora", msgs[0]["content"])
+        self.assertIn("## Agora", msgs[-1]["content"])
 
     def test_historico_no_contexto(self):
         self.ollama.roteiro = [texto("Bom dia, senhor.")]
         t, _ = self.turno("bom dia")
         msgs = conversa.montar_contexto(t.conversa_id, "e agora?")
-        self.assertEqual([(m["role"], m["content"]) for m in msgs[1:]],
-                         [("user", "bom dia"), ("assistant", "Bom dia, senhor."), ("user", "e agora?")])
+        self.assertEqual([(m["role"], m["content"]) for m in msgs[1:-1]],
+                         [("user", "bom dia"), ("assistant", "Bom dia, senhor.")])
+        self.assertEqual(msgs[-1]["role"], "user")
+        self.assertTrue(msgs[-1]["content"].endswith("\n\n## Pedido de Pedro\ne agora?"))
+
+    def test_o_que_muda_a_cada_turno_vem_por_ultimo(self):
+        """O Ollama só reaproveita o que já avaliou enquanto o começo do prompt for igual ao do turno anterior:
+        o system é só a personalidade, e o que muda a cada pergunta vai na mensagem de Pedro deste turno (no
+        histórico volta só o pedido)."""
+        self.memoria.side_effect = lambda pergunta: f"Fatos que Alfred já sabe:\n- sobre {pergunta}"
+        self.ollama.roteiro = [texto("Bom dia, senhor.")]
+        t, _ = self.turno("bom dia")
+        antes = self.ollama.payloads[0]["messages"]
+        depois = conversa.montar_contexto(t.conversa_id, "e agora?")
+        self.assertEqual(antes[0], {"role": "system", "content": conversa._personalidade()})
+        self.assertEqual([m["role"] for m in antes], ["system", "user"])
+        self.assertEqual(depois[:-1], [antes[0], {"role": "user", "content": "bom dia"},
+                                       {"role": "assistant", "content": "Bom dia, senhor."}])
+        for bloco in ("## Agora", "sobre e agora?", "## Pedido de Pedro\ne agora?"):
+            self.assertIn(bloco, depois[-1]["content"])
+        self.assertLess(depois[-1]["content"].index("## Agora"), depois[-1]["content"].index("## Pedido de Pedro"))
+        self.assertIn("sobre bom dia", antes[-1]["content"])
 
     def test_cfg_le_perfis(self):
         from _shared import perfis
@@ -525,8 +548,9 @@ class TestResumo(Base):
         self.assertEqual((conv["resumo"], conv["resumo_ate"]), ("RESUMO 1", ids[20]))
 
         msgs = conversa.montar_contexto(cid, "e então?")
-        self.assertIn("## Resumo da conversa até aqui\nRESUMO 1", msgs[0]["content"])
-        self.assertEqual([m["content"] for m in msgs[1:-1]], [f"mensagem {i}" for i in range(22, 34)])
+        self.assertEqual(msgs[1], {"role": "system", "content": "## Resumo da conversa até aqui\nRESUMO 1"})
+        self.assertNotIn("RESUMO 1", msgs[0]["content"])   # o system fixo não muda quando o resumo muda
+        self.assertEqual([m["content"] for m in msgs[2:-1]], [f"mensagem {i}" for i in range(22, 34)])
 
         # incremental: o resumo anterior entra no prompt do próximo
         self.popular(cid, 21, inicio=34)
@@ -552,6 +576,31 @@ class TestResumo(Base):
         self.turno("mais uma", cid=cid)
         self.esperar_livre()   # o resumo roda depois do "fim"
         self.assertEqual(conversa.obter_conversa(cid)["resumo"], "RESUMO DO TURNO")
+
+    def test_turno_aquece_o_proximo_prompt(self):
+        """Depois do "fim" (e do resumo), o começo do próximo prompt vai ao Ollama: mesmo modelo, ferramentas e
+        num_ctx do turno, mensagens sem o bloco do turno, um token de resposta."""
+        self.ollama.roteiro = [texto("Bom dia, senhor.")]
+        t, _ = self.turno("bom dia")
+        self.esperar_livre()
+        self.aquecer.assert_called_once_with(t.conversa_id, "modelo-teste", self.ollama.payloads[0]["tools"], 16384)
+        _AQUECER_ORIGINAL(t.conversa_id, "modelo-teste", [{"type": "function"}], 16384)
+        p = self.ollama.payloads[-1]
+        self.assertEqual([(m["role"], m["content"]) for m in p["messages"]],
+                         [("system", conversa._personalidade()), ("user", "bom dia"), ("assistant", "Bom dia, senhor.")])
+        self.assertEqual(p["messages"], self.ollama.payloads[0]["messages"][:1] + p["messages"][1:])
+        self.assertEqual((p["model"], p["tools"], p["think"], p["options"]),
+                         ("modelo-teste", [{"type": "function"}], False, {"num_ctx": 16384, "num_predict": 1}))
+
+    def test_aquecimento_que_falha_nao_derruba(self):
+        self.aquecer.side_effect = RuntimeError("Ollama fora do ar")
+        self.ollama.roteiro = [texto("Pois não.")]
+        t, eventos = self.turno("oi")
+        self.esperar_livre()
+        self.assertEqual((eventos[-1]["tipo"], t.estado), ("fim", "fim"))
+
+
+_AQUECER_ORIGINAL = conversa._aquecer
 
 
 # ══════════════════════════════════════════════════════════════
@@ -763,7 +812,7 @@ class TestConversasAnteriores(Base):
         self.vetores.return_value = self.resumo_vetorial(atual, antiga)
         msgs = conversa.montar_contexto(atual, "o que falamos sobre DHT?")
         self.vetores.assert_called_once_with("o que falamos sobre DHT?", "alfred", "conversas", 6)
-        sistema = msgs[0]["content"]
+        sistema = msgs[-1]["content"]
         self.assertIn("## Conversas anteriores com Pedro", sistema)
         self.assertIn(f"[{antiga}] ", sistema)
         self.assertIn(f"resumo de {antiga}", sistema)
@@ -771,11 +820,11 @@ class TestConversasAnteriores(Base):
         self.vetores.reset_mock()
         msgs = conversa.montar_contexto(atual, "quais pendências tenho?")
         self.vetores.assert_not_called()
-        self.assertNotIn("Conversas anteriores", msgs[0]["content"])
+        self.assertNotIn("Conversas anteriores", msgs[-1]["content"])
 
     def test_sem_resumo_proximo_nao_abre_bloco(self):
         msgs = conversa.montar_contexto(conversa.nova_conversa()["id"], "o que falamos sobre DHT?")
-        self.assertNotIn("Conversas anteriores", msgs[0]["content"])
+        self.assertNotIn("Conversas anteriores", msgs[-1]["content"])
 
     def test_bloco_respeita_o_teto(self):
         grandes = [self.parada() for _ in range(3)]
@@ -787,7 +836,7 @@ class TestConversasAnteriores(Base):
         self.vetores.side_effect = RuntimeError("resposta estranha")
         cid = self.parada()
         msgs = conversa.montar_contexto(conversa.nova_conversa()["id"], "o que falamos sobre DHT?")
-        self.assertNotIn("Conversas anteriores", msgs[0]["content"])
+        self.assertNotIn("Conversas anteriores", msgs[-1]["content"])
         self.assertEqual([a["conversa_id"] for a in conversa.buscar_anteriores("Kademlia")], [cid])
 
     def test_buscar_anteriores_ordem_de_confianca(self):

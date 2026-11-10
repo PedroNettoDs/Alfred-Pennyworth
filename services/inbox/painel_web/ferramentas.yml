@@ -1,0 +1,656 @@
+# Funções do Alfred na tela Ferramentas do Painel (/painel/ferramentas, painel_ferramentas.py).
+# Escrito a partir do README e dos about.md de cada serviço. As ferramentas da conversa NÃO ficam aqui: a tela as
+# extrai do lib_ferramentas (nome, descrição, parâmetros, aprovação).
+#
+# Campos de cada função:
+#   slug, nome, resumo (uma linha, vai no cartão)
+#   doc          markdown mínimo do Painel (painel._markdown_seguro): "# título", listas, **negrito**, `código`,
+#                cercas ``` e links http/https. Evite dois "*" soltos na mesma linha (viram itálico).
+#   tela         opcional: rota do Painel para o botão "Abrir"; abrir: rótulo do botão (padrão "Abrir")
+#   contador     opcional: chave de /painel/api/contadores mostrada no cartão (ex.: redigir_aguardando)
+#   ferramentas  nomes de ferramentas da conversa ligadas a esta função
+#   arquivos, docs  caminhos a partir da raiz do repositório
+# tests/test_painel_ferramentas.py confere que toda ferramenta, tela e caminho citado existe.
+
+grupos:
+  - id: conversa
+    grupo: Conversa e memória
+    funcoes:
+      - slug: conversa
+        nome: Conversa com o Alfred
+        resumo: Converse no Painel ou no terminal. Ele usa as ferramentas sozinho e pede a sua aprovação antes das perigosas.
+        tela: /painel/conversa
+        doc: |
+          # O que faz
+          O motor (`conversa.py`) monta o contexto de cada turno: a personalidade de `docs/alfred-system-prompt.md`, o bloco "Agora" (data, agenda e pendências), a memória, trechos dos cofres quando a pergunta pede e o histórico da conversa aberta. Chama o Ollama com tool calling e repete até a resposta final.
+
+          # Como usar
+          - **Painel, aba Conversa:** a resposta chega em stream. Cada ferramenta usada aparece num chip recolhível com argumentos e resultado. **Parar** corta a geração; **Nova conversa**, **Apagar** e a busca nas mensagens ficam na lista à esquerda.
+          - **Ferramenta perigosa:** aparece o cartão **Executar** / **Não**. Sem clique em 5 min, ela é cancelada.
+          - **Terminal:**
+
+          ```bash
+          cd services/inbox
+          ./run.sh conversa "quais pendências tenho?"
+          ./run.sh conversa "e a de e-mail?" --conversa <ID>
+          ```
+
+          # Conversas anteriores
+          Às 04:00 o `alfred-conversas.timer` roda `./run.sh conversa-comprimir`: a conversa parada há um dia vira resumo no cofre (`conversas/`) e o que você disse de novo vira fato na memória. As ferramentas `buscar_conversas` e `ler_conversa` chegam nelas.
+
+          # Configuração
+          `perfis.yml`, seção `conversa:` — `modelo` (vazio = `MODEL_CHAT`), `modelo_ferramentas` e `num_ctx` (16384). As conversas ficam em `VAULT_ALFRED/conversas.db` (SQLite + FTS5).
+        ferramentas: [buscar_conversas, ler_conversa]
+        arquivos: [services/inbox/conversa.py, services/inbox/painel_conversa.py, docs/alfred-system-prompt.md, services/inbox/alfred-conversas.timer]
+        docs: [services/inbox/about.md, docs/planos/chat-alfred.md]
+
+      - slug: voz
+        nome: 'Voz: falar e ouvir'
+        resumo: Dite a mensagem pelo microfone e ouça as respostas do Alfred nas telas de conversa.
+        tela: /painel/conversa
+        doc: |
+          # Falar (microfone)
+          O botão **Falar** grava até 2 minutos. Ao parar, a transcrição aparece no campo de texto. A mensagem não é enviada sozinha: confira e aperte Enter.
+
+          A transcrição é feita nesta máquina (gemma4 no Ollama; se ele falhar, o faster-whisper, quando instalado) e o áudio não é guardado. Sem microfone no navegador, o botão some.
+
+          # Ativar áudio
+          Com **Ativar áudio** ligado, cada resposta do Alfred é lida em voz alta pelo edge-tts, na mesma voz do jornal e das pendências. A escolha fica guardada no navegador.
+
+          **Cuidado:** o edge-tts é um serviço da Microsoft. Com o áudio ligado, o texto da resposta sai da máquina, como já acontece com o jornal e o resumo das pendências.
+
+          # Onde aparece
+          Aba **Conversa**, janela de **Escrita** e a caixinha de conversa que o Pestinha abre.
+        arquivos: [services/inbox/painel_voz.py, services/inbox/painel_web/static/voz.js, services/_shared/lib_audio.py, services/_shared/lib_tts.py]
+        docs: [docs/planos/integracoes-pestinha.md]
+
+      - slug: escrita
+        nome: Escrita ao lado do WordCraft
+        resumo: Selecione um trecho no WordCraft e converse com o Alfred sobre ele ou sobre o documento inteiro.
+        doc: |
+          # Como abrir
+          ```bash
+          services/scripts/alfred-escrita.sh "arquivo.docx"
+          ```
+          Abre o WordCraft com a porta de controle 7981 (se ainda não estiver aberto) e a janela do Alfred à direita do monitor. Um WordCraft já aberto sem a porta precisa ser fechado antes. Atalho no menu do KDE: copie `alfred-escrita.desktop` para `~/.local/share/applications/`.
+
+          # Como funciona
+          - Tudo passa pelo motor da conversa: personalidade, memória, ferramentas e o cartão de aprovação.
+          - Nos turnos com documento aberto o Alfred ganha três ferramentas: ler o documento, comentar e substituir um trecho (esta pede aprovação).
+          - As regras do TG ficam em `escrita_abnt.md` e vão em todo turno. Edite ali quando o orientador mudar algo.
+          - Textos de TGs e artigos de exemplo ficam em `VAULT_ALFRED/TG-Referencias/`: os trechos mais próximos do pedido entram no turno.
+        ferramentas: [documento_ler, documento_comentar, documento_substituir]
+        arquivos: [services/inbox/escrita.py, services/_shared/lib_wordcraft.py, services/inbox/escrita_abnt.md, services/scripts/alfred-escrita.sh, services/inbox/alfred-escrita.desktop]
+        docs: [services/inbox/ESCRITA.md]
+
+      - slug: memoria
+        nome: Memória
+        resumo: Fatos duráveis sobre você e seus contatos, guardados e usados como contexto nas respostas.
+        doc: |
+          # O que faz
+          O Alfred guarda fatos que valem por muito tempo ("é vegetariano", "é diretor de TI da Unimed Bauru") e os devolve como contexto: na conversa, nos rascunhos de resposta e nos e-mails do Redigir.
+
+          # De onde vêm os fatos
+          - **Você pede:** "lembra que…" na conversa (ferramenta `lembrar`).
+          - **Conversas paradas:** às 04:00, o que você disse de novo numa conversa vira fato.
+          - Fato repetido é juntado: texto igual é descartado, e parecido demais passa por uma decisão do LLM (manter o novo, o antigo ou fundir).
+
+          # Terminal
+          ```bash
+          cd services
+          inbox/venv/bin/python -m _shared.lib_memoria listar --sujeito Pedro
+          inbox/venv/bin/python -m _shared.lib_memoria buscar "consulta"
+          inbox/venv/bin/python -m _shared.lib_memoria auditar
+          ```
+          `auditar` apaga fatos vencidos e junta duplicatas.
+        ferramentas: [lembrar, buscar_memoria, listar_memoria]
+        arquivos: [services/_shared/lib_memoria.py]
+        docs: [services/_shared/about.md]
+
+      - slug: cofres
+        nome: Busca nos cofres (RAG local)
+        resumo: Busca nas notas do Obsidian, no cofre do Alfred e no seu, sem nada sair da máquina.
+        doc: |
+          # O que faz
+          O `lib_rag` indexa os dois cofres — `VAULT_ALFRED` (cofre `alfred`, onde o Alfred escreve) e `VAULT_PEDRO` (cofre `pedro`, só leitura) — no SQLite FTS5 e no ChromaDB (embeddings `MODEL_EMBED`). A busca junta os dois resultados.
+
+          # Quando roda
+          O `alfred-rag.timer` reindexa só o que mudou, 5 min depois do login e a cada 30 min.
+
+          # Terminal
+          ```bash
+          services/inbox/venv/bin/python services/scripts/chromadb-indexer.py buscar "proxy reverso"
+          services/inbox/venv/bin/python services/scripts/chromadb-indexer.py indexar --tudo
+          ```
+          `--tudo` reembeda tudo. Use depois de editar muito no Obsidian.
+
+          # O que o Alfred grava
+          `salvar_nota` (pede aprovação) grava no cofre do Alfred, com frontmatter `title`, `date`, `tags` e `topics`. Pastas: `research/` (pesquisas), `decisions/` (decisões técnicas) e `logs/` (erros resolvidos e resumos).
+        ferramentas: [buscar_cofre, ler_nota, listar_cofre, salvar_nota]
+        arquivos: [services/_shared/lib_rag.py, services/_shared/lib_db.py, services/scripts/chromadb-indexer.py, services/scripts/alfred-rag.timer]
+        docs: [services/_shared/about.md]
+
+  - id: mensagens
+    grupo: E-mail e WhatsApp
+    funcoes:
+      - slug: email
+        nome: 'E-mail: jornal e "vou / não vou"'
+        resumo: Lê o Thunderbird, monta o jornal do dia com as newsletters e pergunta se você vai aos eventos.
+        doc: |
+          # O que faz
+          Lê as cópias offline do Thunderbird (sem senha e sem rede) e classifica cada e-mail com o Ollama: notícia, evento, contato, transacional, promoção, pessoal ou outro.
+          - **Notícia:** as newsletters viram a edição do dia do jornal (`.md` + `.mp3`) em `VAULT_NOTICIAS/jornal/`.
+          - **Evento e contato profissional:** viram uma pendência com texto explicativo e um recado de voz em que o Alfred pergunta se você vai. "Vou" cria uma tarefa e põe o evento na agenda.
+
+          # Quando roda
+          `alfred-inbox.timer`: 07:30 e 18:30.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh                    # ciclo completo
+          ./run.sh scan               # só classifica e mostra (nada gravado)
+          ./run.sh scan --desde 400   # janela maior, em horas
+          ./run.sh jornal             # só a edição do dia
+          ```
+
+          # Cuidados
+          O Thunderbird só baixa e-mail enquanto está aberto. Em cada conta, ligue "Manter mensagens desta conta neste computador".
+        ferramentas: [jornal_de_hoje, emails_recentes, ler_email]
+        arquivos: [services/inbox/core.py, services/_shared/lib_mail.py, services/inbox/alfred-inbox.timer]
+        docs: [services/inbox/about.md, services/inbox/AUDITORIA-EMAIL.md]
+
+      - slug: whatsapp
+        nome: WhatsApp
+        resumo: Mensagens e áudios recebidos viram um resumo com a pergunta "o que você quer responder?".
+        tela: /painel/pendencias?tipo=whatsapp
+        abrir: Pendências do WhatsApp
+        doc: |
+          # Como funciona
+          1. A Evolution API (container, número pareado por QR code) entrega cada mensagem por webhook.
+          2. Áudio é transcrito nesta máquina (gemma4 no Ollama).
+          3. A mensagem é classificada (profissional, pessoal, grupo, automático ou spam) e o Alfred vê se ela pede resposta.
+          4. O Alfred espera uns 10 min (`atraso_minutos`): se você responder pelo celular nesse tempo, nada é gerado.
+          5. Contato relevante vira pendência com resumo, áudio e rascunho de resposta. O aviso chega no WhatsApp e no PC, com **Enviar**, **Não enviar**, **Agenda** e **Ouvir**.
+          6. A sua resposta vai para o contato: citando a mensagem do Alfred, por **Autorizar envio** no Painel, pela conversa ou pelo terminal.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh whatsapp status
+          ./run.sh whatsapp qrcode     # parear de novo
+          ./run.sh whatsapp fila       # mensagens esperando os 10 min
+          ./run.sh responder-texto <id> "Carlos, mando até quinta."
+          ```
+
+          # Modo simulado
+          Sem `EVOLUTION_URL` no `.env`, ou com `WHATSAPP_DRY_RUN=true`, nenhuma mensagem sai da máquina: os envios ficam em `logs/whatsapp_enviados.jsonl`.
+
+          # Histórico
+          As conversas ficam 90 dias em `VAULT_ALFRED/.alfred/alfred.db` (busca FTS5). As 5 últimas mensagens do contato entram no rascunho.
+        ferramentas: [buscar_mensagens, conversa_com]
+        arquivos: [services/inbox/whatsapp.py, services/_shared/lib_whatsapp.py, services/inbox/n8n]
+        docs: [services/inbox/about.md]
+
+      - slug: whatsapp-sessoes
+        nome: Sessões do WhatsApp
+        resumo: Conecte cada número por QR code e escolha qual deles é o assistente (o número do Alfred).
+        tela: /painel/whatsapp
+        abrir: Conectar WhatsApps
+        doc: |
+          # O que é
+          Cada conta de `perfis.yml`, seção `whatsapp:`, é uma sessão: um número pareado numa instância própria da Evolution API. A tela lista as sessões, mostra o QR code da escolhida e grava o papel de cada uma.
+
+          # Papéis
+          - **Pessoal:** o seu número. Mensagens recebidas viram pendência com resumo e rascunho.
+          - **Assistente:** o número do Alfred. Só uma sessão por vez. O que você manda para ele (texto ou áudio) é um pedido direto: ele usa as ferramentas e responde ali mesmo. Agenda, tarefas e notas rodam sem perguntar; comando no computador e resposta a contato pedem o seu "sim". Outra pessoa recebe uma saudação. Se perguntar quem é o Alfred ou o que você faz, ele apresenta você em poucas frases (texto de `assistente.apresentacao`), sem bater papo nem falar por você. Se a conversa for séria, recebe a previsão do seu retorno e o seu site, e você é avisado no WhatsApp e no computador. Toda mensagem dele abre com "🎩 Alfred:".
+
+          O papel padrão vem de `papel:` em `perfis.yml`. A escolha feita na tela fica em `logs/whatsapp_sessoes.json` e vale mais.
+
+          # Conectar
+          Na tela, escolha **Parear esta sessão** e escaneie o QR code em WhatsApp, Aparelhos conectados, Conectar aparelho. O estado de cada sessão aparece em **Sistema**.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh whatsapp qrcode --sessao alfred_whatsapp
+          ./run.sh whatsapp webhook http://172.17.0.1:7073/whatsapp/webhook-async --sessao alfred_whatsapp
+          ```
+        arquivos: [services/inbox/whatsapp.py, services/_shared/lib_whatsapp.py, services/_shared/perfis.yml, services/_shared/prompts/whatsapp_assistente.md]
+        docs: [services/inbox/about.md]
+
+      - slug: pendencias
+        nome: Pendências
+        resumo: 'Tudo o que espera a sua decisão: convites de e-mail e mensagens de WhatsApp.'
+        tela: /painel/pendencias
+        contador: aguardando
+        doc: |
+          # O que é
+          Cada pendência fica em `VAULT_ALFRED/pendencias/pendencias.yml` com status `aguardando` até você responder. E-mail: **Vou** ou **Não vou**. WhatsApp: o texto que vai ao contato, **Não enviar** ou **Agendar**.
+
+          # Por onde responder
+          Todos os caminhos chamam as mesmas funções. A primeira resposta vale; as outras recebem "já resolvida".
+          - **Painel, aba Pendências:** rascunho do Alfred editável, áudio e histórico.
+          - **Notificação no PC:** botões que esperam o clique.
+          - **Conversa:** "responde pro Carlos que…" (ferramenta `responder_pendencia`, pede aprovação).
+          - **WhatsApp:** responda citando o resumo do Alfred.
+          - **Terminal:**
+
+          ```bash
+          cd services/inbox
+          ./run.sh pendencias
+          ./run.sh perguntar --ouvir     # uma a uma, no terminal
+          ./run.sh ver <id>
+          ./run.sh responder <id> vou
+          ./run.sh responder <id> nao-vou --nota "conflito com a Fatec"
+          ```
+        ferramentas: [listar_pendencias, ver_pendencia, responder_pendencia]
+        arquivos: [services/inbox/core.py, services/inbox/painel.py, services/inbox/notificar_dbus.py]
+        docs: [services/inbox/about.md]
+
+      - slug: redigir
+        nome: Redigir e-mail
+        resumo: Botão no Thunderbird que escreve o e-mail com as suas notas. Evento e entrevista esperam a sua liberação.
+        tela: /painel/redigir
+        abrir: Abrir a fila
+        contador: redigir_aguardando
+        doc: |
+          # Como usar
+          Na janela de composição do Thunderbird, botão **Redigir e-mail com o Alfred** (ao lado de **Anexar**). Escreva o assunto e, se quiser, algumas notas no corpo: o Alfred troca as notas pelo texto pronto e mantém citação e assinatura. Quem envia é você.
+
+          Com texto selecionado, o botão vira **Reformular com o Alfred**: só o trecho é trocado (Ctrl+Z desfaz).
+
+          # Como decide
+          1. A extensão lê destinatários, assunto, notas, a mensagem citada e os eventos dos próximos 90 dias do calendário.
+          2. O Laya define o contexto: evento, entrevista, candidatura, trabalho, pessoal ou outro.
+          3. Em evento ou entrevista, o Alfred acha a data citada e compara com o calendário e com o `agenda.yml`.
+          4. O LLM escreve com as notas, a memória, o seu cofre e a agenda.
+
+          # A fila
+          E-mail de **evento** ou **entrevista** não vai direto para a janela: espera em **Abrir a fila**, com o aviso de choque de horário em vermelho. **Liberar para o Thunderbird** manda o texto (editado, se quiser); **Recusar** descarta. Com choque de horário, o rascunho nunca confirma presença.
+
+          # Instalar
+          ```bash
+          cd services/inbox/thunderbird-ext-redigir && rm -f ../alfred-redigir.xpi && zip -r ../alfred-redigir.xpi manifest.json *.js *.svg *.html experiment
+          ```
+          No Thunderbird: Complementos, engrenagem, **Instalar de arquivo**, `alfred-redigir.xpi`. Nas opções da extensão, informe o `SHELL_EXECUTOR_TOKEN`.
+        arquivos: [services/inbox/redigir.py, services/inbox/painel_redigir.py, services/inbox/thunderbird-ext-redigir]
+        docs: [services/inbox/REDIGIR.md]
+
+      - slug: limpeza
+        nome: Limpeza da caixa
+        resumo: Depois do podcast, o Alfred propõe mandar para a Lixeira os e-mails que não servem mais. Nada sai sem aprovação.
+        tela: /painel/limpeza
+        contador: limpeza_aguardando
+        doc: |
+          # Como funciona
+          - Depois que o podcast sai, o Alfred propõe um lote ("Posso apagar estes N e-mails?") com o motivo de cada um.
+          - Você aprova, aprova e limpa, ou recusa: no Painel, no terminal ou na conversa (`responder_limpeza`, pede aprovação).
+          - A extensão **Alfred — limpeza da caixa** do Thunderbird move os e-mails aprovados para a **Lixeira da conta**. Nada é apagado de forma permanente, e a extensão só tem permissão para mover.
+          - "Executar de verdade" vem desligado na extensão (ela só simula). **Limpar** no Painel move de verdade só aquele lote.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh limpeza candidatos    # só mostra, nada gravado
+          ./run.sh limpeza propor
+          ./run.sh limpeza lotes
+          ./run.sh limpeza aprovar <id>
+          ./run.sh limpeza recusar <id>
+          ```
+        ferramentas: [listar_limpezas, responder_limpeza]
+        arquivos: [services/inbox/limpeza.py, services/inbox/thunderbird-ext]
+        docs: [services/inbox/LIMPEZA.md]
+
+      - slug: blog
+        nome: Blog (Blogspot)
+        resumo: Briefings, jornal e podcast publicados no Blogspot por e-mail, pela extensão do Thunderbird.
+        doc: |
+          # Como funciona
+          Todo `.md` novo em `VAULT_ALFRED/briefings/`, `VAULT_NOTICIAS/jornal/` e `VAULT_NOTICIAS/podcast/episodios/` nasce com `Blogspot: none` no frontmatter. A cada 10 min a extensão **Alfred — blog** busca a fila na API, envia cada post para o endereço "Postar usando e-mail" do Blogger, com o `.mp3` anexado, e o Alfred troca a propriedade por `Blogspot: postado <data>`.
+          - O HTML do post sai do mesmo markdown escapado do Painel: nenhum HTML do LLM ou da newsletter chega à página pública.
+          - A fila sai do mais antigo para o mais novo.
+
+          # Configuração
+          `BLOGGER_EMAIL` no `.env` (fica fora do repositório). **Enviar de verdade** vem desligado na extensão; **Verificar agora** mostra o que iria.
+
+          # Instalar
+          ```bash
+          cd services/inbox/thunderbird-ext-blog && zip -r ../alfred-blog.xpi manifest.json *.js options.html
+          ```
+
+          # Limite
+          O Blogger por e-mail não transforma o `.mp3` anexado num player. Hospedar o áudio fora é o próximo passo (README, Poder 1c).
+        arquivos: [services/inbox/blog.py, services/inbox/thunderbird-ext-blog]
+        docs: [services/inbox/BLOG.md]
+
+  - id: agenda
+    grupo: Agenda e compromissos
+    funcoes:
+      - slug: agenda
+        nome: Agenda e tarefas
+        resumo: Compromissos achados em mensagens e e-mails vão para o calendário do Thunderbird e chegam ao celular.
+        tela: /painel/agenda
+        doc: |
+          # De onde vêm os compromissos
+          - WhatsApp de um contato ("fechado: reunião quinta 14h").
+          - O que você escreve para você mesmo na conversa "Você" do WhatsApp ("me lembra de pagar o boleto sexta").
+          - "Vou" num convite de e-mail com data.
+          - Pedido na conversa (`criar_compromisso`, pede aprovação) e as suas promessas.
+
+          # Caminho até o celular
+          1. O item entra em `VAULT_ALFRED/agenda/agenda.yml` (tarefa ou lembrete também em `tasks.yml`).
+          2. A cada 2 min a extensão **Alfred — agenda** do Thunderbird cria o evento, com alarme 30 min antes, no calendário "Agenda" (Google via CalDAV).
+          3. Notificação no PC com **Ok**, **Mais detalhes** (abre o item no Painel) e **Desfazer**.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh agenda listar
+          ./run.sh agenda anotar "dentista sexta 10h"
+          ./run.sh agenda desfazer <id>
+          ./run.sh agenda feito <id>
+          ```
+
+          # Fechamento da semana
+          Domingo, depois do podcast das 19:00, o Alfred grava o relatório da semana em `VAULT_ALFRED/agenda/relatorios/` e tira do `agenda.yml` o que foi feito, desfeito ou cancelado. Os eventos continuam no calendário do Google.
+
+          # Tarefas
+          As tarefas ficam em `VAULT_ALFRED/tasks.yml`, o mesmo arquivo do "vou" e da agenda.
+        ferramentas: [ver_agenda, criar_compromisso, adicionar_tarefa, listar_tarefas, completar_tarefa, tarefas_vencidas]
+        arquivos: [services/inbox/agenda.py, services/inbox/agenda_semanal.py, services/inbox/thunderbird-ext-agenda]
+        docs: [services/inbox/about.md]
+
+      - slug: promessas
+        nome: Promessas
+        resumo: O que você disse que ia fazer ("sexta te mando o orçamento") vira tarefa, e o Alfred confere se você cumpriu.
+        doc: |
+          # Como funciona
+          - No fim de cada ciclo do e-mail (07:30 e 18:30), o Alfred lê o que você **enviou**: WhatsApp e a pasta Enviados do Thunderbird.
+          - Compromisso em primeira pessoa vira promessa aberta e tarefa na agenda no prazo. Sem data, o prazo é 3 dias depois da fala.
+          - Prazo vencido: se você mandou mensagem ao mesmo contato depois, o LLM confere se cumpriu. Se não, entra "Atrasado: o quê (quem)" na agenda do dia seguinte, às 09:00.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh promessas               # abertas e atrasadas
+          ./run.sh promessas varrer
+          ./run.sh promessas feita <id>
+          ./run.sh promessas descartar <id>
+          ```
+        arquivos: [services/inbox/promessas.py]
+        docs: [services/inbox/about.md]
+
+  - id: noticias
+    grupo: Notícias e pesquisa
+    funcoes:
+      - slug: briefing
+        nome: Briefings de notícias
+        resumo: Resumo das notícias de tecnologia e de mercado, por RSS e SearXNG, em texto e áudio.
+        doc: |
+          # O que faz
+          Coleta notícias de fontes RSS e do SearXNG, agrupa por tema, escreve o briefing com o Ollama e gera o áudio com o edge-tts. Guarda em `VAULT_ALFRED/briefings/`. O que já saiu nas últimas 24 h aparece como continuação.
+
+          # Quando roda
+          - `alfred-briefing-matinal.timer`: 07:00 (`matinal_tech`).
+          - `alfred-briefing-vespertino.timer`: 18:00 (`vespertino_mercado`). Desabilitado de propósito na máquina original.
+
+          # Terminal
+          ```bash
+          cd services/briefing
+          ./run.sh matinal_tech
+          ./run.sh vespertino_mercado
+          ./run.sh "fusão nuclear"     # tema livre
+          ```
+
+          # Na conversa
+          `gerar_briefing` faz um novo; `ver_briefings` e `ler_briefing` leem os já gerados; `resumo_do_dia` resume o período sem IA: briefings, pesquisas, decisões, tarefas e memórias que vencem.
+        ferramentas: [gerar_briefing, ver_briefings, ler_briefing, resumo_do_dia]
+        arquivos: [services/briefing/tech-briefing.py, services/briefing/alfred-briefing-matinal.timer, services/briefing/alfred-briefing-vespertino.timer]
+        docs: [services/briefing/about.md]
+
+      - slug: podcast
+        nome: Podcast "Resumo do Alfred"
+        resumo: A cada 3 dias, um episódio de uns 10 min em duas vozes, com os temas que mais se repetiram nas notícias.
+        doc: |
+          # O que faz
+          Relê as edições do jornal e os briefings dos últimos 3 dias, escolhe os temas que mais apareceram e gera um diálogo: o Alfred conduz e a Lúcia faz as perguntas do ouvinte (edge-tts + ffmpeg). Sai em `VAULT_NOTICIAS/podcast/episodios/`, com um manifesto dos e-mails usados. É esse manifesto que alimenta a Limpeza.
+
+          # Quando roda
+          `alfred-semanal.timer`, todo dia às 19:00 com `--se-devido`: só gera se o último episódio tiver 3 dias ou mais (`perfis.yml`, `podcast.intervalo_dias`).
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh podcast               # gera agora
+          ./run.sh podcast --dry-run     # só mostra os temas
+          ./run.sh podcast --dias 7
+          ./run.sh podcast --sem-audio
+          ```
+        arquivos: [services/inbox/semanal.py, services/inbox/alfred-semanal.timer]
+        docs: [services/inbox/about.md]
+
+      - slug: pesquisar
+        nome: Pesquisa
+        resumo: Pesquisa na web, rápida ou profunda, pelo Researcher. Fica salva no cofre e pode ir ao OpenNotebook.
+        tela: /painel/pesquisar
+        doc: |
+          # Modos
+          - **Rápido:** síntese com os trechos que o SearXNG devolve. Leva uns 40 a 50 s e abre o resultado.
+          - **Profundo:** em segundo plano. Divide o tema em subperguntas, lê as páginas, faz notas por fonte e escreve um relatório com citações numeradas. A tela de andamento se atualiza sozinha.
+
+          Cada pesquisa fica em `VAULT_ALFRED/research/` (`index.md`, `synthesis.md` e `sources.md`).
+
+          # OpenNotebook
+          **Abrir um notebook sobre isso** leva fontes e relatório ao OpenNotebook local (127.0.0.1:8502). **Buscar mais fontes** faz outra pesquisa direto para um notebook que já existe.
+
+          # Na conversa
+          `pesquisar` e `andamento_pesquisa` usam o Researcher; `buscar_web` vai direto ao SearXNG; `buscar_artigos` procura artigos acadêmicos (OpenAlex e Semantic Scholar); `ler_pagina` lê uma página pública.
+        ferramentas: [pesquisar, andamento_pesquisa, buscar_web, buscar_artigos, ler_pagina]
+        arquivos: [services/inbox/pesquisa.py, services/researcher/main.py]
+        docs: [services/researcher/about.md, services/inbox/about.md]
+
+  - id: sistema
+    grupo: Sistema e manutenção
+    funcoes:
+      - slug: sistema
+        nome: Estado do sistema
+        resumo: 'Se cada peça do Alfred está no ar: APIs, Ollama, containers, WhatsApp e próximos timers.'
+        tela: /painel/sistema
+        doc: |
+          # O que mostra
+          - Alfred ligado ou desligado (modo jogo) e pendências aguardando.
+          - WhatsApp: conexão de cada sessão com o papel, envios simulados ou reais e a fila de espera. Parear fica em Ferramentas, **Sessões do WhatsApp**.
+          - APIs do inbox (7073), do Shell Executor (7071) e do Researcher (7072), e o Ollama.
+          - Containers da Evolution e do banco dela, do SearXNG, do ChromaDB e do N8N.
+          - Próximos timers do Alfred.
+
+          Cada item é consultado em paralelo, com timeout curto: o que falhar aparece "Indisponível" sem quebrar a tela. A tela se atualiza a cada 15 s.
+
+          # Terminal
+          ```bash
+          systemctl --user status alfred-inbox-api alfred-executor alfred-researcher
+          systemctl --user list-timers 'alfred-*'
+          curl -s http://localhost:7073/health
+          ```
+        arquivos: [services/inbox/painel.py]
+        docs: [services/inbox/about.md, README.md]
+
+      - slug: comandos
+        nome: Comandos no computador
+        resumo: O Alfred roda comandos no computador por uma lista fechada de comandos permitidos.
+        doc: |
+          # Como funciona
+          O Shell Executor (porta 7071, só 127.0.0.1, Bearer `SHELL_EXECUTOR_TOKEN`) executa só comandos que começam por um dos prefixos de `ALLOWED_PREFIXES`. O resto volta "Comando não permitido".
+          - `executar_comando` pede a sua aprovação na conversa a cada uso.
+          - `relatorio_sistema`, `status_disco` e `status_gpu` só leem (CPU, RAM, disco, GPU e containers) e rodam direto.
+
+          # Liberar um comando novo
+          Edite `ALLOWED_PREFIXES` em `services/shell-executor/main.py` e reinicie:
+          ```bash
+          systemctl --user restart alfred-executor     # máquina original: sudo systemctl restart alfred-executor
+          ```
+        ferramentas: [executar_comando, relatorio_sistema, status_disco, status_gpu]
+        arquivos: [services/shell-executor/main.py]
+        docs: [services/shell-executor/about.md]
+
+      - slug: vigia
+        nome: Vigia
+        resumo: A cada 10 min confere API, containers, WhatsApp e Thunderbird, e conserta o que dá.
+        doc: |
+          # O que confere
+          - **API do inbox:** fora do ar, reinicia a `alfred-inbox-api`.
+          - **Evolution e o banco dela:** containers parados voltam com `docker start`.
+          - **WhatsApp desconectado:** notificação com **Mostrar QR code** para parear de novo (no máximo a cada 3 h). Avisa quando reconectar.
+          - **Thunderbird aberto:** só informa.
+          - **Áudios de resumo do WhatsApp:** apaga os `.mp3` com mais de 2 dias (a cópia fica no WhatsApp).
+          - **Agenda:** avisa se um compromisso espera a extensão há mais de 30 min.
+
+          # Quando roda
+          `alfred-vigia.timer`: 2 min depois do login e a cada 10 min.
+
+          # Terminal
+          ```bash
+          cd services/inbox && ./run.sh vigia
+          ```
+        arquivos: [services/inbox/vigia.py, services/inbox/alfred-vigia.timer]
+        docs: [services/inbox/about.md]
+
+      - slug: modo-jogo
+        nome: Liga / desliga (modo jogo)
+        resumo: Um clique desliga o Alfred e libera a GPU; outro clique religa tudo.
+        doc: |
+          # Desligar faz
+          - Para os timers e o que estiver rodando, a API (o Painel não abre) e a Evolution (WhatsApp).
+          - Fecha as notificações que esperam clique. As pendências continuam aguardando.
+          - Tira os modelos do Ollama da VRAM.
+
+          # Religar faz
+          Sobe a Evolution e a API, religa só os timers habilitados e reabre as notificações.
+
+          # Como usar
+          Atalho na área de trabalho **"Alfred: ligado (clique para modo jogo)"**, ou:
+          ```bash
+          services/scripts/alfred-switch.sh           # alterna
+          services/scripts/alfred-switch.sh off
+          services/scripts/alfred-switch.sh on
+          services/scripts/alfred-switch.sh status
+          ```
+          O estado sobrevive a reinicializações (`logs/alfred_desligado`). Comandos manuais no terminal continuam funcionando.
+        arquivos: [services/scripts/alfred-switch.sh]
+        docs: [README.md]
+
+      - slug: backup
+        nome: Backup e restore
+        resumo: Cópia datada dos logs, do cofre do Alfred, dos bancos SQLite e do perfis.yml, todo domingo.
+        doc: |
+          # O que entra
+          `logs/`, o `VAULT_ALFRED` inteiro, os bancos SQLite (cópia consistente mesmo com a API gravando) e `services/_shared/perfis.yml`. **Não entram** o `.env` (segredos: guarde à parte) nem `data/` (volumes do Docker).
+
+          # Quando roda
+          `alfred-backup.timer`: domingo, 13:00. Ficam os 8 mais novos (`--manter`).
+
+          # Terminal
+          ```bash
+          services/inbox/venv/bin/python services/scripts/backup.py criar
+          services/inbox/venv/bin/python services/scripts/backup.py criar --destino /media/hd/alfred
+          services/inbox/venv/bin/python services/scripts/backup.py restaurar ARQUIVO.tar.gz --dry-run
+          ```
+          Pare o Alfred antes de restaurar (`alfred-switch.sh off`). O restore pede "sim".
+
+          # Destino
+          `--destino`, `ALFRED_BACKUP_DIR` no `.env` ou `~/.local/share/alfred/backups`. O arquivo nasce com permissão 0600, porque tem e-mails e conversas.
+        arquivos: [services/scripts/backup.py, services/scripts/alfred-backup.timer]
+        docs: [README.md]
+
+      - slug: instalar
+        nome: Instalação
+        resumo: 'Um comando prepara tudo sem sudo: .env, pastas, ambientes Python, units do systemd e containers.'
+        doc: |
+          # Como usar
+          ```bash
+          services/scripts/instalar.sh               # pode rodar de novo: não sobrescreve nada
+          services/scripts/instalar.sh --modelos     # também baixa os modelos do .env
+          services/scripts/instalar.sh --verificar   # só os pré-requisitos
+          ```
+
+          # O que faz
+          1. Confere os pré-requisitos e o firewall (ufw).
+          2. Cria o `.env` só se ele não existir, com segredos novos.
+          3. Cria as pastas, o `config/searxng/settings.yml` e o ambiente Python de cada serviço.
+          4. Gera as units de usuário do systemd e habilita API, executor, researcher e timers.
+          5. Sobe os containers (sem o N8N). Sai com código 1 se algo ficou faltando.
+
+          Outras opções: `--sem-containers`, `--sem-units` e `--forcar-units`.
+        arquivos: [services/scripts/instalar.sh, .env.example]
+        docs: [README.md]
+
+      - slug: pestinha
+        nome: Pestinha e fila de atividade
+        resumo: Pet de tela que mostra o que o Alfred está fazendo, a fila e as pendências novas.
+        tela: /painel/integracoes
+        doc: |
+          # Como funciona
+          O Alfred publica em `logs/atividade/` o que está fazendo agora, a fila e os avisos. O Pestinha (projeto à parte, GPL-3.0, em `~/dev/pestinha`) lê essa pasta e mostra um painel com a fila, um balão com o andamento e o pet encenando o trabalho. Tudo por arquivo local, sem rede.
+          - **Fila:** o que você pediu pelo "+" do pet ou pelo terminal. Roda uma rotina por vez.
+          - **Atalhos:** o pet abre o Painel e a Conversa.
+
+          # No Painel
+          A aba **Integrações** instala, atualiza, abre e fecha o pet, e liga a abertura no login.
+
+          # Terminal
+          ```bash
+          cd services/inbox
+          ./run.sh integracoes estado
+          ./run.sh fila                  # o que o Alfred faz agora e a fila
+          ```
+
+          # Requisito
+          `xprintidle` (`sudo apt install xprintidle`). Sem ele o pet acha que você está sempre ativo.
+        arquivos: [services/inbox/integracoes.py, services/_shared/lib_atividade.py, services/scripts/alfred-pestinha.service]
+        docs: [services/inbox/PESTINHA.md, docs/planos/integracoes-pestinha.md]
+
+      - slug: laya
+        nome: Laya (decisões rápidas)
+        resumo: Classificador local que responde perguntas de múltipla escolha em milissegundos, sem gerar texto.
+        doc: |
+          # O que faz
+          Serve o modelo Laya (ModernBERT, Apache-2.0) em `127.0.0.1:7074`. Responde perguntas tipadas (`choice`, `score` e `noul`) sobre um texto, numa só passada. Regra do projeto: **o Laya decide, o LLM escreve**.
+
+          # Onde é usado
+          - **Redigir:** decide o contexto do e-mail (evento, entrevista, candidatura, trabalho, pessoal ou outro).
+          - Fora do ar, com erro ou com confiança abaixo de `LAYA_CONFIANCA_MINIMA` (0,7), quem chama segue pelo LLM.
+
+          # Terminal
+          ```bash
+          systemctl --user status alfred-laya
+          curl -s localhost:7074/health
+          ```
+
+          # Configuração
+          No `.env`: `PORT_LAYA`, `LAYA_DEVICE` (padrão `cpu`), `LAYA_THREADS` e `LAYA_DESLIGADO=true` (força o LLM).
+        arquivos: [services/laya, services/_shared/lib_laya.py]
+        docs: [services/laya/about.md]
+
+      - slug: api
+        nome: API HTTP e N8N
+        resumo: Rotas com Bearer para o N8N, as extensões do Thunderbird e a Evolution API.
+        doc: |
+          # O que é
+          O `main.py` sobe o FastAPI na porta 7073 (`PORT_INBOX`). As rotas fora do Painel pedem `Authorization: Bearer` com o `SHELL_EXECUTOR_TOKEN`. O Painel usa sessão por cookie e só aceita 127.0.0.1.
+
+          # Quem chama
+          - **N8N** (opcional): ciclo, jornal, pendências e a espera da resposta. Workflows importáveis em `services/inbox/n8n/`.
+          - **Extensões do Thunderbird:** agenda, limpeza, blog e redigir buscam o trabalho na API.
+          - **Evolution API:** `POST /whatsapp/webhook-async`, sem N8N.
+
+          # Rotas principais
+          - `GET /health`
+          - `POST /ciclo`, `POST /scan`, `POST /jornal` e `GET /jornal/ultimo`
+          - `GET /pendencias`, `POST /pendencias/{id}/responder` e `POST /pendencias/{id}/responder-texto`
+          - `POST /semanal` (podcast)
+          - `GET /whatsapp/status`
+
+          Do container do N8N, o host é `http://172.17.0.1:7073`. Lista completa em `/docs` e no `about.md` do inbox.
+        arquivos: [services/inbox/main.py, services/inbox/n8n]
+        docs: [services/inbox/about.md]

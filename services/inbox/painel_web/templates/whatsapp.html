@@ -1,6 +1,7 @@
 {#
-  Pareamento do WhatsApp (/painel/whatsapp). Vars de painel.tela_whatsapp(): qr (whatsapp.obter_qrcode()),
-  qr_img (data-URI do PNG ou ""), wa {tom, rotulo, detalhe}, instancia.
+  Sessões e pareamento do WhatsApp (/painel/whatsapp[?sessao=NOME]). Vars de painel.tela_whatsapp():
+  sessoes [{nome, instancia, papel, numero, wa {tom, rotulo, detalhe}, atual}], e, da sessão escolhida:
+  sessao_atual (nome ou ""), qr (whatsapp.obter_qrcode()), qr_img (data-URI do PNG ou ""), wa {tom, rotulo, detalhe}, instancia.
   Sem conexão a página recarrega a cada 30 s: o QR da Evolution expira em ~40 s.
 #}
 {% extends "base.html" %}
@@ -10,6 +11,25 @@
 {% block conteudo %}
 {{ m.cabecalho("Conectar o WhatsApp", "Instância " ~ instancia ~ " na Evolution API", voltar=("/painel/sistema", "Sistema")) }}
 <div class="pilha">
+  {%- if sessoes|length > 1 %}
+  <section class="cartao sistema-grupo" aria-labelledby="wa-sessoes">
+    <h2 class="cartao__titulo" id="wa-sessoes">Sessões</h2>
+    <p class="suave">Pessoal: o seu número, as mensagens viram pendência. Assistente: o número do Alfred, que anota os seus pedidos na agenda e recepciona quem escrever. Só uma sessão é a assistente.</p>
+    {%- for s in sessoes %}
+    <form class="lote__form" data-acao="/painel/api/whatsapp/papel" data-apos-sucesso="recarregar">
+      <div class="selos">{{ m.selo(s.wa.tom, s.wa.rotulo) }}</div>
+      <p><strong>{{ s.nome }}</strong> <span class="pequeno suave">instância {{ s.instancia }}{% if s.numero %} · +{{ s.numero }}{% endif %}</span></p>
+      <input type="hidden" name="sessao" value="{{ s.nome }}">
+      {{ m.selecao("papel", "Papel", [("pessoal", "Pessoal"), ("assistente", "Assistente")], valor=s.papel, id="papel-" ~ s.nome) }}
+      <div class="acoes">
+        {{ m.botao("Gravar papel", pequeno=true) }}
+        {%- if not s.atual %}{{ m.botao("Parear esta sessão", pequeno=true, href="/painel/whatsapp?sessao=" ~ s.nome|urlencode) }}{% endif %}
+      </div>
+      {{ m.resultado() }}
+    </form>
+    {%- endfor %}
+  </section>
+  {%- endif %}
   <section class="cartao">
     <div class="selos">{{ m.selo(wa.tom, wa.rotulo) }}</div>
     {%- if wa.detalhe %}<p class="pequeno suave">{{ wa.detalhe }}</p>{% endif %}
@@ -29,7 +49,7 @@
     {%- if qr.pairingCode %}<p>Código de pareamento: <strong>{{ qr.pairingCode }}</strong></p>{% endif %}
     <p>No celular: WhatsApp → Aparelhos conectados → Conectar aparelho, e escaneie.</p>
     <p class="pequeno suave">O QR expira em cerca de 40 s; a página gera um novo a cada 30 s.</p>
-    {{ m.botao("Gerar novo QR agora", href="/painel/whatsapp") }}
+    {{ m.botao("Gerar novo QR agora", href="/painel/whatsapp" ~ (("?sessao=" ~ sessao_atual|urlencode) if sessao_atual else "")) }}
   </section>
   {%- endif %}
 </div>

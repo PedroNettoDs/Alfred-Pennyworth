@@ -56,6 +56,7 @@ load_env(override=False)
 
 import core  # noqa: E402
 import whatsapp  # noqa: E402
+import promessas  # noqa: E402
 import semanal  # noqa: E402
 from _shared import lib_db  # noqa: E402
 from _shared import lib_atividade  # noqa: E402
@@ -101,6 +102,26 @@ def _anterior_ao_inicio(payload: dict) -> bool:
         return False
 
 
+def _recados_para_o_pet() -> list[dict]:
+    """Recados do número do Alfred no formato do estado.json: o texto é o título da pendência (o mesmo do aviso)
+    e o link abre o detalhe dela no Painel; `detalhe` é o que o post-it mostra ao clicar (quem, quando e o recado)."""
+    painel = lib_atividade.links()["painel"]
+    return [{"id": r["id"], "texto": r["titulo"], "link": f"{painel}/pendencias/{r['id']}",
+             "detalhe": "\n".join(t for t in (r["contato"], r["quando"][:16].replace("T", " "), r["texto"]) if t)}
+            for r in whatsapp.recados()]
+
+
+def _recado_feito(pid: str) -> None:
+    """O "Feito" com "Sim" do post-it: fecha a pendência sem responder ao contato (o mesmo "ignorar" do Painel)."""
+    whatsapp.responder_texto(pid, "ignorar", True, "via pestinha")
+
+
+def _negligencia_para_o_pet() -> Optional[dict]:
+    """O que Pedro deixou vencer (promessas.negligencia) no formato do estado.json; o link abre a agenda no Painel."""
+    n = promessas.negligencia()
+    return n and {**n, "link": f"{lib_atividade.links()['painel']}/agenda"}
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global INICIO_API
@@ -108,6 +129,9 @@ async def lifespan(_app: FastAPI):
     parar = threading.Event()
     threading.Thread(target=_laco_fila_whatsapp, args=(parar,), name="whatsapp-fila", daemon=True).start()
     if os.getenv("ALFRED_AUTOMACAO") == "1":   # só a API das units despacha a fila; testes e `run.sh serve` à mão, não
+        lib_atividade.FONTE_RECADOS = _recados_para_o_pet
+        lib_atividade.FONTE_NEGLIGENCIA = _negligencia_para_o_pet
+        lib_atividade.AO_RECADO_FEITO = _recado_feito
         threading.Thread(target=lib_atividade.laco, args=(parar,), name="atividade", daemon=True).start()
     yield
     parar.set()   # se estiver no meio de um item, ele continua na fila e sai na próxima subida
@@ -307,9 +331,8 @@ def pendencia_audio(pid: str, request: Request, authorization: Optional[str] = H
     if not (TOKEN and authorization == f"Bearer {TOKEN}") and not (painel and painel.sessao_valida(request)):
         check_auth(authorization)
     p = core.obter_pendencia(pid)
-    mp3 = (p or {}).get("arquivos", {}).get("mp3")
-    path = core.vault() / mp3 if mp3 else None
-    if not path or not path.exists():
+    path = core.audio_da_pendencia(p) if p else None   # gerado na hora, do roteiro guardado
+    if not path:
         raise HTTPException(status_code=404, detail="Sem áudio")
     return FileResponse(str(path), media_type="audio/mpeg", filename=path.name)
 
@@ -675,6 +698,7 @@ class RedigirRequest(BaseModel):
 @app.post("/redigir")
 def redigir_post(req: RedigirRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
+    lib_atividade.notado("redigir")
     if not (req.assunto.strip() or req.notas.strip() or req.original.strip()):
         raise HTTPException(status_code=422, detail="Escreva um assunto ou algumas notas primeiro.")
     eventos = None if req.eventos is None else [e.model_dump() for e in req.eventos]
@@ -694,6 +718,7 @@ class ReformularRequest(BaseModel):
 @app.post("/reformular")
 def reformular_post(req: ReformularRequest, authorization: Optional[str] = Header(None)):
     check_auth(authorization)
+    lib_atividade.notado("redigir")
     if not req.trecho.strip():
         raise HTTPException(status_code=422, detail="Selecione um trecho primeiro.")
     try:
@@ -720,6 +745,10 @@ if painel is not None:
     app.include_router(painel_conversa.router)
     import painel_redigir  # noqa: E402  (e-mails que esperam liberação: /painel/redigir)
     app.include_router(painel_redigir.router)
+    import painel_ferramentas  # noqa: E402  (tudo o que o Alfred faz, com a documentação: /painel/ferramentas)
+    app.include_router(painel_ferramentas.router)
+    import painel_voz  # noqa: E402  (microfone das telas de conversa: /painel/api/voz)
+    app.include_router(painel_voz.router)
 
 
 if __name__ == "__main__":

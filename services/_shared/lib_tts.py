@@ -3,7 +3,7 @@ Alfred — síntese de voz (edge-tts) e reprodução de áudio.
 
 Extraído de services/briefing/tech-briefing.py para reuso pelo inbox-assistant.
 
-    from _shared.lib_tts import generate_tts, tts_save, limpar_para_fala, tocar_audio
+    from _shared.lib_tts import generate_tts, fluxo_tts, tts_save, limpar_para_fala, tocar_audio
 """
 
 import asyncio
@@ -25,6 +25,14 @@ async def generate_tts(text: str, voice: str, output_path: Path):
     """Mesma assinatura usada pelo briefing: gera .mp3 via edge-tts."""
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(str(output_path))
+
+
+async def fluxo_tts(text: str, voice: str):
+    """Os pedaços do .mp3 conforme o edge-tts entrega, sem esperar o áudio inteiro: o primeiro chega em ~0,8 s
+    (medido em 10/11/2026), seja uma frase ou uma resposta longa. Para quem toca enquanto baixa."""
+    async for parte in edge_tts.Communicate(text, voice or DEFAULT_VOICE).stream():
+        if parte["type"] == "audio":
+            yield parte["data"]
 
 
 def tts_save(text: str, voice: str, output_path: Path) -> bool:

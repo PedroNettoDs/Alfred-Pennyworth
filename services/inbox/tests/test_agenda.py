@@ -59,6 +59,8 @@ class Base(unittest.TestCase):
             mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", cls.tmp / "ids_enviados.json"),
             mock.patch.object(whatsapp, "SEEN_FILE", cls.tmp / "seen.json"),
             mock.patch.object(whatsapp, "FILA_FILE", cls.tmp / "fila.json"),
+            mock.patch.object(whatsapp, "SESSOES_FILE", cls.tmp / "whatsapp_sessoes.json"),
+            mock.patch.object(whatsapp, "ATENDIMENTOS_FILE", cls.tmp / "whatsapp_atendimentos.json"),
         ]
         for p in cls.patches:
             p.start()

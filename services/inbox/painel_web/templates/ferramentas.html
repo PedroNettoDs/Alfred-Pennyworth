@@ -1,0 +1,64 @@
+{#
+  Tela Ferramentas (painel_ferramentas.py): as funções do Alfred (ferramentas.yml) e as ferramentas da conversa
+  (extraídas do lib_ferramentas).
+  Variáveis: grupos ([{id, grupo, funcoes}]), conversa ([{area, detalhe, ferramentas}]), total (nº de ferramentas
+  da conversa), contadores (os mesmos da navegação).
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Ferramentas{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Ferramentas", "Tudo o que o Alfred faz, com a documentação de cada função") }}
+<nav class="indice" aria-label="Seções desta tela">
+  <ul class="indice__lista">
+    {%- for g in grupos %}
+    <li><a href="#g-{{ g.id }}">{{ g.grupo }}</a></li>
+    {%- endfor %}
+    <li><a href="#g-conversa-ferramentas">Ferramentas da conversa</a></li>
+  </ul>
+</nav>
+<div class="pilha">
+  {%- for g in grupos %}
+  <section aria-labelledby="g-{{ g.id }}">
+    <h2 class="secao-titulo" id="g-{{ g.id }}">{{ g.grupo }}</h2>
+    <div class="grade-cartoes">
+      {%- for f in g.funcoes %}
+      {%- set n = contadores.get(f.contador, 0) if f.contador else 0 %}
+      <article class="cartao cartao--compacto funcao" aria-labelledby="f-{{ f.slug }}">
+        <h3 class="funcao__titulo" id="f-{{ f.slug }}"><a href="/painel/ferramentas/{{ f.slug }}">{{ f.nome }}</a></h3>
+        <p class="funcao__resumo">{{ f.resumo }}</p>
+        {%- if n %}
+        <p>{{ m.selo("aguardando", n ~ " aguardando") }}</p>
+        {%- endif %}
+        <div class="funcao__acoes">
+          {{ m.botao("Documentação", "discreto", href="/painel/ferramentas/" ~ f.slug, pequeno=true) }}
+          {%- if f.tela %}
+          {{ m.botao(f.abrir or "Abrir", "primario" if n else "secundario", href=f.tela, pequeno=true) }}
+          {%- endif %}
+        </div>
+      </article>
+      {%- endfor %}
+    </div>
+  </section>
+  {%- endfor %}
+
+  <section aria-labelledby="g-conversa-ferramentas">
+    <h2 class="secao-titulo" id="g-conversa-ferramentas">Ferramentas da conversa ({{ total }})</h2>
+    <p class="suave pequeno prosa">O Alfred escolhe sozinho qual usar na aba Conversa, no terminal e na janela de Escrita.
+      As marcadas “Pede aprovação” só rodam depois do seu <strong>Executar</strong>. Esta lista sai do próprio código
+      (<code>services/_shared/lib_ferramentas.py</code>): ferramenta nova aparece aqui sem editar nada.</p>
+    <div class="pilha pilha--curta">
+      {%- for a in conversa %}
+      <section class="cartao cartao--compacto" aria-labelledby="a-{{ loop.index }}">
+        <h3 class="cartao__titulo" id="a-{{ loop.index }}">{{ a.area }}{% if a.detalhe %} <span class="suave pequeno">{{ a.detalhe }}</span>{% endif %}</h3>
+        <div class="pilha pilha--curta">
+          {%- for t in a.ferramentas %}
+          {% include "_ferramenta_conversa.html" %}
+          {%- endfor %}
+        </div>
+      </section>
+      {%- endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

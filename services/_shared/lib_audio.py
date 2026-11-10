@@ -12,6 +12,9 @@ Ordem de tentativa:
   2. faster-whisper, se o pacote estiver instalado (pip install faster-whisper).
   3. "" — o chamador decide o que fazer sem transcrição.
 
+Com motor="whisper" a ordem inverte: o faster-whisper vai primeiro, em CPU, fora da fila do Ollama (é o que o
+microfone do Painel usa); o gemma4 fica de reserva para quando o pacote não está instalado.
+
 Nenhuma função levanta exceção: erros são logados e voltam no dict de resultado.
 """
 
@@ -20,6 +23,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
+import wave
 from pathlib import Path
 from typing import Optional, Union
 
@@ -27,6 +33,8 @@ from _shared.lib_alfred import log, ollama_generate
 
 SEGMENTO_S = 30            # gemma4 só processa ~30 s de áudio por chamada
 MAX_SEGUNDOS_DEFAULT = 600 # 10 min — acima disso o áudio é cortado (e avisado)
+ESPERA_S = 240             # por chamada ao Ollama
+ESPERA_INTERATIVA_S = 30   # com tokens_por_segundo (alguém esperando na tela): ver transcrever_audio
 
 PROMPT_TRANSCRICAO = (
     "Transcreva o áudio em português brasileiro, literalmente, palavra por palavra. "
@@ -68,14 +76,18 @@ def duracao_segundos(path: Path) -> Optional[float]:
         return None
 
 
-def para_wav(src: Path, dst: Path, sample_rate: int = 16000, max_segundos: Optional[float] = None) -> bool:
-    """Converte qualquer áudio para WAV mono PCM 16-bit (o formato que o gemma4 espera)."""
+def para_wav(src: Path, dst: Path, sample_rate: int = 16000, max_segundos: Optional[float] = None,
+             silencio_final: float = 0.0) -> bool:
+    """Converte qualquer áudio para WAV mono PCM 16-bit (o formato que o gemma4 espera).
+    silencio_final: segundos de silêncio acrescentados no fim (ver transcrever_audio)."""
     if not ffmpeg_disponivel():
         log("[audio] ffmpeg não encontrado — não dá pra converter o áudio")
         return False
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src)]
     if max_segundos:
         cmd += ["-t", str(int(max_segundos))]
+    if silencio_final:
+        cmd += ["-af", f"apad=pad_dur={silencio_final}"]
     cmd += ["-vn", "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(dst)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -110,11 +122,15 @@ def _segmentar(wav: Path, pasta: Path, segundos: int = SEGMENTO_S) -> list[Path]
     return partes or [wav]
 
 
-def _transcrever_ollama(wav: Path, model: Optional[str] = None) -> str:
+def _transcrever_ollama(wav: Path, model: Optional[str] = None, num_predict: int = 700,
+                        num_ctx: Optional[int] = None, espera: int = ESPERA_S) -> str:
     b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
+    opcoes = {"temperature": 0.0, "num_predict": num_predict}
+    if num_ctx:
+        opcoes["num_ctx"] = num_ctx
     out = ollama_generate(
-        PROMPT_TRANSCRICAO, model=model or modelo_transcricao(), timeout=240,
-        images=[b64], think=False, options={"temperature": 0.0, "num_predict": 700},
+        PROMPT_TRANSCRICAO, model=model or modelo_transcricao(), timeout=espera,
+        images=[b64], think=False, options=opcoes,
     )
     out = out.strip().strip('"').strip()
     if not out or out.lower().startswith("[sem fala]"):
@@ -122,19 +138,48 @@ def _transcrever_ollama(wav: Path, model: Optional[str] = None) -> str:
     return out
 
 
-def _transcrever_whisper(wav: Path) -> str:
+_WHISPER = None                    # o modelo, carregado uma vez por processo (~1 s; recarregar a cada áudio custava isso)
+_WHISPER_LOCK = threading.Lock()   # uma transcrição por vez: duas juntas só dividiriam os mesmos núcleos
+
+
+def _modelo_whisper():
+    """O faster-whisper carregado (None se o pacote não está instalado). WHISPER_MODEL (padrão small) e
+    WHISPER_DEVICE (padrão cpu: na placa ele voltaria para a fila que o motor separado existe para evitar)."""
+    global _WHISPER
+    if _WHISPER is None:
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+        except ImportError:
+            return None
+        nome = os.getenv("WHISPER_MODEL", "").strip() or "small"
+        dispositivo = os.getenv("WHISPER_DEVICE", "").strip() or "cpu"
+        opcoes = {"device": dispositivo, "compute_type": "int8" if dispositivo == "cpu" else "float16",
+                  "cpu_threads": max(1, (os.cpu_count() or 2) // 2)}
+        try:
+            _WHISPER = WhisperModel(nome, local_files_only=True, **opcoes)    # sem consultar a rede a cada carga
+        except Exception:
+            log(f"[audio] baixando o modelo Whisper '{nome}' (só na primeira vez)")
+            _WHISPER = WhisperModel(nome, **opcoes)
+    return _WHISPER
+
+
+def _transcrever_whisper(wav: Path, dica: str = "") -> Optional[str]:
+    """Texto do WAV (mono 16 kHz, o que o para_wav gera); "" se não há fala; None se o Whisper não está
+    instalado ou falhou. `dica`: nomes e termos que ele deve reconhecer ("Alfred, Fatec")."""
     try:
-        from faster_whisper import WhisperModel  # type: ignore
-    except ImportError:
-        return ""
-    try:
-        tamanho = os.getenv("WHISPER_MODEL", "small")
-        modelo = WhisperModel(tamanho, device="auto", compute_type="auto")
-        segs, _info = modelo.transcribe(str(wav), language="pt", vad_filter=True)
-        return " ".join(s.text.strip() for s in segs).strip()
+        with _WHISPER_LOCK:
+            modelo = _modelo_whisper()
+            if modelo is None:
+                return None
+            import numpy as np    # vem com o faster-whisper; aqui dentro para o lib_audio importar sem ele
+            with wave.open(str(wav), "rb") as w:      # lido direto: dispensa o decodificador do faster-whisper
+                audio = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768.0
+            segs, _info = modelo.transcribe(audio, language="pt", beam_size=1, vad_filter=True,
+                                            condition_on_previous_text=False, initial_prompt=dica or None)
+            return " ".join(s.text.strip() for s in segs).strip()
     except Exception as e:
         log(f"[audio] faster-whisper falhou: {e}")
-        return ""
+        return None
 
 
 def transcrever_audio(
@@ -142,14 +187,40 @@ def transcrever_audio(
     mimetype: str = "",
     max_segundos: int = MAX_SEGUNDOS_DEFAULT,
     model: Optional[str] = None,
+    tokens_por_segundo: Optional[float] = None,
+    num_ctx: Optional[int] = None,
+    silencio_final: float = 0.0,
+    motor: str = "ollama",
+    dica: str = "",
 ) -> dict:
     """
     Transcreve um áudio (caminho, bytes ou string base64).
 
     Retorna {"texto": str, "metodo": "ollama" | "whisper" | "", "duracao_s": float|None,
-             "segmentos": int, "cortado": bool, "erro": str|None}.
+             "segmentos": int, "cortado": bool, "erro": str|None, "ocupado": bool}.
+
+    tokens_por_segundo: para quem espera a resposta na hora (o microfone do Painel). Às vezes o gemma4 dispara:
+    gera tokens em branco até o limite (700 tokens, ~10 s) e devolve vazio; chamado de novo com o mesmo áudio,
+    acerta (medido em 10/11/2026). Com este parâmetro o limite de cada segmento fica proporcional à duração
+    (40 + tokens_por_segundo × segundos) e um segmento vazio é tentado mais uma vez. None mantém o de sempre.
+    Também troca a espera pelo Ollama de 240 s para ESPERA_INTERATIVA_S: a placa tem uma fila só, e com outro
+    modelo em uso (a síntese de uma pesquisa leva minutos) a transcrição ficava parada esse tempo todo. Passou
+    do prazo → "ocupado": True, sem segunda tentativa.
+
+    num_ctx: o contexto pedido ao Ollama (None = OLLAMA_NUM_CTX). O Ollama recarrega o modelo quando o num_ctx muda
+    (10 a 25 s medidos): quem transcreve no meio de uma conversa passa o mesmo num_ctx do chat.
+
+    silencio_final: segundos de silêncio no fim do áudio. Um áudio cortado no meio da fala (a prévia de uma
+    gravação em andamento) faz o gemma4 responder vazio ou "[sem fala]": 6 falhas em 16 cortes medidos; com
+    0,8 s de silêncio no fim, 16 acertos em 16.
+
+    motor: "whisper" tenta primeiro o faster-whisper (CPU, fora da fila do Ollama); só se ele não estiver
+    instalado ou falhar é que o gemma4 entra. Medido em 10/11/2026 com 8 frases (83 s): small em CPU, ~2 s por
+    frase e "Alfred" certo em todas; gemma4, 0,7 a 2,5 s, mas "Aufridge" em 4 de 6 e vazio na frase técnica.
+    dica: nomes e termos para o Whisper reconhecer.
     """
-    res = {"texto": "", "metodo": "", "duracao_s": None, "segmentos": 0, "cortado": False, "erro": None}
+    res = {"texto": "", "metodo": "", "duracao_s": None, "segmentos": 0, "cortado": False, "erro": None,
+           "ocupado": False}
     with tempfile.TemporaryDirectory(prefix="alfred-audio-") as tmp:
         pasta = Path(tmp)
         # 1. materializa a fonte num arquivo
@@ -178,16 +249,36 @@ def transcrever_audio(
 
         # 2. WAV mono 16 kHz
         wav = pasta / "entrada.wav"
-        if not para_wav(src, wav, max_segundos=max_segundos if res["cortado"] else None):
+        if not para_wav(src, wav, max_segundos=max_segundos if res["cortado"] else None,
+                        silencio_final=silencio_final):
             res["erro"] = "não foi possível converter o áudio (ffmpeg)"
             return res
 
-        # 3. gemma4 via Ollama, por segmento
+        # 3. Whisper primeiro, quando pedido: se ele respondeu (mesmo "sem fala"), o gemma4 não é consultado
+        if motor == "whisper":
+            t = _transcrever_whisper(wav, dica)
+            if t is not None:
+                res["texto"], res["metodo"], res["segmentos"] = t, "whisper", 1
+                return res
+
+        # 4. gemma4 via Ollama, por segmento
         partes = _segmentar(wav, pasta)
         res["segmentos"] = len(partes)
         textos = []
         for i, parte in enumerate(partes, 1):
-            t = _transcrever_ollama(parte, model)
+            limite = 700
+            if tokens_por_segundo:
+                limite = 40 + int(tokens_por_segundo * (duracao_segundos(parte) or SEGMENTO_S))
+            espera = ESPERA_INTERATIVA_S if tokens_por_segundo else ESPERA_S
+            inicio = time.monotonic()
+            t = _transcrever_ollama(parte, model, limite, num_ctx, espera)
+            if not t and tokens_por_segundo:
+                if time.monotonic() - inicio >= espera - 1:      # nem respondeu: a placa está com outra tarefa
+                    res["ocupado"] = True
+                    res["erro"] = f"o Ollama não respondeu em {espera} s (ocupado com outro modelo)"
+                    log(f"[audio] {res['erro']}")
+                    return res
+                t = _transcrever_ollama(parte, model, limite, num_ctx, espera)
             if t:
                 textos.append(t)
             elif i == 1:
@@ -197,8 +288,8 @@ def transcrever_audio(
             res["metodo"] = "ollama"
             return res
 
-        # 4. fallback faster-whisper
-        t = _transcrever_whisper(wav)
+        # 5. fallback faster-whisper (já tentado acima quando motor="whisper")
+        t = None if motor == "whisper" else _transcrever_whisper(wav, dica)
         if t:
             res["texto"] = t
             res["metodo"] = "whisper"

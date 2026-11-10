@@ -7,3 +7,4 @@ icalendar
 fastapi
 uvicorn
 jinja2
+faster-whisper

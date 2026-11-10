@@ -113,6 +113,8 @@ class Base(unittest.TestCase):
             mock.patch.dict(os.environ, ENV),
             mock.patch.object(whatsapp, "carregar_cfg", _cfg_de_teste),
             mock.patch.object(whatsapp, "FILA_FILE", TMP / "whatsapp_fila.json"),
+            mock.patch.object(whatsapp, "SESSOES_FILE", TMP / "whatsapp_sessoes.json"),
+            mock.patch.object(whatsapp, "ATENDIMENTOS_FILE", TMP / "whatsapp_atendimentos.json"),
             mock.patch.object(whatsapp, "SEEN_FILE", TMP / "whatsapp_seen.json"),
             mock.patch.object(lib_whatsapp, "ENVIADOS_FILE", TMP / "whatsapp_enviados.jsonl"),
             mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", TMP / "whatsapp_ids_enviados.json"),
@@ -122,9 +124,9 @@ class Base(unittest.TestCase):
             mock.patch.object(core, "_iniciar_aguardador", lambda comando, pid: None),
             mock.patch.object(whatsapp, "ollama_generate_json", _fake_json),
             mock.patch.object(whatsapp, "ollama_generate", _fake_generate),
-            mock.patch.object(whatsapp, "tts_save", _fake_tts),
             mock.patch.object(core, "ollama_generate", _fake_generate),
             mock.patch.object(core, "tts_save", _fake_tts),
+            mock.patch.object(core, "FALA_DIR", TMP / "fala"),
             mock.patch.object(painel, "_arquivo_desligado", lambda: TMP / "alfred_desligado"),
             mock.patch.object(painel, "ATRASO_LOGIN_FALHO", 0.01),
             mock.patch.object(pesquisa, "_transporte", httpx.MockTransport(_sem_rede)),
@@ -674,8 +676,10 @@ class TestEmail(Base):
         self.assertNotIn("Dados extraídos", html)              # o cartão "Dados do e-mail" já mostra
         self.assertNotIn("aguardando resposta", html)          # linha de status do .md (fica velha)
 
-        ref = core.responder(pelo_cli["id"], "vou", "", origem="via terminal")   # ./run.sh responder <id> vou
-        r = self.acao(cli, f"/painel/api/pendencias/{pelo_painel['id']}/responder", {"resposta": "vou", "nota": ""})
+        antes_do_evento = core._now().replace(year=2026, month=11, day=1)   # evento é 05/11; passado não vai à agenda
+        with mock.patch.object(core, "_now", lambda: antes_do_evento):
+            ref = core.responder(pelo_cli["id"], "vou", "", origem="via terminal")   # ./run.sh responder <id> vou
+            r = self.acao(cli, f"/painel/api/pendencias/{pelo_painel['id']}/responder", {"resposta": "vou", "nota": ""})
         self.assertEqual(r.status_code, 200, r.text)
         d = r.json()
         y = core.obter_pendencia(pelo_painel["id"])
@@ -1057,6 +1061,21 @@ class TestEvolutionForaDoAr(Base):
         r = self.acao(cli, f"/painel/api/pendencias/{p['id']}/responder-texto", {"texto": "Oi"})
         self.assertEqual((r.status_code, r.json()["mensagem"]), (200, "Simulado: nada saiu da máquina."))
 
+    def test_sistema_lista_sessoes_sem_botao_de_parear(self):
+        """Sistema só mostra o estado de cada sessão; parear fica em Ferramentas (link só com sessão caída)."""
+        st = {"configurado": True, "simulado": False, "instancia": "alfred", "estado_instancia": "open", "sessoes": [
+            {"nome": "pedro_whatsapp", "instancia": "alfred", "papel": "pessoal", "numero": "", "estado": "open"},
+            {"nome": "alfred_whatsapp", "instancia": "alfred-assistente", "papel": "assistente", "numero": "", "estado": "close"}]}
+        with mock.patch.object(painel.whatsapp, "status", lambda **k: st):
+            r = self.guardar(self.entrar().get("/painel/sistema"))
+        wa = r.text.split('id="s-whatsapp"')[1].split("</section>")[0]
+        self.assertIn("pedro_whatsapp (pessoal)", wa)
+        self.assertIn("alfred_whatsapp (assistente)", wa)
+        self.assertNotIn("Mostrar QR code", wa)
+        self.assertNotIn("Sessões e papéis", wa)
+        self.assertIn('href="/painel/whatsapp?sessao=alfred_whatsapp"', wa)
+        self.assertNotIn("sessao=pedro_whatsapp", wa)
+
     def test_alfred_desligado(self):
         (TMP / "alfred_desligado").write_text("25/10 22:00\nmodo jogo\n", encoding="utf-8")
         cli = self.entrar()
@@ -1067,7 +1086,7 @@ class TestEvolutionForaDoAr(Base):
 class TestTelaQR(Base):
     def qr(self, r):
         cli = self.entrar()
-        with mock.patch.object(painel.whatsapp, "obter_qrcode", lambda: r):
+        with mock.patch.object(painel.whatsapp, "obter_qrcode", lambda sessao=None: r):
             return self.guardar(cli.get("/painel/whatsapp"))
 
     def test_mostra_o_qr_e_recarrega(self):
@@ -1090,6 +1109,29 @@ class TestTelaQR(Base):
     def test_sem_sessao_vai_para_o_login(self):
         r = self.guardar(self.cliente().get("/painel/whatsapp", follow_redirects=False))
         self.assertEqual(r.status_code, 303)
+
+    def test_lista_as_sessoes_e_pareia_a_escolhida(self):
+        pedidas = []
+        cli = self.entrar()
+        with mock.patch.object(painel.whatsapp, "obter_qrcode", lambda sessao=None: pedidas.append(sessao) or {"ok": True, "conectado": True}):
+            r = self.guardar(cli.get("/painel/whatsapp", params={"sessao": "alfred_whatsapp"}))
+        self.assertEqual(pedidas, ["alfred_whatsapp"])
+        self.assertIn("Instância alfred-assistente", r.text)
+        self.assertIn('<option value="assistente" selected>', r.text)
+        self.assertIn('href="/painel/whatsapp?sessao=pedro_whatsapp"', r.text)
+        self.assertEqual(self.guardar(cli.get("/painel/whatsapp", params={"sessao": "nao_existe"})).status_code, 404)
+
+    def test_gravar_papel(self):
+        self.addCleanup(lambda: whatsapp.SESSOES_FILE.unlink(missing_ok=True))   # os outros testes leem o papel de perfis.yml
+        cli = self.entrar()
+        url = "/painel/api/whatsapp/papel"
+        self.assertEqual(self.acao(cli, url, {"sessao": "pedro_whatsapp", "papel": "assistente"}).status_code, 200)
+        self.assertEqual({s["nome"]: s["papel"] for s in whatsapp.sessoes()},
+                         {"pedro_whatsapp": "assistente", "alfred_whatsapp": "pessoal"})
+        self.assertEqual(self.acao(cli, url, {"sessao": "pedro_whatsapp", "papel": "pessoal"}).status_code, 200)
+        self.assertEqual(self.acao(cli, url, {"sessao": "pedro_whatsapp", "papel": "chefe"}).status_code, 400)
+        self.assertEqual(self.acao(cli, url, {"sessao": "nao_existe", "papel": "pessoal"}).status_code, 404)
+        self.assertEqual(self.acao(cli, url, {"sessao": "pedro_whatsapp", "papel": "pessoal"}, csrf=False).status_code, 403)
 
 
 class TestResolvidas(Base):
@@ -1218,13 +1260,30 @@ class TestAudio(Base):
         self.assertEqual(self.cliente().get(url, headers={"Authorization": f"Bearer {TOKEN}"}).status_code, 200)
         det = self.guardar(cli.get(f"/painel/pendencias/{p['id']}")).text
         self.assertIn("<audio controls", det)
-        (core.vault() / p["arquivos"]["mp3"]).unlink()      # regra dos 2 dias apagou o arquivo
+        # nada no cofre: o áudio nasceu do roteiro, na hora, fora dele
+        self.assertEqual(list((core.vault() / "pendencias").glob("*.mp3")), [])
+        self.assertTrue((core.FALA_DIR / f"{p['id']}.mp3").is_file())
+
+    def test_pendencia_antiga_sem_roteiro_fica_expirada(self):
+        """Pendência criada antes do áudio sob demanda: tem .mp3 no cofre e não tem roteiro guardado."""
+        p = self.criar_wa()
+        url = f"/pendencias/{p['id']}/audio"
+        cli = self.entrar()
+        rel = f"pendencias/{p['id']}.mp3"
+        with core.trava_pendencias():
+            data = core._load_pend()
+            y = next(x for x in data["pendencias"] if x["id"] == p["id"])
+            y["fala"] = None; y["arquivos"]["mp3"] = rel
+            core._save_pend(data)
+        (core.vault() / rel).write_bytes(b"ID3antigo")
+        self.assertEqual(self.guardar(cli.get(url)).content, b"ID3antigo")
+        (core.vault() / rel).unlink()      # regra dos 2 dias apagou o arquivo
         det = self.guardar(cli.get(f"/painel/pendencias/{p['id']}")).text
         self.assertIn("Áudio expirado", det)
         self.assertNotIn("<audio controls", det)
         self.assertEqual(self.guardar(cli.get(url)).status_code, 404)
         # o vigia (limpar_audios) apaga e grava arquivos.mp3=None + audio_removido_em → continua "expirado"
-        (core.vault() / p["arquivos"]["mp3"]).write_bytes(b"ID3fake-mp3")
+        (core.vault() / rel).write_bytes(b"ID3antigo")
         self.assertEqual(whatsapp.limpar_audios(dias=0)["removidos"], [p["id"]])
         y = core.obter_pendencia(p["id"])
         self.assertIsNone(y["arquivos"]["mp3"]); self.assertTrue(y["audio_removido_em"])

@@ -113,6 +113,8 @@ class Base(unittest.TestCase):
         cls.patches = [
             mock.patch.object(whatsapp, "carregar_cfg", cfg_de_teste),
             mock.patch.object(whatsapp, "FILA_FILE", TMP / "whatsapp_fila.json"),
+            mock.patch.object(whatsapp, "SESSOES_FILE", TMP / "whatsapp_sessoes.json"),
+            mock.patch.object(whatsapp, "ATENDIMENTOS_FILE", TMP / "whatsapp_atendimentos.json"),
             mock.patch.object(whatsapp, "SEEN_FILE", TMP / "whatsapp_seen.json"),
             mock.patch.object(lib_whatsapp, "ENVIADOS_FILE", TMP / "whatsapp_enviados.jsonl"),
             # ids enviados pelo Alfred (eco): nunca o logs/ do repositório
@@ -124,7 +126,8 @@ class Base(unittest.TestCase):
             cls.patches += [
                 mock.patch.object(whatsapp, "ollama_generate_json", _fake_classificar),
                 mock.patch.object(whatsapp, "ollama_generate", _fake_generate),
-                mock.patch.object(whatsapp, "tts_save", _fake_tts),
+                mock.patch.object(core, "tts_save", _fake_tts),
+                mock.patch.object(core, "FALA_DIR", TMP / "fala"),
                 mock.patch.object(whatsapp, "transcrever_audio", _fake_transcrever),
             ]
         for p in cls.patches:
@@ -222,7 +225,9 @@ class TestWebhook(Base):
         txt = md.read_text(encoding="utf-8")
         self.assertIn("tipo: whatsapp", txt); self.assertIn("O que você quer responder?", txt)
         self.assertIn("## Mensagem original", txt); self.assertIn(f"responder-texto {p['id']}", txt)
-        self.assertTrue((core.vault() / p["arquivos"]["mp3"]).is_file())
+        # o .mp3 não nasce com a pendência: fica o roteiro, e o áudio é gerado na hora de enviar ou de ouvir
+        self.assertIsNone(p["arquivos"]["mp3"]); self.assertTrue(p["fala"]["texto"])
+        self.assertEqual(list((core.vault() / "pendencias").glob("*.mp3")), [])
         # pendencias.yml com o mesmo esquema
         y = core.obter_pendencia(p["id"])
         self.assertEqual(y["status"], "aguardando")
@@ -458,7 +463,7 @@ class TestEvolutionV237(Base):
         ogg_b64 = base64.b64encode((AQUI / "fixtures" / "audio_carlos_fatec.ogg").read_bytes()).decode()
         chamadas = []
 
-        def fake_baixar(key, message=None):
+        def fake_baixar(key, message=None, inst=None):
             chamadas.append((key, message))
             return {"ok": True, "base64": ogg_b64, "mimetype": "audio/ogg; codecs=opus"}
 
@@ -661,7 +666,7 @@ class TestResponderTexto(Base):
              mock.patch.object(lib_whatsapp, "_get", lambda path, timeout=30: chamadas.append(timeout) or {"ok": False, "erro": "fora"}):
             self.assertEqual(whatsapp.status(timeout=2)["estado_instancia"], "fora")
             whatsapp.status()
-        self.assertEqual(chamadas, [2, 30])
+        self.assertEqual(chamadas, [2, 2, 30, 30])   # uma consulta por sessão de perfis.yml
 
     def test_listagem_e_status(self):
         pid = self._cria()
@@ -720,9 +725,11 @@ class TestFilaAtraso(Base):
         p = rs[0]["pendencia"]
         self.assertEqual((p["status"], p["whatsapp"]["message_id"]), ("aguardando", "3EB0A1B2C3D4E5F60001"))
         self.assertEqual(p["criado_em"], self.agora.isoformat(timespec="minutes"))
-        self.assertTrue((core.vault() / p["arquivos"]["mp3"]).is_file())
         self.assertEqual(AGUARDADORES, [("_aguardar-whatsapp", p["id"])])            # notificação no PC
         self.assertEqual([e["tipo"] for e in self.enviados()], ["texto", "audio"])   # aviso pelo WhatsApp
+        # enviado, o .mp3 é apagado: nada no cofre nem na pasta temporária
+        self.assertEqual(list((core.vault() / "pendencias").glob("*.mp3")), [])
+        self.assertFalse((core.FALA_DIR / f"{p['id']}.mp3").exists())
         self.assertIn(f"ref: {p['id']}", self.enviados()[0]["conteudo"])
         self.assertEqual(whatsapp.listar_fila(), [])
         self.assertEqual(whatsapp.processar_fila(), [])
@@ -829,7 +836,7 @@ class TestFilaAtraso(Base):
         self.assertEqual(len(whatsapp.listar_fila()), 1)
         ecos = []
 
-        def enviar_com_eco(numero, texto, quoted=None, delay=0):
+        def enviar_com_eco(numero, texto, quoted=None, delay=0, inst=None):
             if marcar_id:
                 lib_whatsapp._marcar_envio("ECO-ALFRED")
             eco = payload("evolution_fromme_direto.json")
@@ -1119,6 +1126,23 @@ class TestHistoricoECache(Base):
         with mock.patch.object(whatsapp, "ollama_generate", lambda p, **kw: prompts.append(p) or _fake_generate(p)):
             self.post_webhook("evolution_texto.json", enviar="false")
         self.assertTrue(next(p for p in prompts if "CONVERSA RECENTE" in p).rstrip().endswith("nenhuma"))
+
+    def test_chamadas_ao_modelo_da_conversa_pedem_o_num_ctx_dela(self):
+        """num_ctx diferente do da Conversa faz o Ollama recarregar o modelo (o turno seguinte dela paga ~16 s)."""
+        import conversa
+        opcoes = []
+
+        def captura(prompt, **kw):
+            opcoes.append(kw.get("options") or {})
+            return _fake_generate(prompt, **kw)
+
+        with mock.patch.dict(os.environ, {"MODEL_CHAT": "modelo-teste"}), \
+                mock.patch.object(conversa, "_cfg", lambda: {"modelo": "modelo-teste", "num_ctx": 4321}), \
+                mock.patch.object(whatsapp, "ollama_generate", captura):
+            self.post_webhook("evolution_texto.json", enviar="false")
+            self.assertEqual(core.ctx_do_chat("outro-modelo"), {})   # outro modelo: fica com o num_ctx dele
+        self.assertTrue(opcoes)
+        self.assertEqual({o.get("num_ctx") for o in opcoes}, {4321})
 
     def _semear_cache_spam(self):
         res = {"categoria": "spam", "confianca": 0.95, "requer_resposta": False, "urgencia": "baixa",

@@ -237,8 +237,9 @@ def ollama_generate(
     if opts:
         payload["options"] = opts
 
+    from . import lib_porta   # aqui dentro: lib_porta → lib_laya → este módulo
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with lib_porta.passagem(model, opts.get("num_ctx")), httpx.Client(timeout=timeout) as client:
             resp = client.post(f"{base_url}/api/generate", json=payload)
             resp.raise_for_status()
             return resp.json().get("response", "").strip()

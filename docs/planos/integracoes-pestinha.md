@@ -21,6 +21,7 @@ tela **Integrações**, que instala, liga, abre e fecha o pet sem terminal.
 | `integracoes.py`, lançador, unit, `./run.sh integracoes` | Feito, 17 testes; unit gravada nesta máquina, não habilitada |
 | Tela Integrações no Painel | Feita e vista numa instância de teste; na real, só depois de reiniciar a `alfred-inbox-api` |
 | Abrir e fechar pela unit nesta máquina | Não testado: o pet estava aberto à mão |
+| Conversa e terminal pelo pet, microfone na conversa | Feito (fase 3b); vale depois de reiniciar a API e reabrir o pet |
 
 Medido com o pet parado: ~27% de um núcleo e 110 a 130 MB, igual com ou sem a ligação do Alfred. Cerca de 13
 desses pontos são `_substep` em `pestinha/core/nervous_system.py` (~1000 chamadas por segundo).
@@ -28,8 +29,8 @@ desses pontos são `_substep` em `pestinha/core/nervous_system.py` (~1000 chamad
 ## Decisões
 
 1. **O pet fica fora deste repositório**, no fork `PedroNettoDs/pestinha`.
-   - Licença: o Pestinha é GPL-3.0 e o Alfred não tem licença definida. Juntos no mesmo repositório, a GPL
-     passaria a valer para a distribuição do Alfred. Separados e conversando por arquivo, não.
+   - Licença: o Pestinha é GPL-3.0; o Alfred passou a AGPL-3.0-or-later em 10/11/2026. As duas licenças
+     convivem, então este deixou de ser o motivo principal; separados, cada projeto segue com a sua.
    - Peso: 68 MB de histórico, com um `.exe` de 61 MB.
    - Ciclo próprio: venv com PySide6 fixado, 408 testes e as atualizações do projeto original.
 2. **A ligação é só a pasta `logs/atividade/`.** Sem rede, sem token, sem trava. Formato em
@@ -110,6 +111,20 @@ Pronto quando: testes passam; nesta máquina `instalar` reconhece o clone existe
 Pronto quando: testes das rotas passam e a tela foi vista no navegador numa instância de teste. Para valer na
 instância real, reiniciar a `alfred-inbox-api`.
 
+### Fase 3b — Conversar e abrir o terminal pelo pet (feito em 10/11/2026)
+
+Decidido com Pedro: "terminal" é o Painel no navegador; a caixinha de conversa é uma janela do Painel, como no
+WordCraft; por enquanto ele fala e o Alfred responde por escrito.
+
+- `estado.json` publica `links` (Painel e conversa); o pet só aceita `http://127.0.0.1` ou `localhost`.
+- Pet: blocos 💬 e 🖥️ no fim da fila e itens no menu do botão direito. A conversa abre em janela de 440×680 ao lado
+  do pet (modo app do Brave/Chromium); o Painel, no navegador padrão.
+- Painel: `/painel/conversa` em janela estreita mostra só a conversa. Botão **Falar** na Conversa e na Escrita:
+  `voz.js` grava, `POST /painel/api/voz` transcreve na máquina (`painel_voz.py`, `lib_audio`), o texto volta para
+  a caixa e Pedro envia.
+- Medido: frase de 3,7 s transcrita em ~1 s com o gemma4 carregado. Em 5 tentativas, 1 falhou com o Ollama ocupado.
+  "Alfred" foi ouvido como "Aufrige": por isso a mensagem não é enviada sozinha.
+
 ### Fase 4 — Renomear para BatFamilia (decisão pendente)
 
 Dois tamanhos possíveis:
@@ -145,6 +160,122 @@ Hoje só o ciclo de e-mail informa passos. Candidatas, uma linha de decorador ca
 (`chromadb-indexer.py`), backup, podcast, compressão das conversas. Também: ferramentas da Conversa e o
 processamento do WhatsApp como atividades curtas. Receita em `PESTINHA.md`, "Instrumentar outra rotina".
 
+### Fase 7 — O Alfred falar
+
+**Feito em 10/11/2026 (7a):** botão **Ativar áudio** na Conversa e na Escrita, pelo mesmo mecanismo do jornal e
+dos resumos (`lib_tts`, edge-tts, voz `pt-BR-AntonioNeural`). O Alfred fala frase a frase enquanto a resposta
+chega, com o áudio de cada frase em fluxo: primeiro som ~1,1 s depois da primeira frase (o edge-tts entrega o
+primeiro pedaço em ~0,8 s). A fala para em ~1200 letras. O microfone envia sozinho depois de transcrever.
+
+**O gargalo que sobrou é o chat, não a voz:** 15 a 19 s até a primeira palavra em todo turno (7,5 a 8,4 mil
+tokens de entrada reavaliados a cada vez; medido na instância real e na de teste). Enquanto isso não cair, a
+conversa por voz parece lenta mesmo com transcrição em 2 s e fala em 1 s.
+
+**Futuro (7b):** falar direto e rápido, enquanto escreve, com a voz do dublador do Alfred. O que falta:
+
+1. **Voz local e rápida.** O `edge-tts` que já existe manda o texto para a Microsoft e só devolve o áudio inteiro
+   no fim: serve para o jornal, não para conversa. Para falar enquanto escreve é preciso um sintetizador local
+   com saída em fluxo (candidatos a medir: Piper, que roda em CPU; XTTS ou F5-TTS, que pedem GPU). Nenhum está
+   instalado.
+2. **GPU.** O gemma4 já ocupa a placa; um sintetizador em GPU disputa memória com ele. Medir antes: tempo até o
+   primeiro som e se a conversa fica mais lenta.
+3. **A voz do dublador.** Clonar a voz de uma pessoa real exige a autorização dela (ou de quem detém os direitos
+   da dublagem), mesmo para uso pessoal. Sem isso, o caminho é uma voz licenciada ou uma voz própria com o
+   mesmo estilo (grave, formal, britânico), não a voz dele.
+4. **Tela.** Pronta: fala frase a frase, botão de ligar e "calar ao gravar". Trocar a voz é mexer só em
+   `painel_voz.VOZ` e `lib_tts.fluxo_tts`.
+
+Critério para começar: um sintetizador local que dê o primeiro som em menos de 1 s nesta máquina sem derrubar o
+gemma4, e a questão da voz resolvida.
+
+### Fase 8 — Transcrição em tempo real (ideia: serviço em Rust)
+
+Pedido de Pedro: o texto aparecer enquanto ele fala, sem esperar gravar tudo, e usar Rust para a velocidade.
+
+#### Feito em 10/11/2026 (8a): Whisper no microfone
+
+O `faster-whisper` já estava no Python do sistema, com os modelos `small` e `large-v3-turbo` baixados. Entrou no
+venv do inbox e virou o motor do microfone do Painel (`lib_audio`, `motor="whisper"`), em CPU, com o modelo
+carregado uma vez dentro da API. O gemma4 fica de reserva. O áudio do WhatsApp continua no gemma4.
+
+Mesmas 8 frases (83 s de áudio, voz sintética limpa; fala real ao microfone erra mais em todos):
+
+| Motor | Tempo por frase | Palavras erradas | "Alfred" | Fila da placa |
+|---|---|---|---|---|
+| gemma4:12b na placa (como era) | 0,7 a 2,5 s com o modelo carregado | 36 de 220 (frase técnica voltou vazia) | certo em 2 de 6 | Espera: 10 s de recarga, minutos atrás de uma pesquisa |
+| **Whisper `small` em CPU (agora)** | 1,6 a 3,0 s | 14 de 220 | certo em 6 de 6 | Não entra |
+| Whisper `large-v3-turbo` em CPU | 8 a 10 s | 7 de 220 | certo em 6 de 6 | Não entra, mas lento demais |
+| Whisper `large-v3-turbo` na placa | não medido | | | Falta `libcublas.so.12` (a máquina só tem CUDA 13); e voltaria a disputar a placa |
+
+O Whisper custa ~2 s mesmo em frase curta: ele sempre processa uma janela de 30 s. Não precisou de Rust para
+isso; o pacote já roda em C++. Rust continua sendo para o serviço de fluxo, abaixo.
+
+O que ainda falta desta fase: texto aparecendo enquanto se fala (com ~2 s por passada em CPU, a prévia atrasaria
+a transcrição final; vale com o `large-v3-turbo` na placa ou um motor de fluxo), e levar o WhatsApp para o Whisper.
+
+#### O que existe hoje (medido em 10/11/2026, RTX 3060 12 GB, 12 threads)
+
+- Um motor só: **gemma4:12b no Ollama** (`lib_audio`), o mesmo do áudio do WhatsApp. O reserva `faster-whisper`
+  não está instalado.
+- Com o modelo carregado ele é rápido: 7,5 s de áudio em 1,2 s; 15,6 s em 1,9 s; 46,5 s em 5,4 s (2 segmentos).
+  Cerca de 8 vezes mais rápido que a fala.
+- **O que deixava lento não era a transcrição.** O chat usa `num_ctx` 16384 e a transcrição usava 8192
+  (`OLLAMA_NUM_CTX`): o Ollama recarregava o modelo a cada troca. Uma fala custava 10,6 s e o chat seguinte mais
+  9,1 s. Corrigido no microfone do Painel (mesmo `num_ctx`): 1,1 s e 0,2 s. O WhatsApp ainda paga essa troca.
+- **Falha intermitente:** às vezes o gemma4 gera 700 tokens em branco (~10 s) e devolve vazio; repetindo, acerta.
+  Corrigido no microfone: teto de tokens proporcional ao áudio e uma segunda tentativa.
+- **Prévia enquanto grava: testada e retirada.** Mandar o áudio parcial a cada 2,5 s funciona mal com este motor:
+  áudio cortado no meio da fala volta vazio ou "[sem fala]" (6 falhas em 16 cortes; com 0,8 s de silêncio no
+  fim, 16 acertos em 16 nos cortes feitos por ffmpeg). No navegador, com os pedaços do `MediaRecorder`, as duas
+  primeiras prévias ainda falharam e o primeiro texto só apareceu aos 14,5 s de uma fala de 16 s. Cada prévia
+  falha ainda atrasa a transcrição final.
+- Nomes: "Alfred" sai "Aufridge".
+- **A placa tem uma fila só.** No primeiro uso real (10/11, 03:51), Pedro gravou uma fala curta enquanto uma
+  pesquisa pedida na conversa fazia a síntese com o `qwen3.6:35b-a3b` (22,5 GB, parte em RAM): 2 min 21 s de
+  placa ocupada, e o microfone ficou "Transcrevendo…" esse tempo todo, porque a espera pelo Ollama era de 240 s.
+  Corrigido: o microfone desiste em 30 s e a tela diz que a placa está ocupada. O chat sofre a mesma fila.
+  É o argumento mais forte para um motor de fala separado: pequeno ou em CPU, ele não espera o modelo grande.
+
+#### O que Rust resolve e o que não resolve
+
+O tempo está no modelo, que roda em C++/CUDA; trocar o Python por Rust em volta do gemma4 não muda esses números.
+O ganho vem de um **motor feito para fala em fluxo**, separado do modelo do chat. Rust entra bem como o serviço
+em volta dele: recebe o áudio aos poucos, detecta pausas, mantém a janela e devolve texto parcial e final com
+latência previsível.
+
+#### Desenho
+
+```
+navegador (voz.js)                    API do Painel                 serviço em Rust (alfred-ouvido, só 127.0.0.1)
+AudioWorklet: PCM 16 kHz  ── WebSocket /painel/api/voz/ao-vivo ──►  detector de pausa (VAD) + janela deslizante
+texto parcial e final     ◄── repassa os eventos ──────────────────  motor de fala → {parcial} / {final}
+```
+
+- O navegador fala só com o Painel (mesma origem, sessão e CSRF de hoje); a API repassa ao serviço local.
+- Sem o serviço no ar, a tela usa o `POST /painel/api/voz` de hoje.
+- A fala fecha um trecho a cada pausa: só o trecho em aberto é refeito, não o áudio inteiro.
+- Lista de nomes como dica para o motor ("Alfred", "Fatec", contatos frequentes), onde ele aceitar.
+
+#### Motores a medir (nenhum instalado; `cargo` e `rustc` já estão na máquina)
+
+| Motor | Em Rust por | Português | Fluxo | A conferir |
+|---|---|---|---|---|
+| Whisper (large-v3-turbo; o `small` em CPU já está em uso, ver 8a) | `whisper-rs` ou `transcribe-rs` (whisper.cpp) | Sim | Por janelas com VAD | VRAM ao lado do gemma4 (~8,4 GB usados de 12); em CPU, qual tamanho acompanha a fala |
+| Parakeet TDT v3 | `parakeet-rs`, `transcribe-rs` (ONNX) | A confirmar no cartão do modelo | Por janelas; o modelo de fluxo (EOU) é outro | Qualidade em português, nomes próprios |
+| Moonshine | `transcribe-rs` (o exemplo de fluxo dele) | A confirmar | Sim | Se há modelo em português |
+| Kyutai STT | servidor próprio em Rust (`moshi-server`) | **Não**: só inglês e francês | Sim, 0,5 s de atraso | Só serve se sair um modelo em português |
+
+#### Ordem e critério
+
+1. **Medir antes de escrever Rust:** 20 frases gravadas por Pedro (com nomes e termos dele), cada motor em
+   Python ou pela linha de comando: erro por palavra, tempo até o primeiro texto, VRAM, e se o chat fica mais lento.
+2. **Escolher** o motor que der primeiro texto em até 1 s depois de começar a falar e texto final em até 0,3 s
+   depois de parar, com menos erro que o gemma4 nos nomes.
+3. **Serviço em Rust** mínimo (WebSocket de entrada, eventos de saída, unit de usuário) e a ligação no `voz.js`.
+4. Depois, o mesmo serviço pode transcrever os áudios do WhatsApp e tirar essa carga do gemma4.
+
+Se nenhum motor passar no critério nesta máquina, fica como está: gravar, parar e transcrever (~1,7 s).
+
 ## Riscos
 
 | Risco | Tratamento |
@@ -154,13 +285,16 @@ processamento do WhatsApp como atividades curtas. Receita em `PESTINHA.md`, "Ins
 | Unit sem sessão gráfica | A unit depende de `graphical-session.target`; o estado mostra "sem sessão gráfica" e o botão Abrir explica |
 | Pet aberto à mão e pela unit | O Pestinha só abre uma cópia; o estado distingue "pela unit" de "aberto à mão" |
 | Título de pendência na tela (balão e post-it) | Mesmo conteúdo da notificação do sistema que já existe; "Deixar bilhetes" desliga o post-it |
+| Pet abre endereços vindos de um arquivo | Só `http://127.0.0.1` ou `localhost`, validado no pet; nunca executa comando vindo do arquivo |
+| Microfone parado atrás de outra tarefa na placa | Desiste em 30 s com aviso na tela; o motor separado da fase 8 tira a fala dessa fila |
+| Transcrição errada vira mensagem | O texto vai para a caixa e Pedro envia; nada é enviado sozinho |
 | Fork diverge do original | Fase 4-A e Fase 5 passos 1 e 2 mantêm o merge barato; 4-B e 5.3 não |
 
 ## Como conferir
 
 ```bash
 cd services/inbox
-venv/bin/python -m unittest tests.test_atividade tests.test_integracoes
+venv/bin/python -m unittest tests.test_atividade tests.test_integracoes tests.test_voz
 ./run.sh fila
 ./run.sh integracoes
 ```

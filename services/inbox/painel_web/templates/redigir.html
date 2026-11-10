@@ -6,7 +6,8 @@
 {% import "_macros.html" as m %}
 {% block titulo %}Redigir{% endblock %}
 {% block conteudo %}
-{{ m.cabecalho("Redigir", "E-mails de evento ou entrevista que esperam a sua revisão antes de ir para o Thunderbird") }}
+{{ m.cabecalho("Redigir", "E-mails de evento ou entrevista que esperam a sua revisão antes de ir para o Thunderbird",
+               voltar=("/painel/ferramentas", "Ferramentas")) }}
 <div class="pilha">
   {%- if not aguardando %}
   {{ m.vazio("Nenhum e-mail aguardando.", "info") }}

@@ -1,6 +1,6 @@
 {#
   Esqueleto de todas as telas do Painel do Alfred.
-  Variáveis: csrf (str), ativo ("inicio"|"conversa"|"pendencias"|"agenda"|"limpeza"|"pesquisar"|"integracoes"|"sistema"),
+  Variáveis: csrf (str), ativo ("inicio"|"conversa"|"pesquisar"|"pendencias"|"agenda"|"ferramentas"|"limpeza"|"integracoes"|"sistema"),
              contadores (dict de /painel/api/contadores; opcional), simulado (bool; opcional).
   Blocos:    titulo (texto do <title>), conteudo (dentro de <main>), pagina (o <body> inteiro — só o login troca),
              classe_conteudo (classe extra do <main>; a Conversa usa " conteudo--cheio" para ocupar a altura toda).
@@ -39,11 +39,11 @@
           {%- for chave, url, rotulo, nome_icone, contador in [
                 ("inicio",     "/painel",            "Início",     "inicio",     none),
                 ("conversa",   "/painel/conversa",   "Conversa",   "conversa",   none),
+                ("pesquisar",  "/painel/pesquisar",  "Pesquisar",  "busca",      none),
                 ("pendencias", "/painel/pendencias", "Pendências", "pendencias", "aguardando"),
                 ("agenda",     "/painel/agenda",     "Agenda",     "agenda",     none),
-                ("redigir",    "/painel/redigir",    "Redigir",    "conversa",   "redigir_aguardando"),
+                ("ferramentas","/painel/ferramentas","Ferramentas","ferramentas","redigir_aguardando"),
                 ("limpeza",    "/painel/limpeza",    "Limpeza",    "limpeza",    "limpeza_aguardando"),
-                ("pesquisar",  "/painel/pesquisar",  "Pesquisar",  "busca",      none),
                 ("integracoes","/painel/integracoes","Integrações","externo",    none),
                 ("sistema",    "/painel/sistema",    "Sistema",    "sistema",    none),
               ] %}

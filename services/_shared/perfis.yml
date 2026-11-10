@@ -180,10 +180,16 @@ inbox:
 # Texto e áudio (transcrito localmente com gemma4) passam pelo mesmo
 # tratamento do e-mail: classificação → pendência "o que você quer
 # responder?" (texto + áudio) → a resposta de Pedro volta pelo WhatsApp.
-# Instância, chave e número de Pedro ficam no .env (EVOLUTION_*, WHATSAPP_*).
+# Chave e número de Pedro ficam no .env (EVOLUTION_*, WHATSAPP_*).
+# Cada conta é uma SESSÃO: uma instância da Evolution (um número pareado por QR) com um papel.
+#   papel: pessoal    → o seu número: o fluxo acima.
+#   papel: assistente → o número do Alfred: você manda ordens (lembrete → agenda) e os outros são recepcionados.
+# O papel escolhido no Painel (Sistema → WhatsApp) vale mais que o daqui. Só uma sessão é a assistente.
+# Parear: ./run.sh whatsapp qrcode --sessao NOME · webhook: ./run.sh whatsapp webhook URL --sessao NOME
 whatsapp:
   pedro_whatsapp:
     perfil: pedro_dev
+    papel: pessoal                # instância: EVOLUTION_INSTANCE do .env (conta padrão, WHATSAPP_DEFAULT)
     grupos: ignorar               # ignorar | mencao (só se Pedro for mencionado) | todos
     pessoal_vira_pendencia: true  # false = só "profissional" vira pendência
     so_se_requer_resposta: true   # false = toda mensagem relevante vira pendência, mesmo "ok, obrigado"
@@ -204,6 +210,40 @@ whatsapp:
       template_audio: audio_pergunta_whatsapp
       lembrar_a_cada_horas: 6
       tocar_ao_notificar: true    # o resumo em áudio começa junto com a notificação (botões Parar / Ouvir)
+
+  # Segundo número, "do Alfred". Você (WHATSAPP_NUMERO_PEDRO) escreve ou fala → vai para a agenda (sem data
+  # vira lembrete de hoje). Outra pessoa → uma saudação; se a conversa for séria (o Alfred julga com o seu
+  # perfil e a memória), ele olha a agenda, passa a previsão de retorno + o site, abre a pendência e avisa
+  # você pelo WhatsApp. Depois fica em silêncio: o que chegar só é repassado.
+  alfred_whatsapp:
+    perfil: pedro_dev
+    papel: assistente
+    instancia: alfred-assistente  # nome da instância na Evolution API
+    audio_max_segundos: 600
+    contatos_ignorar: []          # substrings de número ou nome que o Alfred não recepciona
+    historico: true
+    assistente:
+      site: ""                    # ex.: https://seusite.com — vazio = a mensagem sai sem o site
+      silencio_horas: 12          # depois de responder, o Alfred não fala de novo com o contato por isso
+      # O que o Alfred pode contar de você a quem pergunta (experiência, serviços, projetos). Só sai daqui e da
+      # `descricao` do perfil; a memória não entra. Vazio = ele só diz quem é e que avisa você.
+      apresentacao: ""
+      # Modelo do Ollama que conversa com o contato e julga se é sério. Vazio = o modelo padrão (MODEL_CHAT).
+      # gemma4:e4b é mais leve (~1 s por resposta já carregado, contra 2 a 3 s), mas no teste de 10/11 conversou
+      # pior: se reapresentava, repetia frase e empurrava a apresentação fora de hora. Na 3060 ele também não cabe
+      # junto com o 12b (cada troca recarrega ~10 s). Para testar de novo: modelo: "gemma4:e4b"
+      modelo: ""
+      respostas_max: 8            # respostas do Alfred por contato, além da saudação, dentro de silencio_horas
+      saudacao: "Olá! Aqui é o Alfred, assistente do Pedro Netto. Como posso ajudar?"
+      retorno: "O Pedro não está disponível agora. Pela agenda dele, a previsão de retorno é {previsao}. Já avisei ele da sua mensagem."
+      # Você → número do Alfred (texto ou áudio): vai para o motor da conversa, que usa as ferramentas.
+      # Ferramentas perigosas desta lista rodam sem perguntar; as outras (executar_comando, responder_pendencia,
+      # responder_limpeza) pedem "sim" ou "não" no próprio WhatsApp.
+      sem_aprovacao: [criar_compromisso, completar_tarefa, salvar_nota]
+    pendencias:
+      tts_voice: "pt-BR-AntonioNeural"
+      template_pergunta: pergunta_whatsapp
+      template_audio: audio_pergunta_whatsapp
 
 # ── Agenda — compromissos detectados → calendário do Thunderbird ──
 # Evento / tarefa / lembrete com data detectado no WhatsApp (contatos ou notas para você mesmo)

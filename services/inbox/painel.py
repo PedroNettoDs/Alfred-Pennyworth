@@ -52,7 +52,7 @@ import integracoes
 import limpeza
 import pesquisa
 import whatsapp
-from _shared import lib_whatsapp
+from _shared import lib_atividade, lib_porta, lib_whatsapp
 
 try:
     from zoneinfo import ZoneInfo
@@ -117,7 +117,15 @@ class _RotaPainel(APIRoute):
         original = super().get_route_handler()
 
         async def handler(request: Request) -> Response:
-            resp = _erro(403, MSG_LOOPBACK) if not _rede_ok(request) else await original(request)
+            # ação de Pedro (abrir uma tela, enviar, aprovar), e não a atualização automática da página
+            acao = request.method != "GET" or request.headers.get("sec-fetch-mode") == "navigate"
+            if not _rede_ok(request):
+                resp = _erro(403, MSG_LOOPBACK)
+            else:   # o que a rota pedir ao modelo passa na porta da GPU como Pedro esperando
+                with lib_porta.origem("the owner clicked a button in the panel and is waiting", dono=acao):
+                    resp = await original(request)
+            if resp.status_code < 400 and acao:
+                lib_atividade.notado("painel")
             _cabecalhos(request, resp)
             return resp
 
@@ -888,7 +896,7 @@ def _dados_inicio() -> dict:
     lotes_aguard = [l for l in lotes if l["status"] == "aguardando"]
     return {
         "recentes": recentes, "alfred": _estado_alfred(), "wa": _conexao_whatsapp(_status_whatsapp()),
-        "simulado": lib_whatsapp.simulado(), "proximos": proximos,
+        "simulado": lib_whatsapp.simulado(), "proximos": proximos, "recados": whatsapp.recados()[:4],
         "lotes_aguardando": len(lotes_aguard), "emails_limpeza": sum(l["total"] for l in lotes_aguard),
         "cont": _contadores(),
     }
@@ -985,6 +993,8 @@ def _dados_sistema() -> dict:
     pend = _aguardando()
     return {
         "alfred": _estado_alfred(), "wa": _conexao_whatsapp(st), "wa_status": st,
+        "wa_sessoes": [{**x, **_conexao_whatsapp({**st, "estado_instancia": x.get("estado"), "instancia": x["instancia"]})}
+                       for x in st.get("sessoes") or []],
         "fila": len(st.get("fila_espera") or []) if not st.get("erro") else None,
         "porta_inbox": os.getenv("PORT_INBOX", "") or "7073", "porta_exec": porta_exec, "porta_res": porta_res,
         "executor": res["executor"], "researcher": res["researcher"], "ollama": res["ollama"],
@@ -1067,13 +1077,12 @@ def _dados_andamento(job_id: str, destino: str = "") -> Optional[dict]:
 # ── Detalhe da pendência ──
 
 def _estado_audio(p: dict) -> str:
-    mp3 = (p.get("arquivos") or {}).get("mp3")
     try:
-        if mp3 and (core.vault() / mp3).is_file():
+        if core.tem_audio(p):
             return "disponivel"
     except Exception:
         pass
-    return "expirado" if (mp3 or p.get("audio_removido_em")) else "sem"
+    return "expirado" if ((p.get("arquivos") or {}).get("mp3") or p.get("audio_removido_em")) else "sem"
 
 
 def _evento_hist(texto: str, quando, tom: str = "", detalhe: str = "") -> dict:
@@ -1317,20 +1326,29 @@ def tela_integracoes(request: Request):
 
 
 @router.get("/whatsapp")
-def tela_whatsapp(request: Request):
-    """Pareamento: gera o QR na hora (expira em ~40 s na Evolution; a página recarrega sozinha)."""
+def tela_whatsapp(request: Request, sessao: Optional[str] = None):
+    """Sessões (instância, papel, estado) + pareamento da sessão escolhida (?sessao=NOME; sem ela, a padrão):
+    gera o QR na hora (expira em ~40 s na Evolution; a página recarrega sozinha)."""
     if not _nonce_da_sessao(request):
         return _para_login(request)
     try:
-        qr = whatsapp.obter_qrcode()
+        qr = whatsapp.obter_qrcode(sessao)
+    except KeyError:
+        return _pagina(request, "nao_encontrada.html", "sistema", status=404)
     except Exception as e:
         qr = {"ok": False, "erro": str(e)[:300]}
     _CACHE_WA.clear()   # o estado mostrado ao lado do QR é o de agora
     b64 = qr.get("base64") or ""
     if b64 and not b64.startswith("data:"):
         b64 = "data:image/png;base64," + b64
-    return _pagina(request, "whatsapp.html", "sistema", qr=qr, qr_img=b64,
-                   wa=_conexao_whatsapp(_status_whatsapp()), instancia=lib_whatsapp.instancia())
+    st = _status_whatsapp()
+    atual = sessao or next((s["nome"] for s in st.get("sessoes") or [] if s["instancia"] == st.get("instancia")), "")
+    lista = [{**s, "wa": _conexao_whatsapp({**st, "instancia": s["instancia"], "estado_instancia": s["estado"]}),
+              "atual": s["nome"] == atual} for s in st.get("sessoes") or []]
+    escolhida = next((s for s in lista if s["atual"]), None)
+    return _pagina(request, "whatsapp.html", "sistema", qr=qr, qr_img=b64, sessoes=lista, sessao_atual=sessao or "",
+                   wa=escolhida["wa"] if escolhida else _conexao_whatsapp(st),
+                   instancia=escolhida["instancia"] if escolhida else lib_whatsapp.instancia())
 
 
 @router.get("/pesquisar")
@@ -1773,6 +1791,23 @@ async def acao_recusar(request: Request, lid: str):
 @router.post("/api/limpeza/{lid}/limpar")
 async def acao_limpar(request: Request, lid: str):
     return await _acao_lote(request, lid, "limpar")
+
+
+# ── WhatsApp: papel de cada sessão ──
+
+@router.post("/api/whatsapp/papel")
+async def acao_papel_whatsapp(request: Request):
+    if recusa := _checar_post(request):
+        return recusa
+    corpo = await _corpo_json(request)
+    try:
+        whatsapp.definir_papel(str(corpo.get("sessao") or ""), str(corpo.get("papel") or ""))
+    except KeyError:
+        return _erro(404, "Sessão não encontrada.")
+    except ValueError as e:
+        return _erro(400, str(e))
+    _CACHE_WA.clear()
+    return JSONResponse({"ok": True, "mensagem": "Papel gravado."})
 
 
 # ── Integrações (Pestinha) ──

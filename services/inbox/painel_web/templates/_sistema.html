@@ -1,5 +1,5 @@
 {#
-  Miolo do Sistema (página e /painel/parcial/sistema). Vars de painel._dados_sistema(): alfred, wa, wa_status,
+  Miolo do Sistema (página e /painel/parcial/sistema). Vars de painel._dados_sistema(): alfred, wa, wa_status, wa_sessoes,
   fila, porta_*, executor, researcher, ollama ({estado, detalhe}), containers ({itens}|{erro}),
   timers ({itens}|{erro}), pendencias, agora.
 #}
@@ -19,11 +19,18 @@
 <section class="cartao sistema-grupo" aria-labelledby="s-whatsapp">
   <h2 class="cartao__titulo" id="s-whatsapp">WhatsApp</h2>
   <ul class="sistema-lista">
+    {%- for s in wa_sessoes %}
+    {{ m.item_sistema(s.nome ~ " (" ~ s.papel ~ ")", s.estado, s.detalhe, rotulo=s.rotulo) }}
+    {%- else %}
     {{ m.item_sistema("Conexão", wa.estado, wa.detalhe, rotulo=wa.rotulo) }}
     {{ m.item_sistema("Instância", "neutro", wa_status.instancia or "—", rotulo="Evolution API") }}
+    {%- endfor %}
   </ul>
-  {%- if wa.estado != "ok" and not wa_status.simulado %}
-  <p>{{ m.botao("Mostrar QR code", variante="primario", href="/painel/whatsapp") }}</p>
+  {#- Só status aqui; parear e escolher papel ficam em Ferramentas → Sessões do WhatsApp. O link aparece só com sessão caída. #}
+  {%- if not wa_status.simulado %}
+  {%- for s in wa_sessoes if s.estado == "erro" %}
+  <p><a href="/painel/whatsapp?sessao={{ s.nome|urlencode }}">Conectar {{ s.nome }}</a></p>
+  {%- endfor %}
   {%- endif %}
   <ul class="sistema-lista">
     {%- if wa_status.simulado %}

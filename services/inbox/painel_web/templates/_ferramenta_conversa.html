@@ -1,0 +1,29 @@
+{#
+  Uma ferramenta da conversa, recolhível (ferramentas.html e ferramenta.html).
+  Var: t = {nome, descricao, perigosa, timeout, parametros: [{nome, tipo, obrigatorio, descricao}], codigo};
+  aberta (opcional) abre o bloco.
+#}
+{% import "_macros.html" as m %}
+<details class="recolhivel" id="t-{{ t.nome }}"{% if aberta is defined and aberta %} open{% endif %}>
+  <summary><code>{{ t.nome }}</code>{% if t.perigosa %} {{ m.selo("aguardando", "Pede aprovação", "alerta") }}{% endif %}</summary>
+  <div class="recolhivel__corpo">
+    <p class="ferramenta__descricao">{{ t.descricao }}</p>
+    {%- if t.parametros %}
+    <table class="tabela tabela--parametros">
+      <thead><tr><th scope="col">Parâmetro</th><th scope="col">Tipo</th><th scope="col">Descrição</th></tr></thead>
+      <tbody>
+        {%- for p in t.parametros %}
+        <tr>
+          <td><code>{{ p.nome }}</code>{% if p.obrigatorio %} <span class="suave">(obrigatório)</span>{% endif %}</td>
+          <td>{{ p.tipo }}</td>
+          <td>{{ p.descricao }}</td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+    {%- else %}
+    <p class="suave pequeno">Sem parâmetros.</p>
+    {%- endif %}
+    <p class="suave pequeno ferramenta__codigo">Código: <code>{{ t.codigo }}</code> · limite de {{ t.timeout }} s</p>
+  </div>
+</details>

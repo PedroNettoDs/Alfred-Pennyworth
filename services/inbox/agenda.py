@@ -275,7 +275,7 @@ def resumir(item: dict) -> Optional[dict]:
         "descricao": (item.get("descricao") or "(sem detalhes)")[:2000],
     })
     data = ollama_generate_json(prompt, timeout=120, schema=SCHEMA_RESUMO,
-                                options={**core.OPTS_JSON, "num_predict": 300})
+                                options={**core.OPTS_JSON, "num_predict": 300, **core.ctx_do_chat()})
     if not isinstance(data, dict) or not str(data.get("resumo") or "").strip():
         return None
     return {"resumo":     str(data["resumo"]).strip()[:600],
@@ -337,7 +337,7 @@ def detectar_compromisso(texto: str, contexto: str = "", data_ref: Optional[date
         "texto":     texto[:2500],
     })
     data = ollama_generate_json(prompt, timeout=120, schema=SCHEMA_COMPROMISSO,
-                                options={**core.OPTS_JSON, "num_predict": 300})
+                                options={**core.OPTS_JSON, "num_predict": 300, **core.ctx_do_chat()})
     if not isinstance(data, dict) or not data.get("existe") or data.get("tipo") == "nenhum":
         return None
     try:

@@ -69,6 +69,8 @@ class Base(unittest.TestCase):
             mock.patch.object(lib_whatsapp, "IDS_ENVIADOS_FILE", cls.tmp / "ids_enviados.json"),
             mock.patch.object(whatsapp, "SEEN_FILE", cls.tmp / "seen.json"),
             mock.patch.object(whatsapp, "FILA_FILE", cls.tmp / "fila.json"),
+            mock.patch.object(whatsapp, "SESSOES_FILE", cls.tmp / "whatsapp_sessoes.json"),
+            mock.patch.object(whatsapp, "ATENDIMENTOS_FILE", cls.tmp / "whatsapp_atendimentos.json"),
             mock.patch.object(promessas, "SEEN_FILE", cls.tmp / "promessas_seen.json"),
             mock.patch.object(promessas, "_cfg", lambda: {
                 "ativo": True, "canais": ["whatsapp", "email"], "pastas_enviados": ["Sent"], "janela_horas": 48.0,
@@ -313,6 +315,49 @@ class TestVerificacao(Base):
         agenda.concluir(p["agenda_id"], via="painel")
         self.assertEqual(promessas.obter(p["id"])["status"], "cumprida")
         self.assertEqual(agenda.obter(p["agenda_id"])["status"], "feito")
+
+
+class TestNegligencia(Base):
+    """O que Pedro deixou vencer, resumido para o pet (estado.json → negligencia)."""
+
+    def _tarefas(self, *tarefas):
+        import yaml
+        (self.tmp / "vault" / "tasks.yml").write_text(yaml.dump({"tasks": list(tarefas)}), encoding="utf-8")
+
+    def test_nada_vencido_e_none(self):
+        self.assertIsNone(promessas.negligencia(self.agora))
+        amanha = (self.agora + timedelta(days=1)).date().isoformat()
+        self._tarefas({"id": 1, "title": "Futuro", "status": "open", "due_date": amanha})
+        self.assertIsNone(promessas.negligencia(self.agora))
+
+    def test_promessa_vencida_pesa_pelo_atraso(self):
+        self._registrar_vencida(dias_atras=2)                    # venceu ontem
+        n = promessas.negligencia(self.agora)
+        self.assertEqual((n["nivel"], n["motivo"], n["quantos"]), (0.5, "promessa", 1))
+        self.assertEqual(n["texto"], "Mandar o orçamento do servidor (Carlos), vencida há 1 dia")
+
+    def test_cumprida_nao_conta(self):
+        p, _ = self._registrar_vencida()
+        promessas.marcar(p["id"], "cumprida")
+        self.assertIsNone(promessas.negligencia(self.agora))
+
+    def test_tarefa_vencida_soma_e_a_promessa_e_o_motivo(self):
+        self._registrar_vencida(dias_atras=5)                    # 4 dias: teto de 0,7
+        ha3 = (self.agora - timedelta(days=3)).date().isoformat()
+        self._tarefas({"id": 1, "title": "Pagar boleto", "status": "open", "due_date": ha3},
+                      {"id": 2, "title": "Feita", "status": "done", "due_date": ha3})
+        n = promessas.negligencia(self.agora)
+        self.assertEqual((n["nivel"], n["motivo"], n["quantos"]), (1.0, "promessa", 2))   # 0,7 + 0,4, com teto 1
+
+    def test_so_tarefa(self):
+        ontem = (self.agora - timedelta(days=1)).date().isoformat()
+        self._tarefas({"id": 1, "title": "Pagar boleto", "status": "open", "due_date": ontem})
+        n = promessas.negligencia(self.agora)
+        self.assertEqual((n["nivel"], n["motivo"], n["texto"]), (0.3, "tarefa", "Pagar boleto, vencida há 1 dia"))
+
+    def test_tasks_ilegivel_nao_derruba(self):
+        (self.tmp / "vault" / "tasks.yml").write_text("tasks: [", encoding="utf-8")
+        self.assertIsNone(promessas.negligencia(self.agora))
 
 
 class TestEmail(Base):
