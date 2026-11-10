@@ -56,6 +56,7 @@ PAGINA_MAX = 8000         # caracteres do texto de uma página (ler_pagina)
 EMAIL_MAX = 6000          # caracteres do corpo de um e-mail (ler_email)
 EMAILS_LISTA_MAX = 40     # linhas de emails_recentes
 EMAILS_LER_DIAS = 30      # quão para trás ler_email procura o message_id
+CONVERSA_MSG_MAX = 1500   # caracteres de cada mensagem em ler_conversa
 
 _REGISTRO: dict[str, dict] = {}
 _TIPOS = {str: "string", int: "integer", float: "number", bool: "boolean"}
@@ -1179,6 +1180,48 @@ def listar_memoria(sujeito: Optional[str] = None) -> str:
     return f"{len(fatos)} fato(s):\n" + "\n".join(
         f"• #{f['id']} [{f['sujeito']}] {f['fato']} ({f['tipo']}"
         + ("" if f.get("validade") == "permanente" else f", até {f.get('validade')}") + ")" for f in fatos)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Conversas anteriores com o Alfred
+# ══════════════════════════════════════════════════════════════
+
+@ferramenta("buscar_conversas",
+            "Busca nas conversas anteriores entre Pedro e Alfred, por assunto ou palavras. Use quando Pedro citar algo "
+            "já conversado: \"o que falamos sobre X?\", \"aquela conversa do TG\", \"o que você me disse do "
+            "orçamento?\". Leia uma conversa inteira com ler_conversa(id).")
+def buscar_conversas(consulta: str, limite: int = 5) -> str:
+    """
+    :param consulta: Assunto ou palavras-chave, ex.: "BitTorrent DHT"
+    :param limite: Máximo de conversas (até 20)
+    """
+    achados = _inbox("conversa").buscar_anteriores(consulta, min(max(limite, 1), 20))
+    if not achados:
+        return f"Nenhuma conversa anterior sobre {consulta!r}."
+
+    def trecho(texto: str) -> str:
+        return texto if len(texto) <= TRECHO_MAX else texto[:TRECHO_MAX - 1] + "…"
+
+    return (f"{len(achados)} conversa(s) sobre {consulta!r}; leia a íntegra com ler_conversa(id):\n\n"
+            + "\n\n".join(f"[{a['conversa_id']}] {a['quando']} · {a['titulo']}\n{trecho(a['trecho'])}" for a in achados))
+
+
+@ferramenta("ler_conversa", "Lê uma conversa anterior entre Pedro e Alfred, em ordem (id vindo de buscar_conversas).")
+def ler_conversa(conversa_id: str) -> str:
+    """
+    :param conversa_id: Id da conversa, ex.: "20261108-201828-7a2de5"
+    """
+    motor = _inbox("conversa")
+    conv = motor.obter_conversa(conversa_id.strip())
+    if not conv:
+        return f"Conversa não encontrada: {conversa_id!r}. Ache o id com buscar_conversas."
+
+    def corpo(texto: str) -> str:
+        return texto if len(texto) <= CONVERSA_MSG_MAX else texto[:CONVERSA_MSG_MAX - 1] + "…"
+
+    linhas = [f"[{m['criada_em'][:16].replace('T', ' ')}] {'Pedro' if m['papel'] == 'user' else 'Alfred'}: "
+              f"{corpo(m['texto'])}" for m in motor.mensagens(conv["id"]) if m["papel"] != "tool" and m["texto"]]
+    return f"Conversa \"{conv['titulo'] or 'sem título'}\":\n" + "\n\n".join(linhas)
 
 
 # ══════════════════════════════════════════════════════════════

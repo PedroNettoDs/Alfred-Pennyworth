@@ -26,6 +26,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh whatsapp fila   # mensagens esperando atraso_minutos (contato, prazo, textos) · processar-fila [--todos] [--sem-enviar]
 ./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
 ./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa; no navegador, a aba Conversa do Painel
+./run.sh conversa-comprimir                   # conversas paradas há um dia viram resumo no cofre e fatos na memória (timer às 04:00)
 ./run.sh promessas                     # o que você disse que ia fazer (abertas e atrasadas) — ver Promessas
 ```
 
@@ -270,7 +271,7 @@ Datas sempre em America/Sao_Paulo, `DD/MM/AAAA HH:MM`, e relativas nas listas ("
 | **Enviar** (conversa) | `conversa.enviar(id, texto)` — na primeira mensagem, `conversa.nova_conversa()` antes; os eventos do turno chegam por SSE | a resposta aparece em stream; conversa e mensagens ficam em `VAULT_ALFRED/conversas.db` |
 | **Executar** / **Não** (cartão de ferramenta perigosa) | `conversa.aprovar(id)` / `conversa.negar(id)` | a ferramenta roda (ou não) e o turno continua; sem clique em 5 min, cancelada |
 | **Parar** (conversa) | `conversa.parar(turno_id)` | corta o stream na próxima linha e grava o que já tinha chegado ("Interrompido.") |
-| **Apagar** (conversa) | confirmação em `<dialog>` → `conversa.apagar_conversa(id)` | some com mensagens e aprovações; 409 com turno em andamento |
+| **Apagar** (conversa) | confirmação em `<dialog>` → `conversa.apagar_conversa(id)` | some com mensagens, aprovações e a nota em `conversas/` (o índice solta a nota na próxima passada do `alfred-rag`); fatos que já foram para a memória ficam lá; 409 com turno em andamento |
 | **Pesquisar** | `pesquisa.pesquisar(tema, profundo)` → `POST 127.0.0.1:${PORT_RESEARCHER:-7072}/research` com `Authorization: Bearer $SHELL_EXECUTOR_TOKEN` | rápido: espera a síntese (~40–50 s, teto de 300 s) e abre o resultado; profundo: 202 + `job_id` → abre o andamento. Researcher fora do ar ou erro dele → 502 com a mensagem e **Tentar de novo** |
 
 - **Já resolvida por outro caminho** (celular, notificação, CLI, chat): o servidor confere "ainda aguardando" antes de
@@ -992,13 +993,44 @@ mesmo processo: a API (Fase 3) sim; o `run.sh conversa` não segura a fila da AP
 
 **Persistência:** `VAULT_ALFRED/conversas.db` (SQLite WAL + FTS5). Tabelas `conversas`
 (id, título, criada/atualizada, resumo, `resumo_ate`), `mensagens` (papel `user` / `assistant` / `tool`, texto,
-ferramenta, argumentos, resultado, modelo, tokens de entrada e saída, tempo, turno) e `aprovacoes` (ferramenta,
-argumentos, `aguardando` → `aprovada` / `negada` / `expirada` / `cancelada`, resultado). Cada gravação é uma
+ferramenta, argumentos, resultado, modelo, tokens de entrada e saída, tempo, turno), `aprovacoes` (ferramenta,
+argumentos, `aguardando` → `aprovada` / `negada` / `expirada` / `cancelada`, resultado) e `conversas_notas` (nota no
+cofre e até que mensagem a última compressão foi). Cada gravação é uma
 transação. Título: `lib_titulo.extrair_titulo_manchete` da primeira pergunta (sem LLM: não disputa a GPU).
 
 **Configuração** (`perfis.yml → conversa:`): `modelo` (vazio = `MODEL_CHAT`), `modelo_ferramentas` (vazio = o
 mesmo; outro modelo decide as ferramentas sem mostrar texto e o `modelo` escreve a resposta final sem tools),
 `num_ctx` (16384). No código: `MAX_VOLTAS` 6, `APROVACAO_S` 300, `HISTORICO` 12, `RESUMO_A_CADA` 20, `RAG_CHARS` 1500.
+
+### Conversas anteriores: compressão e busca
+
+O contexto de um turno só tem a conversa aberta. Para o Alfred chegar nas outras:
+
+```bash
+./run.sh conversa-comprimir              # conversas sem mensagem há 24 h (alfred-conversas.timer, 04:00, Persistent=true)
+./run.sh conversa-comprimir --horas 1    # teste: considera parada depois de 1 h
+```
+
+| Passo | O que faz |
+|---|---|
+| Quem entra | conversa parada há `COMPRIMIR_HORAS` (24) com mensagem nova desde a última passada (`conversas_notas.ate_mensagem`). Retomada depois: a nota é refeita no mesmo arquivo |
+| Nota | `_resumir` (o mesmo do histórico: formato de máquina, até ~1200 caracteres, incremental sobre o resumo da conversa longa) → `VAULT_ALFRED/conversas/AAAA-MM/<id>.md`, com frontmatter e link para o Painel. Menos de `NOTA_MIN_CHARS` (200) entre Pedro e Alfred não vira nota nem gasta LLM |
+| Índice | nada de novo: o `alfred-rag.timer` indexa a nota em FTS5 e ChromaDB como qualquer `.md`, e `buscar_cofre` passa a achá-la |
+| Memória | as falas **de Pedro** desde a última passada → `lib_memoria.extrair(texto, "conversa", "Pedro")`. As respostas do Alfred ficam de fora: podem trazer texto da web, que não é fato sobre Pedro. Deduplicação por conta do `lib_memoria` |
+| Falha | resumo vazio (Ollama fora) ou erro ao gravar: para na primeira, nada é marcado e o resto fica para a próxima passada; o comando sai com 1 |
+
+**Recuperar:** `buscar_conversas(consulta, limite=5)` procura nesta ordem: mensagens com todas as palavras (FTS5,
+inclusive as conversas de hoje, que ainda não têm nota); resumos em `conversas/` pelo significado (só vetores, corte
+`DISTANCIA_MAX` do `lib_rag`: o FTS das notas cai para OR e "que" e "sobre" casariam com todas); e, se nada disso achou,
+mensagens com alguma palavra de 4+ letras. `ler_conversa(id)` devolve a íntegra (cada mensagem até 1500 caracteres,
+sem as chamadas de ferramenta). A conversa com turno em andamento nunca entra: a própria pergunta casaria com ela.
+
+**Contexto automático:** `_quer_conversas(pergunta)` reconhece "o que falamos", "aquela conversa", "você me disse",
+"lembra de", "da última vez"... Só então até 3 resumos entram no system (bloco "Conversas anteriores", teto de
+`RAG_CHARS`), buscados só por vetor. Sem ChromaDB o bloco não aparece, e o modelo ainda tem `buscar_conversas`.
+
+O job roda em processo separado: `ocupado()` não o enxerga, e por isso ele fica de madrugada. Com a máquina desligada
+às 04:00, roda ao ligar. Em modo jogo o `run.sh` recusa.
 
 ### Medição na RTX 3060 12 GB (31/10/2026)
 
@@ -1039,6 +1071,8 @@ O que isso quer dizer:
   o certo é igualar: `OLLAMA_NUM_CTX=16384` no `.env` (decisão de Pedro; o `.env` não foi alterado).
 - **`modelo_ferramentas: gemma4:e4b` não ajuda nesta GPU:** e4b (4,8 GB) + 12b (8,4 GB) não cabem juntos, então
   cada turno troca de modelo duas vezes. Fica configurável e vazio por padrão.
+
+**Testes da compressão e da busca:** classe `TestConversasAnteriores` em `tests.test_conversa` (nota, memória só com as falas de Pedro, conversa recente, retomada, curta, LLM fora, apagar, heurística, contexto automático, ordem da busca) e em `tests.test_ferramentas` (`buscar_conversas`, `ler_conversa`).
 
 **Testes:** `venv/bin/python -m unittest tests.test_conversa -v` (offline: o Ollama é um roteiro trocado no lugar de
 `_stream_ollama`; vault e `conversas.db` temporários; memória, RAG e resumo mockados). Cobrem o contexto montado

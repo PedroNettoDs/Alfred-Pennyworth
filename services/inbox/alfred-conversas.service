@@ -1,0 +1,21 @@
+[Unit]
+Description=Alfred — comprime as conversas paradas há um dia: resumo em VAULT_ALFRED/conversas/ + fatos na memória
+After=network-online.target
+# Disparado por alfred-conversas.timer. Unit de USUÁRIO: instale em ~/.config/systemd/user/
+# Em modo jogo (logs/alfred_desligado) o run.sh recusa: o resumo usa a GPU.
+
+[Service]
+Environment=ALFRED_AUTOMACAO=1
+Type=oneshot
+WorkingDirectory=@ALFRED_DIR@/services/inbox
+ExecStart="@ALFRED_DIR@/services/inbox/run.sh" conversa-comprimir
+StandardOutput=journal
+StandardError=journal
+Nice=10
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=default.target
+
+# INSTALAÇÃO: modelo — services/scripts/instalar.sh troca @ALFRED_DIR@ pelo caminho real do repositório
+# e grava a unit em ~/.config/systemd/user/ (não copie este arquivo direto).

@@ -23,6 +23,7 @@ Uso:
     inbox-assistant.py whatsapp fila                                → mensagens esperando atraso_minutos (prazo, textos)
     inbox-assistant.py whatsapp processar-fila [--todos] [--sem-enviar]  → cria as pendências vencidas (--todos: já)
     inbox-assistant.py conversa "pergunta" [--conversa ID] [--modelo M]   → conversa com o Alfred (motor da aba Conversa)
+    inbox-assistant.py conversa-comprimir [--horas 24]                    → conversas paradas viram resumo no cofre e fatos na memória
 
 Saída final do ciclo: linhas JORNAL_FILE=... e PENDENCIA_NOVA=... (uma por pendência),
 fáceis de consumir por shell/N8N.
@@ -711,7 +712,8 @@ def cmd_perguntar(args):
 # ── Main ──────────────────────────────────────────────────────
 
 SUBCOMANDOS = ("ciclo", "scan", "jornal", "pendencias", "perguntar", "ver", "ouvir", "responder", "responder-texto",
-               "whatsapp", "semanal", "limpeza", "agenda", "promessas", "vigia", "conversa", "_aguardar-resposta",
+               "whatsapp", "semanal", "limpeza", "agenda", "promessas", "vigia", "conversa", "conversa-comprimir",
+               "_aguardar-resposta",
                "_aguardar-whatsapp", "_aguardar-agenda", "_vigia-qr")
 
 
@@ -845,6 +847,9 @@ def main() -> int:
     if args.cmd == "conversa":
         import conversa
         return conversa.cmd_conversa(args)
+    if args.cmd == "conversa-comprimir":
+        import conversa
+        return conversa.cmd_comprimir(args)
     build_parser().print_help()
     return 1
 

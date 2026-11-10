@@ -29,6 +29,11 @@ voltam ao contexto: a resposta daquele turno já diz o que importava.
 
 Persistência: VAULT_ALFRED/conversas.db (SQLite + FTS5) — conversas, mensagens (papel user | assistant | tool,
 ferramenta, argumentos, resultado, modelo, tokens, tempo) e aprovacoes. Cada gravação é uma transação.
+
+Conversas antigas: `run.sh conversa-comprimir` (alfred-conversas.timer, de madrugada) passa nas conversas paradas há um
+dia. Cada uma vira um resumo em VAULT_ALFRED/conversas/AAAA-MM/<id>.md, que o alfred-rag.timer indexa em FTS5 e ChromaDB
+como qualquer nota, e o que Pedro disse de novo vai para lib_memoria.extrair. buscar_anteriores() é o que as ferramentas
+buscar_conversas / ler_conversa e o contexto automático (_quer_conversas) usam para chegar nelas.
 """
 
 import json
@@ -51,7 +56,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _shared import lib_ferramentas, lib_memoria, lib_rag, lib_wordcraft  # noqa: E402
-from _shared.lib_alfred import DEFAULT_MODEL_CHAT, DEFAULT_OLLAMA_URL, log, ollama_generate  # noqa: E402
+from _shared.lib_alfred import DEFAULT_MODEL_CHAT, DEFAULT_OLLAMA_URL, gravar_atomico, log, ollama_generate  # noqa: E402
 from _shared.lib_titulo import extrair_titulo_manchete  # noqa: E402
 
 import core  # noqa: E402
@@ -62,7 +67,10 @@ MAX_VOLTAS = 6            # voltas de ferramenta por turno; a chamada seguinte v
 APROVACAO_S = 300         # ferramenta perigosa sem clique de Pedro nisso → cancelada
 HISTORICO = 12            # mensagens que ficam inteiras quando o resumo é refeito
 RESUMO_A_CADA = 20        # mensagens novas fora do resumo (além das 12) que disparam um resumo novo
-RAG_CHARS = 1500          # teto do bloco de RAG automático
+RAG_CHARS = 1500          # teto do bloco de RAG automático (e do de conversas anteriores)
+PASTA_NOTAS = "conversas" # em VAULT_ALFRED: um resumo .md por conversa parada (o alfred-rag.timer indexa)
+COMPRIMIR_HORAS = 24      # conversa parada há tanto tempo vira nota
+NOTA_MIN_CHARS = 200      # conversa menor que isso ("oi", "obrigado") não vale nota nem chamada ao LLM
 NUM_CTX_PADRAO = 16384
 TIMEOUT_OLLAMA = 300      # s sem chegar nada do stream (carregar o gemma4:12b leva ~12 s)
 GUARDAR_TURNO_S = 1800    # turno terminado continua em obter_turno() por isso (o SSE da Fase 3 pode reconectar)
@@ -94,6 +102,9 @@ CREATE TABLE IF NOT EXISTS aprovacoes(
     turno_id TEXT NOT NULL, ferramenta TEXT NOT NULL, argumentos TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('aguardando', 'aprovada', 'negada', 'expirada', 'cancelada')),
     criada_em TEXT NOT NULL, decidida_em TEXT, resultado TEXT);
+CREATE TABLE IF NOT EXISTS conversas_notas(
+    conversa_id TEXT PRIMARY KEY REFERENCES conversas(id) ON DELETE CASCADE,
+    caminho TEXT NOT NULL DEFAULT '', ate_mensagem INTEGER NOT NULL, comprimida_em TEXT NOT NULL);
 """
 _COLUNAS = ("ferramenta", "argumentos", "resultado", "modelo", "tokens_entrada", "tokens_saida", "tempo_ms")
 
@@ -196,20 +207,26 @@ def mensagens(conversa_id: str) -> list[dict]:
 
 
 def apagar_conversa(conversa_id: str) -> bool:
-    """Apaga a conversa com mensagens (a FTS acompanha pelo gatilho) e aprovações. False se não existe; RuntimeError
-    com turno em andamento (ele ainda vai gravar nela)."""
+    """Apaga a conversa com mensagens (a FTS acompanha pelo gatilho), aprovações e a nota do cofre (o índice solta a
+    nota na próxima passada do alfred-rag). Fatos que já foram para a memória ficam lá. False se não existe;
+    RuntimeError com turno em andamento (ele ainda vai gravar nela)."""
     if turno_ativo(conversa_id):
         raise RuntimeError("já há um turno em andamento nesta conversa")
     with closing(_conectar()) as con, con:
+        nota = con.execute("SELECT caminho FROM conversas_notas WHERE conversa_id = ?", (conversa_id,)).fetchone()
         con.execute("DELETE FROM mensagens WHERE conversa_id = ?", (conversa_id,))
         con.execute("DELETE FROM aprovacoes WHERE conversa_id = ?", (conversa_id,))
-        return con.execute("DELETE FROM conversas WHERE id = ?", (conversa_id,)).rowcount > 0
+        existia = con.execute("DELETE FROM conversas WHERE id = ?", (conversa_id,)).rowcount > 0
+    if nota and nota["caminho"]:
+        (core.vault() / nota["caminho"]).unlink(missing_ok=True)
+    return existia
 
 
-def buscar(consulta: str, limite: int = 20) -> list[dict]:
-    """FTS5 nas mensagens de Pedro e do Alfred → [{conversa_id, titulo, mensagem_id, papel, trecho}]."""
-    palavras = list(dict.fromkeys(re.findall(r"\w{2,}", (consulta or "").lower())))[:20]
-    termos = " ".join(f'"{p}"*' for p in palavras)   # todas as palavras, por prefixo
+def buscar(consulta: str, limite: int = 20, qualquer: bool = False) -> list[dict]:
+    """FTS5 nas mensagens de Pedro e do Alfred → [{conversa_id, titulo, mensagem_id, papel, trecho}]. Por padrão exige
+    todas as palavras; `qualquer` basta uma de 4+ letras ("de" e "que" casariam com tudo)."""
+    palavras = list(dict.fromkeys(re.findall(r"\w{4,}" if qualquer else r"\w{2,}", (consulta or "").lower())))[:20]
+    termos = (" OR " if qualquer else " ").join(f'"{p}"*' for p in palavras)   # por prefixo
     if not termos:
         return []
     with closing(_conectar()) as con:
@@ -379,6 +396,30 @@ def _quer_rag(pergunta: str) -> bool:
     return bool(_RE_RAG.search(core._ascii(pergunta or "").lower()))
 
 
+_RE_CONVERSAS = re.compile(
+    r"\b(conversa (anterior|passada)|(aquela|outra|ultima) conversa|(ja )?conversamos|falamos|"
+    r"a gente (falou|conversou)|(te|lhe) (falei|contei|disse|pedi)|voce (me )?(disse|falou|sugeriu|recomendou|explicou)|"
+    r"(da|na) (outra|ultima) vez|lembra (de|do|da|que|quando))\b")
+
+
+def _quer_conversas(pergunta: str) -> bool:
+    """Heurística: Pedro está citando algo já conversado? Só então os resumos entram sozinhos no contexto."""
+    return bool(_RE_CONVERSAS.search(core._ascii(pergunta or "").lower()))
+
+
+def _bloco_anteriores(pergunta: str, conversa_id: str) -> str:
+    """Resumos das conversas passadas mais próximas da pergunta, até RAG_CHARS. "" se nada passou do corte do lib_rag."""
+    blocos, total = [], 0
+    for a in buscar_anteriores(pergunta, 3, excluir=conversa_id, so_resumos=True):
+        bloco = f"[{a['conversa_id']}] {a['quando']} · {a['titulo']}\n{a['trecho']}"
+        total += len(bloco)
+        if total > RAG_CHARS:
+            break
+        blocos.append(bloco)
+    return "## Conversas anteriores com Pedro (resumos; a íntegra sai de ler_conversa)\n" + "\n\n".join(blocos) \
+        if blocos else ""
+
+
 def _historico(conversa_id: str, ate_id: Optional[int] = None) -> tuple[str, list[dict]]:
     """(resumo, mensagens de Pedro/Alfred depois do resumo e antes de `ate_id`) — no máximo HISTORICO + RESUMO_A_CADA
     (se um resumo falhou, as mais antigas ficam de fora até o próximo dar certo)."""
@@ -396,7 +437,8 @@ def _historico(conversa_id: str, ate_id: Optional[int] = None) -> tuple[str, lis
 def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = None, contexto: str = "") -> list[dict]:
     """
     Mensagens do /api/chat: [system, histórico..., user]. O system junta personalidade, bloco "Agora", memória
-    (lib_memoria.contexto), RAG (só se _quer_rag) e o resumo das mensagens antigas. `ate_id` = id da mensagem de
+    (lib_memoria.contexto), RAG (só se _quer_rag), conversas anteriores (só se _quer_conversas) e o resumo das
+    mensagens antigas. `ate_id` = id da mensagem de
     Pedro deste turno (o histórico pega só as anteriores a ela). `contexto` = bloco só deste turno (o documento
     aberto na janela de escrita); vai junto da pergunta porque, no fim de um system longo, o modelo não o usava.
     """
@@ -410,6 +452,11 @@ def montar_contexto(conversa_id: str, pergunta: str, ate_id: Optional[int] = Non
             partes.append(lib_rag.contexto(pergunta, RAG_CHARS))
         except Exception as e:
             log(f"[conversa] RAG fora do contexto ({_curto(e)})")
+    if _quer_conversas(pergunta):
+        try:
+            partes.append(_bloco_anteriores(pergunta, conversa_id))
+        except Exception as e:
+            log(f"[conversa] conversas anteriores fora do contexto ({_curto(e)})")
     resumo, historico = _historico(conversa_id, ate_id)
     if resumo:
         partes.append(f"## Resumo da conversa até aqui\n{resumo}")
@@ -452,6 +499,126 @@ def _atualizar_resumo(conversa_id: str, modelo: str, num_ctx: int) -> bool:
                     (novo, cobrir[-1]["id"], conversa_id, conv["resumo_ate"]))
     log(f"[conversa] resumo de {conversa_id} refeito: {len(cobrir)} mensagens, {len(novo)} caracteres")
     return True
+
+
+# ══════════════════════════════════════════════════════════════
+#  Conversas antigas: nota no cofre, memória e busca
+# ══════════════════════════════════════════════════════════════
+
+def _dia(iso: str) -> str:
+    """"2026-11-08T20:18:28-03:00" → "08/11/2026"."""
+    return f"{iso[8:10]}/{iso[5:7]}/{iso[:4]}"
+
+
+def _paradas(horas: float) -> list[dict]:
+    """Conversas sem mensagem há `horas` e com mensagem nova desde a última passada, da mais antiga para a mais nova."""
+    corte = time.time() - horas * 3600
+    with closing(_conectar()) as con:
+        rows = con.execute(
+            "SELECT c.id, c.titulo, c.criada_em, c.atualizada_em, c.resumo, c.resumo_ate,"
+            " COALESCE(n.ate_mensagem, 0) AS ate_mensagem"
+            " FROM conversas c LEFT JOIN conversas_notas n ON n.conversa_id = c.id"
+            " WHERE (SELECT MAX(m.id) FROM mensagens m WHERE m.conversa_id = c.id"
+            "        AND m.papel IN ('user', 'assistant') AND m.texto != '') > COALESCE(n.ate_mensagem, 0)"
+            " ORDER BY c.atualizada_em").fetchall()
+    return [dict(r) for r in rows if _ts(r["atualizada_em"]) <= corte]
+
+
+def _nota(conv: dict, resumo: str, n: int) -> str:
+    titulo = conv["titulo"] or "Conversa"
+    meta = yaml.safe_dump({"title": titulo, "tipo": "conversa", "conversa_id": conv["id"],
+                           "criada_em": conv["criada_em"], "atualizada_em": conv["atualizada_em"]},
+                          allow_unicode=True, sort_keys=False)
+    porta = os.getenv("PORT_INBOX", "").strip() or "7073"
+    return (f"---\n{meta}---\n\n# {titulo}\n\nConversa com o Alfred em {_dia(conv['criada_em'])}, {n} mensagens. "
+            f"[Abrir no Painel](http://127.0.0.1:{porta}/painel/conversa/{conv['id']})\n\n## Resumo\n\n{resumo}\n")
+
+
+def _comprimir_uma(conv: dict, cfg: dict) -> Optional[dict]:
+    """Resumo → nota no cofre; o que Pedro disse desde a última passada → memória (só as falas dele: resposta do Alfred
+    pode trazer texto da web, e isso não é fato sobre Pedro). None se o LLM não respondeu: nada é marcado."""
+    with closing(_conectar()) as con:
+        rows = [dict(r) for r in con.execute(
+            "SELECT id, papel, texto FROM mensagens WHERE conversa_id = ? AND papel IN ('user', 'assistant')"
+            " AND texto != '' ORDER BY id", (conv["id"],))]
+    caminho = ""
+    if sum(len(m["texto"]) for m in rows) >= NOTA_MIN_CHARS:
+        resumo = _resumir(conv["resumo"], [m for m in rows if m["id"] > conv["resumo_ate"]], cfg["modelo"], cfg["num_ctx"])
+        if not resumo:
+            return None
+        caminho = f"{PASTA_NOTAS}/{conv['criada_em'][:7]}/{conv['id']}.md"
+        gravar_atomico(core.vault() / caminho, _nota(conv, resumo, len(rows)))
+    falas = "\n".join(m["texto"] for m in rows if m["papel"] == "user" and m["id"] > conv["ate_mensagem"])
+    fatos = lib_memoria.extrair(falas, "conversa", "Pedro")
+    with closing(_conectar()) as con, con:
+        con.execute("INSERT OR REPLACE INTO conversas_notas(conversa_id, caminho, ate_mensagem, comprimida_em)"
+                    " VALUES (?, ?, ?, ?)", (conv["id"], caminho, rows[-1]["id"], _agora()))
+    return {"nota": caminho, "fatos": len(fatos)}
+
+
+def comprimir(horas: float = COMPRIMIR_HORAS) -> dict:
+    """Passa nas conversas paradas → {notas, curtas, fatos, pendentes}. Na primeira falha para: com o Ollama fora, as
+    outras falhariam igual e ficam para a próxima passada."""
+    cfg = _cfg()
+    res = {"notas": 0, "curtas": 0, "fatos": 0, "pendentes": 0}
+    paradas = _paradas(horas)
+    for i, conv in enumerate(paradas):
+        try:
+            r = _comprimir_uma(conv, cfg)
+        except Exception as e:
+            log(f"[conversa] comprimir {conv['id']} falhou: {type(e).__name__}: {_curto(e)}")
+            r = None
+        if r is None:
+            res["pendentes"] = len(paradas) - i
+            log(f"[conversa] comprimir parou em {conv['id']}: {res['pendentes']} ficam para a próxima passada")
+            break
+        res["notas" if r["nota"] else "curtas"] += 1
+        res["fatos"] += r["fatos"]
+    log(f"[conversa] comprimir: {res['notas']} nota(s), {res['curtas']} curta(s), {res['fatos']} fato(s), "
+        f"{res['pendentes']} pendente(s)")
+    return res
+
+
+def _resumos_proximos(consulta: str, n: int) -> list[dict]:
+    """Só vetores: o FTS das notas (lib_db) cai para OR e, numa pergunta em português, "que" e "sobre" casam com todas.
+    As palavras exatas já estão na FTS das mensagens. Sem ChromaDB ou sem Ollama → []."""
+    try:
+        return [{"conversa_id": Path(r["caminho"]).stem, "trecho": r["trecho"]}
+                for r in lib_rag._buscar_vetores(consulta, "alfred", PASTA_NOTAS, n)]
+    except Exception as e:
+        log(f"[conversa] busca nos resumos falhou ({_curto(e)})")
+        return []
+
+
+def buscar_anteriores(consulta: str, limite: int = 5, excluir: Optional[str] = None,
+                      so_resumos: bool = False) -> list[dict]:
+    """
+    Conversas passadas sobre o assunto → [{conversa_id, titulo, quando, trecho}], uma linha por conversa. Ordem de
+    confiança: mensagem com todas as palavras; resumo em conversas/ pelo significado; e, se nada disso achou, mensagem
+    com alguma palavra. `so_resumos` fica só no resumo: o que entra sozinho no contexto não pode ser ruído. Conversa
+    com turno em andamento nunca entra: a própria pergunta casaria com ela.
+    """
+    with _LOCK:
+        fora = {t.conversa_id for t in _TURNOS.values() if t.terminado is None} | {excluir}
+    achados: dict[str, str] = {}
+
+    def juntar(linhas) -> None:
+        for r in linhas:
+            if r["conversa_id"] not in fora:
+                achados.setdefault(r["conversa_id"], " ".join(r["trecho"].split()))
+
+    if not so_resumos:
+        juntar(buscar(consulta, limite * 4))
+    juntar(_resumos_proximos(consulta, limite * 2))
+    if not achados and not so_resumos:
+        juntar(buscar(consulta, limite * 4, qualquer=True))
+    saida = []
+    for cid, trecho in achados.items():
+        conv = obter_conversa(cid)   # nota de conversa apagada fica no índice até a próxima passada do alfred-rag
+        if conv:
+            saida.append({"conversa_id": cid, "titulo": conv["titulo"] or "Conversa",
+                          "quando": _dia(conv["atualizada_em"]), "trecho": trecho})
+    return saida[:limite]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -788,11 +955,21 @@ def adicionar_parser(sub) -> None:
     sp.add_argument("--conversa", default=None, help="id de uma conversa para continuar (sem isso, abre uma nova)")
     sp.add_argument("--modelo", default=None, help="modelo do Ollama (padrão: conversa.modelo do perfis.yml → "
                                                    "MODEL_CHAT)")
+    sp = sub.add_parser("conversa-comprimir", help="conversas paradas viram resumo no cofre (conversas/) e fatos na "
+                                                   "memória")
+    sp.add_argument("--horas", type=float, default=COMPRIMIR_HORAS, help="horas sem mensagem para contar como parada")
 
 
 def _uma_linha(texto: str, n: int = 160) -> str:
     texto = " ".join(str(texto or "").split())
     return texto if len(texto) <= n else texto[:n - 1] + "…"
+
+
+def cmd_comprimir(args) -> int:
+    r = comprimir(args.horas)
+    print(f"{r['notas']} nota(s), {r['curtas']} curta(s) sem nota, {r['fatos']} fato(s) na memória"
+          + (f", {r['pendentes']} para a próxima passada" if r["pendentes"] else ""))
+    return 1 if r["pendentes"] else 0
 
 
 def cmd_conversa(args) -> int:

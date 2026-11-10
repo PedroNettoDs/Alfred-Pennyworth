@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer — Alfred, comprime as conversas paradas (todo dia às 04:00)
+# Sem Requires=alfred-conversas.service: o timer já ativa a .service de mesmo nome (ver alfred-semanal.timer).
+
+[Timer]
+# De madrugada: o resumo disputa a GPU com o chat e o WhatsApp. Persistent: máquina desligada às 04:00 roda ao ligar.
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Optional
@@ -853,6 +854,46 @@ def email_(mid: str, de: str, assunto: str, quando: datetime, texto: str = "", h
     else:
         m.set_content(texto or "oi")
     return lib_mail.parse_message(m, folder="INBOX", account="imap.example.com")
+
+
+class TestConversasAnteriores(Base):
+    def conversa(self, titulo: str, *mensagens) -> str:
+        motor = lf._inbox("conversa")
+        cid = motor.nova_conversa(titulo)["id"]
+        with closing(motor._conectar()) as con, con:
+            for papel, texto, *extra in mensagens:
+                motor._gravar_mensagem(con, cid, papel, texto, ferramenta=extra[0] if extra else None)
+        return cid
+
+    def test_buscar_conversas(self):
+        cid = self.conversa("DHT no TG", ("user", "Como funciona o Kademlia?"), ("assistant", "Por distância XOR, senhor."))
+        self.conversa("Bolo", ("user", "Receita de bolo de laranja"))
+        r = lf.executar("buscar_conversas", {"consulta": "Kademlia"})
+        self.assertTrue(r.startswith("1 conversa(s) sobre 'Kademlia'; leia a íntegra com ler_conversa(id):"), r)
+        self.assertRegex(r, rf"\[{cid}\] \d\d/\d\d/\d{{4}} · DHT no TG\n")
+        self.assertIn("[Kademlia]", r)
+        self.assertNotIn("Bolo", r)
+        self.assertFalse(lf.perigosa("buscar_conversas"))
+
+    def test_buscar_conversas_em_linguagem_natural(self):
+        cid = self.conversa("DHT", ("user", "Como funciona o Kademlia?"))
+        r = lf.executar("buscar_conversas", {"consulta": "o que falamos sobre Kademlia afinal"})
+        self.assertIn(cid, r)
+
+    def test_buscar_conversas_nada(self):
+        self.assertEqual(lf.executar("buscar_conversas", {"consulta": "zzzzz"}), "Nenhuma conversa anterior sobre 'zzzzz'.")
+
+    def test_ler_conversa(self):
+        cid = self.conversa("DHT", ("user", "Como funciona?"), ("tool", "", "buscar_web"), ("assistant", "x" * 2000))
+        r = lf.executar("ler_conversa", {"conversa_id": f" {cid} "})
+        self.assertTrue(r.startswith('Conversa "DHT":\n['), r)
+        self.assertRegex(r, r"\[\d{4}-\d\d-\d\d \d\d:\d\d\] Pedro: Como funciona\?")
+        self.assertIn("Alfred: " + "x" * (lf.CONVERSA_MSG_MAX - 1) + "…", r)
+        self.assertNotIn("buscar_web", r)
+        self.assertFalse(lf.perigosa("ler_conversa"))
+
+    def test_ler_conversa_inexistente(self):
+        self.assertIn("Conversa não encontrada: 'x'", lf.executar("ler_conversa", {"conversa_id": "x"}))
 
 
 class TestEmail(Base):

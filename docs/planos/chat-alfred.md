@@ -21,6 +21,11 @@ combinado, com busca na internet — 100% local. É a Etapa 2 de
   🎤/🔊 (Fase 6).
 - O Open WebUI saiu em 05/11 ([remover-openwebui.md](remover-openwebui.md)); a Fase 4 (personalidade) e a 5 (roteador)
   continuam abertas.
+- **Conversas anteriores (09/11):** `run.sh conversa-comprimir` (`alfred-conversas.timer`, 04:00) transforma cada
+  conversa parada há um dia num resumo em `VAULT_ALFRED/conversas/`, indexado pelo `alfred-rag`. Ferramentas
+  `buscar_conversas` e `ler_conversa`; citar conversa passada põe os resumos no contexto sozinho. A extração de memória
+  da Fase 5 entrou por aqui, em lote e só com as falas de Pedro, e não depois de cada volta como no diagrama abaixo:
+  não disputa a GPU com o chat. Detalhes em `services/inbox/about.md`.
 
 ## De onde partimos (31/10/2026)
 

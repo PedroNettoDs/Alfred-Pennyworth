@@ -453,6 +453,7 @@ nunca recebe exceção). Código do repositório é chamado direto; HTTP só par
 | E-mail e WhatsApp | `emails_recentes`, `ler_email`, `buscar_mensagens`, `conversa_com` |
 | Tarefas e agenda | `adicionar_tarefa`, `listar_tarefas`, `completar_tarefa` ⚠, `tarefas_vencidas`, `ver_agenda`, `criar_compromisso` ⚠ |
 | Memória e cofres | `lembrar`, `buscar_memoria`, `listar_memoria`, `buscar_cofre`, `ler_nota`, `listar_cofre`, `salvar_nota` ⚠ |
+| Conversas anteriores | `buscar_conversas`, `ler_conversa` |
 
 De onde veio cada uma (as antigas tools do Open WebUI) e as regras de cada ferramenta:
 [services/_shared/about.md](services/_shared/about.md).
@@ -508,6 +509,7 @@ inbox e o briefing já liam.
 | `alfred-briefing-matinal.timer` / `-vespertino.timer` | `services/briefing/` | briefings por RSS | 07:00 / 18:00 |
 | `alfred-inbox.timer` | `services/inbox/` | ciclo do e-mail | 07:30 e 18:30 |
 | `alfred-semanal.timer` | `services/inbox/` | podcast (`--se-devido`) | 19:00 |
+| `alfred-conversas.timer` | `services/inbox/` | conversas paradas há um dia viram resumo no cofre e fatos na memória | 04:00 (`Persistent=true`) |
 | `alfred-vigia.timer` | `services/inbox/` | vigia | 2 min após o login e a cada 10 min |
 | `alfred-backup.timer` | `services/scripts/` | backup (`backup.py criar`, ver [Backup e restore](#backup-e-restore)) | domingo 13:00 (`Persistent=true`) |
 | `alfred-rag.timer` | `services/scripts/` | índice do RAG local (`chromadb-indexer.py indexar`, ver [`lib_rag.py`](services/_shared/about.md#lib_ragpy)) | 5 min após o login e a cada 30 min |

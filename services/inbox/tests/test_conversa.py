@@ -607,6 +607,235 @@ class TestPersistencia(Base):
         self.assertEqual(conversa.mensagens(cid), [])   # a transação inteira voltou
 
 
+class TestConversasAnteriores(Base):
+    FALA = "Estou estudando BitTorrent e DHT para o meu TG na Fatec. Como o Kademlia acha os pares?"
+    RESPOSTA = ("O Kademlia organiza os nós por distância XOR e consulta os mais próximos a cada passo, senhor. "
+                "Cada consulta reduz pela metade a distância até o alvo.")
+
+    def setUp(self):
+        super().setUp()
+        self.extrair = mock.Mock(return_value=[{"fato": "estuda DHT"}])
+        self.resumo.return_value = "Pedro estuda DHT para o TG. Kademlia explicado."
+        self.vetores = mock.Mock(return_value=[])
+        for p in (mock.patch.object(conversa.lib_memoria, "extrair", self.extrair),
+                  mock.patch.object(conversa.lib_rag, "_buscar_vetores", self.vetores)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def envelhecer(self, cid: str, horas: float = 48):
+        quando = (datetime.now().astimezone() - timedelta(hours=horas)).isoformat(timespec="seconds")
+        with closing(sqlite3.connect(self.vault / "conversas.db")) as con, con:
+            con.execute("UPDATE conversas SET atualizada_em = ? WHERE id = ?", (quando, cid))
+
+    def falar(self, cid: str, pergunta: str, resposta: str):
+        self.ollama.roteiro = [texto(resposta)]
+        self.eventos(conversa.enviar(cid, pergunta))
+
+    def parada(self, pergunta: str = FALA, resposta: str = RESPOSTA, horas: float = 48) -> str:
+        cid = conversa.nova_conversa()["id"]
+        self.falar(cid, pergunta, resposta)
+        self.envelhecer(cid, horas)
+        return cid
+
+    def nota(self, cid: str) -> Path:
+        criada = conversa.obter_conversa(cid)["criada_em"]
+        return self.vault / "conversas" / criada[:7] / f"{cid}.md"
+
+    def linha(self, cid: str) -> dict:
+        return self.sql("SELECT * FROM conversas_notas WHERE conversa_id = ?", cid)[0]
+
+    def test_parada_vira_nota_e_memoria(self):
+        cid = self.parada()
+        self.assertEqual(conversa.comprimir(), {"notas": 1, "curtas": 0, "fatos": 1, "pendentes": 0})
+        corpo = self.nota(cid).read_text(encoding="utf-8")
+        meta = yaml.safe_load(corpo.split("---\n")[1])
+        conv = conversa.obter_conversa(cid)
+        self.assertEqual((meta["conversa_id"], meta["tipo"], meta["title"]), (cid, "conversa", conv["titulo"]))
+        self.assertIn(f"# {conv['titulo']}\n", corpo)
+        self.assertIn(f"127.0.0.1:7073/painel/conversa/{cid})", corpo)
+        self.assertIn("2 mensagens", corpo)
+        self.assertTrue(corpo.endswith("## Resumo\n\nPedro estuda DHT para o TG. Kademlia explicado.\n"))
+        prompt = self.resumo.call_args.args[0]
+        self.assertIn("Kademlia acha os pares", prompt)
+        self.assertIn("distância XOR", prompt)
+        self.assertEqual(self.resumo.call_args.kwargs["model"], "modelo-teste")
+        # memória: só as falas de Pedro, com ele como sujeito
+        self.extrair.assert_called_once_with(self.FALA, "conversa", "Pedro")
+        self.assertEqual(self.linha(cid)["caminho"], f"conversas/{conv['criada_em'][:7]}/{cid}.md")
+
+        self.resumo.reset_mock()
+        self.extrair.reset_mock()
+        self.assertEqual(conversa.comprimir(), {"notas": 0, "curtas": 0, "fatos": 0, "pendentes": 0})
+        self.resumo.assert_not_called()
+        self.extrair.assert_not_called()
+
+    def test_recente_fica_de_fora(self):
+        cid = self.parada(horas=23)
+        self.assertEqual(conversa.comprimir()["notas"], 0)
+        self.resumo.assert_not_called()
+        self.assertFalse(self.nota(cid).exists())
+        self.assertEqual(conversa.comprimir(horas=22)["notas"], 1)
+
+    def test_retomada_refaz_a_nota_e_so_o_novo_vai_para_a_memoria(self):
+        cid = self.parada()
+        conversa.comprimir()
+        self.extrair.reset_mock()
+        self.falar(cid, "E a tabela de roteamento, como fica?", "Em k-buckets, senhor.")
+        self.envelhecer(cid)
+        self.resumo.return_value = "Resumo novo com k-buckets."
+        self.assertEqual(conversa.comprimir()["notas"], 1)
+        self.extrair.assert_called_once_with("E a tabela de roteamento, como fica?", "conversa", "Pedro")
+        corpo = self.nota(cid).read_text(encoding="utf-8")
+        self.assertIn("Resumo novo com k-buckets.", corpo)
+        self.assertNotIn("Kademlia explicado", corpo)
+        self.assertIn("4 mensagens", corpo)
+
+    def test_resumo_de_conversa_longa_e_incremental(self):
+        cid = self.parada()
+        ultima = conversa.mensagens(cid)[-1]["id"]
+        with closing(sqlite3.connect(self.vault / "conversas.db")) as con, con:
+            con.execute("UPDATE conversas SET resumo = 'RESUMO ANTIGO', resumo_ate = ? WHERE id = ?", (ultima - 1, cid))
+        conversa.comprimir()
+        prompt = self.resumo.call_args.args[0]
+        self.assertIn("RESUMO ANTERIOR:\nRESUMO ANTIGO", prompt)
+        self.assertIn("distância XOR", prompt)
+        self.assertNotIn("Kademlia acha os pares", prompt)
+
+    def test_curta_nao_gera_nota_mas_passa_pela_memoria(self):
+        cid = self.parada("oi", "Boa noite, senhor.")
+        self.assertEqual(conversa.comprimir(), {"notas": 0, "curtas": 1, "fatos": 1, "pendentes": 0})
+        self.resumo.assert_not_called()
+        self.extrair.assert_called_once_with("oi", "conversa", "Pedro")
+        self.assertFalse(self.nota(cid).exists())
+        self.assertEqual(self.linha(cid)["caminho"], "")
+        self.extrair.reset_mock()
+        self.assertEqual(conversa.comprimir()["curtas"], 0)
+        self.extrair.assert_not_called()
+
+    def test_sem_mensagem_nao_entra(self):
+        cid = conversa.nova_conversa()["id"]
+        self.envelhecer(cid)
+        self.assertEqual(conversa.comprimir(), {"notas": 0, "curtas": 0, "fatos": 0, "pendentes": 0})
+
+    def test_llm_fora_para_e_tenta_na_proxima(self):
+        a, b = self.parada(), self.parada()
+        self.resumo.return_value = ""
+        self.assertEqual(conversa.comprimir(), {"notas": 0, "curtas": 0, "fatos": 0, "pendentes": 2})
+        self.assertEqual(self.resumo.call_count, 1)
+        self.extrair.assert_not_called()
+        self.assertEqual(self.sql("SELECT * FROM conversas_notas"), [])
+        self.resumo.return_value = "Agora foi."
+        self.assertEqual(conversa.comprimir()["notas"], 2)
+        self.assertTrue(self.nota(a).exists() and self.nota(b).exists())
+
+    def test_erro_ao_gravar_nao_derruba(self):
+        self.parada()
+        with mock.patch.object(conversa, "gravar_atomico", side_effect=OSError("disco cheio")):
+            self.assertEqual(conversa.comprimir()["pendentes"], 1)
+        self.assertEqual(self.sql("SELECT * FROM conversas_notas"), [])
+
+    def test_apagar_leva_a_nota(self):
+        cid = self.parada()
+        conversa.comprimir()
+        self.assertTrue(self.nota(cid).exists())
+        arquivo = self.nota(cid)
+        self.assertTrue(conversa.apagar_conversa(cid))
+        self.assertFalse(arquivo.exists())
+        self.assertEqual(self.sql("SELECT * FROM conversas_notas"), [])
+
+    def test_quer_conversas(self):
+        sim = ["o que falamos sobre BitTorrent?", "lembra da conversa passada sobre o TG?", "aquela conversa do orçamento",
+               "você me recomendou qual livro?", "como te falei ontem, vou viajar", "na última vez o que ficou combinado?",
+               "já conversamos sobre isso", "a gente falou de Docker", "lembra que eu ia trocar de GPU?"]
+        nao = ["quais pendências tenho?", "como está a GPU?", "oi Alfred", "marca dentista sexta 15h",
+               "o que eu anotei sobre RAG?"]
+        for p in sim:
+            self.assertTrue(conversa._quer_conversas(p), p)
+        for p in nao:
+            self.assertFalse(conversa._quer_conversas(p), p)
+
+    def resumo_vetorial(self, *cids) -> list[dict]:
+        return [{"cofre": "alfred", "caminho": f"conversas/2026-11/{c}.md", "titulo": c, "trecho": f"resumo  de\n{c}"}
+                for c in cids]
+
+    def test_citar_conversa_passada_poe_o_resumo_no_contexto(self):
+        antiga, atual = self.parada(), conversa.nova_conversa()["id"]
+        self.vetores.return_value = self.resumo_vetorial(atual, antiga)
+        msgs = conversa.montar_contexto(atual, "o que falamos sobre DHT?")
+        self.vetores.assert_called_once_with("o que falamos sobre DHT?", "alfred", "conversas", 6)
+        sistema = msgs[0]["content"]
+        self.assertIn("## Conversas anteriores com Pedro", sistema)
+        self.assertIn(f"[{antiga}] ", sistema)
+        self.assertIn(f"resumo de {antiga}", sistema)
+        self.assertNotIn(f"[{atual}]", sistema)              # a conversa aberta não é "anterior"
+        self.vetores.reset_mock()
+        msgs = conversa.montar_contexto(atual, "quais pendências tenho?")
+        self.vetores.assert_not_called()
+        self.assertNotIn("Conversas anteriores", msgs[0]["content"])
+
+    def test_sem_resumo_proximo_nao_abre_bloco(self):
+        msgs = conversa.montar_contexto(conversa.nova_conversa()["id"], "o que falamos sobre DHT?")
+        self.assertNotIn("Conversas anteriores", msgs[0]["content"])
+
+    def test_bloco_respeita_o_teto(self):
+        grandes = [self.parada() for _ in range(3)]
+        self.vetores.return_value = [{"caminho": f"conversas/2026-11/{c}.md", "trecho": "x" * 650} for c in grandes]
+        bloco = conversa._bloco_anteriores("falamos", "outra")
+        self.assertEqual(bloco.count("x" * 650), 2)
+
+    def test_chromadb_com_problema_nao_derruba(self):
+        self.vetores.side_effect = RuntimeError("resposta estranha")
+        cid = self.parada()
+        msgs = conversa.montar_contexto(conversa.nova_conversa()["id"], "o que falamos sobre DHT?")
+        self.assertNotIn("Conversas anteriores", msgs[0]["content"])
+        self.assertEqual([a["conversa_id"] for a in conversa.buscar_anteriores("Kademlia")], [cid])
+
+    def test_buscar_anteriores_ordem_de_confianca(self):
+        literal = self.parada()
+        so_no_resumo = self.parada("Quanto custa um servidor?", "Depende, senhor, do que for rodar nele todos os dias.")
+        self.vetores.return_value = self.resumo_vetorial(so_no_resumo, literal)
+        achados = conversa.buscar_anteriores("Kademlia pares")
+        self.assertEqual([a["conversa_id"] for a in achados], [literal, so_no_resumo])
+        self.assertIn("[Kademlia]", achados[0]["trecho"])
+        self.assertEqual(achados[0]["titulo"], conversa.obter_conversa(literal)["titulo"])
+        self.assertRegex(achados[0]["quando"], r"^\d{2}/\d{2}/\d{4}$")
+        self.assertEqual(achados[1]["trecho"], f"resumo de {so_no_resumo}")
+        self.assertEqual(len(conversa.buscar_anteriores("Kademlia pares", limite=1)), 1)
+
+    def test_qualquer_palavra_so_quando_nada_mais_achou(self):
+        cid = self.parada()
+        self.assertEqual(conversa.buscar_anteriores("Kademlia inexistente")[0]["conversa_id"], cid)   # alguma palavra
+        self.assertEqual(conversa.buscar_anteriores("Kademlia inexistente", so_resumos=True), [])
+        self.vetores.return_value = self.resumo_vetorial(cid)
+        self.assertEqual(conversa.buscar_anteriores("inexistente demais")[0]["trecho"], f"resumo de {cid}")
+        self.vetores.return_value = []
+        self.assertEqual(conversa.buscar_anteriores("zzzz yyyy"), [])
+
+    def test_conversa_em_andamento_e_apagada_ficam_de_fora(self):
+        cid = self.parada()
+        t = conversa.Turno(cid, "x", "m")
+        conversa._TURNOS[t.id] = t
+        self.addCleanup(conversa._TURNOS.pop, t.id, None)
+        self.assertEqual(conversa.buscar_anteriores("Kademlia"), [])
+        del conversa._TURNOS[t.id]
+        self.assertEqual(len(conversa.buscar_anteriores("Kademlia")), 1)
+        self.vetores.return_value = self.resumo_vetorial("nao-existe-mais")
+        self.assertEqual([a["conversa_id"] for a in conversa.buscar_anteriores("Kademlia")], [cid])
+
+    def test_cli(self):
+        self.parada()
+        saida = io.StringIO()
+        with redirect_stdout(saida):
+            self.assertEqual(conversa.cmd_comprimir(Namespace(horas=24)), 0)
+        self.assertEqual(saida.getvalue().strip().splitlines()[-1], "1 nota(s), 0 curta(s) sem nota, 1 fato(s) na memória")
+        self.parada()
+        self.resumo.return_value = ""
+        saida = io.StringIO()
+        with redirect_stdout(saida):
+            self.assertEqual(conversa.cmd_comprimir(Namespace(horas=24)), 1)
+        self.assertIn("1 para a próxima passada", saida.getvalue())
+
+
 class TestFilaWhatsapp(Base):
     def setUp(self):
         super().setUp()
