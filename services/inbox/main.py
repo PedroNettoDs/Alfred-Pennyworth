@@ -57,6 +57,7 @@ load_env(override=False)
 import core  # noqa: E402
 import whatsapp  # noqa: E402
 import promessas  # noqa: E402
+import remedios  # noqa: E402
 import semanal  # noqa: E402
 from _shared import lib_db  # noqa: E402
 from _shared import lib_atividade  # noqa: E402
@@ -75,12 +76,17 @@ FILA_INTERVALO_S = 60
 
 
 def _laco_fila_whatsapp(parar: threading.Event):
-    """Fila do WhatsApp: itens cujo prazo (atraso_minutos) venceu viram pendência + áudio + avisos."""
+    """Fila do WhatsApp: itens cujo prazo (atraso_minutos) venceu viram pendência + áudio + avisos. Na mesma
+    volta, os remédios: dose vencida vira post-it e, sem o "tomei", pergunta no WhatsApp (remedios.passar)."""
     while True:
         try:
             whatsapp.processar_fila()
         except Exception as e:
             log(f"[whatsapp] fila: erro inesperado ({e})")
+        try:
+            remedios.passar()
+        except Exception as e:
+            log(f"[remedios] erro inesperado ({e})")
         if parar.wait(FILA_INTERVALO_S):
             return
 
@@ -103,16 +109,28 @@ def _anterior_ao_inicio(payload: dict) -> bool:
 
 
 def _recados_para_o_pet() -> list[dict]:
-    """Recados do número do Alfred no formato do estado.json: o texto é o título da pendência (o mesmo do aviso)
-    e o link abre o detalhe dela no Painel; `detalhe` é o que o post-it mostra ao clicar (quem, quando e o recado)."""
+    """Os post-its do Pestinha, no formato do estado.json. Primeiro as doses de remédio abertas (remedios.recados),
+    depois os recados do número do Alfred: o texto é o título da pendência (o mesmo do aviso) e o link abre o
+    detalhe dela no Painel; `detalhe` é o que o post-it mostra ao clicar (quem, quando e o recado). `quando`
+    (epoch) é o horário em que o post-it nasceu, que o pet escreve nele."""
     painel = lib_atividade.links()["painel"]
-    return [{"id": r["id"], "texto": r["titulo"], "link": f"{painel}/pendencias/{r['id']}",
-             "detalhe": "\n".join(t for t in (r["contato"], r["quando"][:16].replace("T", " "), r["texto"]) if t)}
-            for r in whatsapp.recados()]
+
+    def epoch(iso: str) -> Optional[float]:
+        d = core._parse_dt(iso)
+        return d.timestamp() if d else None
+
+    return remedios.recados() + [
+        {"id": r["id"], "texto": r["titulo"], "link": f"{painel}/pendencias/{r['id']}", "quando": epoch(r["quando"]),
+         "detalhe": "\n".join(t for t in (r["contato"], r["quando"][:16].replace("T", " "), r["texto"]) if t)}
+        for r in whatsapp.recados()]
 
 
 def _recado_feito(pid: str) -> None:
-    """O "Feito" com "Sim" do post-it: fecha a pendência sem responder ao contato (o mesmo "ignorar" do Painel)."""
+    """O botão do post-it. Dose de remédio ("Tomei"): fecha a dose e a contagem recomeça. Recado ("Feito" com
+    "Sim"): fecha a pendência sem responder ao contato (o mesmo "ignorar" do Painel)."""
+    if pid.startswith("remedio:"):
+        remedios.recado_feito(pid)
+        return
     whatsapp.responder_texto(pid, "ignorar", True, "via pestinha")
 
 

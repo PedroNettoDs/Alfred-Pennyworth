@@ -196,6 +196,13 @@ class TestFila(Base):
             self.assertEqual(d.tick(2.0)["recados"], [])          # relido na mesma volta, sem esperar os 5 s
         self.assertEqual(encerrados, ["p1"])
 
+    def test_recado_leva_o_tipo_e_o_horario_em_que_nasceu(self):
+        recados = [{"id": "remedio:x:1", "tipo": "remedio", "texto": "Tomar Amoxicilina", "quando": 1762870000.0},
+                   {"id": "p1", "texto": "Marina"}]
+        with mock.patch.object(la, "FONTE_RECADOS", lambda: recados):
+            publicados = la.Despachante(self.sis).tick(1.0)["recados"]
+        self.assertEqual([(r["tipo"], r["quando"]) for r in publicados], [("remedio", 1762870000.0), ("recado", None)])
+
     def test_frente_cancelar_e_fila_sobrevive_ao_reinicio(self):
         d = la.Despachante(self.sis)
         self.sis.ativas = {RAG}                           # segura a fila para dar tempo de mexer nela

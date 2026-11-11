@@ -60,7 +60,8 @@ def pasta() -> Path:
 
 RECADOS_A_CADA_S = 5     # de quanto em quanto o Despachante relê os recados
 AO_RECADO_FEITO = None   # função (id) que encerra o recado na origem; quem sobe a API registra (main.py)
-FONTE_RECADOS = None     # função sem argumentos → [{id, texto, link, detalhe}]; quem sobe a API registra (main.py)
+FONTE_RECADOS = None     # função sem argumentos → [{id, texto, link, detalhe, tipo?, quando?}]; quem sobe a API
+                         # registra (main.py). tipo: "recado" (padrão) | "remedio"; quando: epoch em que nasceu
 NEGLIGENCIA_A_CADA_S = 30   # de quanto em quanto o Despachante relê o que Pedro deixou vencer
 FONTE_NEGLIGENCIA = None    # função sem argumentos → {nivel 0..1, motivo, texto, link} ou None; idem
 
@@ -311,9 +312,10 @@ class Despachante:
         if FONTE_RECADOS and agora - getattr(self, "_recados_em", -1e9) >= RECADOS_A_CADA_S:
             self._recados_em = agora
             try:
-                self._recados_lidos = [{"id": str(r["id"]), "tipo": "recado", "texto": str(r.get("texto") or "")[:200],
-                                        "link": str(r.get("link") or ""),
-                                        "detalhe": str(r.get("detalhe") or "")[:600]} for r in FONTE_RECADOS()][:10]
+                self._recados_lidos = [{"id": str(r["id"]), "tipo": str(r.get("tipo") or "recado"),
+                                        "texto": str(r.get("texto") or "")[:200], "link": str(r.get("link") or ""),
+                                        "detalhe": str(r.get("detalhe") or "")[:600],
+                                        "quando": r.get("quando")} for r in FONTE_RECADOS()][:10]
             except Exception as e:
                 log(f"[atividade] recados indisponíveis ({e})")
         return getattr(self, "_recados_lidos", [])

@@ -1140,6 +1140,90 @@ def criar_compromisso(texto: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
+#  Remédios (lembrete de dose)
+# ══════════════════════════════════════════════════════════════
+
+def _linha_remedio(r: dict) -> str:
+    quando = _inbox("core")._parse_dt((r.get("dose") or {}).get("devida_em") or r.get("proxima_em"))
+    situacao = f"dose das {quando:%H:%M} esperando o \"tomei\"" if r.get("dose") else f"próxima dose {quando:%d/%m %H:%M}"
+    cuidados = f"\n  Cuidados: {'; '.join(r['cuidados'])}" if r.get("cuidados") else ""
+    return f"• {r['nome']} — a cada {r['intervalo_horas']:g} h · {situacao}{cuidados}"
+
+
+@ferramenta("criar_lembrete_remedio",
+            "Cria o lembrete de um remédio: de N em N horas aparece um post-it no computador e, sem o \"tomei\" em 10 "
+            "minutos, Alfred pergunta a Pedro pelo WhatsApp. Também pesquisa na web as contraindicações e o que não "
+            "fazer durante o uso (ex.: álcool) e devolve o resumo. Use quando Pedro pedir para ser lembrado de tomar "
+            "um remédio. Leva até 5 minutos por causa da pesquisa.",
+            timeout=330)
+def criar_lembrete_remedio(nome: str, intervalo_horas: float, primeira_dose: Optional[str] = None) -> str:
+    """
+    :param nome: Nome do remédio, ex.: "Amoxicilina 500 mg"
+    :param intervalo_horas: De quantas em quantas horas, ex.: 8
+    :param primeira_dose: Quando é a próxima dose, ex.: "22:00" ou "amanhã 8h" (vazio = agora)
+    """
+    remedios = _inbox("remedios")
+    primeira = None
+    if primeira_dose and primeira_dose.strip():
+        achado = _inbox("whatsapp").interpretar_quando(primeira_dose)
+        if not achado:
+            return f"Não entendi a hora da primeira dose: {primeira_dose!r}. Use \"22:00\" ou \"amanhã 8h\". Nada foi criado."
+        primeira = achado[0]
+    try:
+        r = remedios.adicionar(nome, intervalo_horas, primeira)
+    except ValueError as e:
+        return f"Lembrete não criado: {e}."
+    cuidados = remedios.pesquisar_cuidados(r["id"])
+    quando = f"{primeira:%d/%m %H:%M}" if primeira else "agora (o post-it aparece em até 1 minuto)"
+    return (f"Lembrete criado: {r['nome']} a cada {r['intervalo_horas']:g} h. Primeira dose: {quando}. Sem o "
+            "\"tomei\" em 10 minutos, pergunto pelo WhatsApp.\n"
+            + ("Cuidados (resumo de pesquisa na web; confirme na bula):\n" + "\n".join(f"• {c}" for c in cuidados)
+               if cuidados else "Não consegui pesquisar os cuidados agora; o lembrete vale assim mesmo. Confira a bula."))
+
+
+@ferramenta("listar_remedios", "Lista os lembretes de remédio: intervalo, próxima dose e os cuidados de cada um.")
+def listar_remedios() -> str:
+    itens = _inbox("remedios").listar()
+    if not itens:
+        return "Nenhum lembrete de remédio."
+    return f"Lembretes de remédio ({len(itens)}):\n" + "\n".join(_linha_remedio(r) for r in itens)
+
+
+@ferramenta("tomei_remedio",
+            "Anota que Pedro tomou o remédio: o post-it da dose sai e a contagem das horas recomeça. Use quando ele "
+            "disser que tomou (\"tomei a amoxicilina\", \"tomei o remédio às 14h\").")
+def tomei_remedio(nome: str = "", hora: Optional[str] = None) -> str:
+    """
+    :param nome: Nome do remédio (vazio = os que estão com a dose esperando)
+    :param hora: Quando tomou, ex.: "14:30", "há 20 min" (vazio = agora)
+    """
+    remedios = _inbox("remedios")
+    itens = remedios.listar()
+    if nome.strip():
+        alvos = [r for r in itens if remedios._chave(nome) in remedios._chave(r["nome"])]
+    else:
+        alvos = [r for r in itens if r.get("dose")] or (itens if len(itens) == 1 else [])
+    if not alvos:
+        nomes = ", ".join(r["nome"] for r in itens) or "nenhum"
+        return f"Não sei de qual remédio se trata{f' ({nome!r})' if nome.strip() else ''}. Lembretes: {nomes}. Nada foi anotado."
+    quando = None
+    if hora and hora.strip():
+        quando = remedios.hora_tomada(hora)
+        if not quando:
+            return f"Não entendi a hora {hora!r}. Use \"14:30\", \"agora\" ou \"há 20 min\". Nada foi anotado."
+    return remedios.anotado([remedios.tomei(r["id"], quando, "conversa") for r in alvos])
+
+
+@ferramenta("parar_remedio", "Encerra o lembrete de um remédio (fim do tratamento): sem mais post-its nem perguntas.")
+def parar_remedio(nome: str) -> str:
+    """
+    :param nome: Nome do remédio, como aparece em listar_remedios
+    """
+    r = _inbox("remedios").parar(nome)
+    return f"Lembrete de {r['nome']} parado." if r else f"Não há lembrete de remédio com o nome {nome!r}."
+
+
+# ══════════════════════════════════════════════════════════════
 #  Memória (lib_memoria)
 # ══════════════════════════════════════════════════════════════
 

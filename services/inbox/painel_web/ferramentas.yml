@@ -361,6 +361,26 @@ grupos:
         arquivos: [services/inbox/agenda.py, services/inbox/agenda_semanal.py, services/inbox/thunderbird-ext-agenda]
         docs: [services/inbox/about.md]
 
+      - slug: remedios
+        nome: Lembrete de remédio
+        resumo: De N em N horas, um post-it no computador. Sem o "tomei" em 10 minutos, o Alfred pergunta pelo WhatsApp.
+        doc: |
+          # Como criar
+          Peça na conversa (Painel, terminal ou o número do Alfred no WhatsApp): "me lembra de tomar amoxicilina de 8 em 8 horas". O Alfred pesquisa as contraindicações e o que não fazer (ex.: álcool) e mostra o resumo.
+
+          # A cada dose
+          - Aparece o post-it "Tomar X" no Pestinha, com a hora em que foi criado. O detalhe traz os cuidados.
+          - **Tomei** no post-it, ou "tomei o remédio" na conversa, fecha a dose. A contagem recomeça dali.
+          - Sem o "tomei" em 10 minutos, o número do Alfred pergunta no seu WhatsApp: "Já tomou? sim ou não".
+          - **Sim:** ele pergunta que horas mais ou menos e conta o intervalo a partir dessa hora.
+          - **Não:** ele espera o seu "sim" para recomeçar a contagem.
+
+          # Limites
+          Os cuidados são um resumo de pesquisa na web feito pelo modelo local: confirme na bula. Os lembretes ficam em `VAULT_ALFRED/agenda/remedios.yml`.
+        ferramentas: [criar_lembrete_remedio, listar_remedios, tomei_remedio, parar_remedio]
+        arquivos: [services/inbox/remedios.py, services/_shared/prompts/remedio_cuidados.md]
+        docs: [services/inbox/about.md, services/inbox/PESTINHA.md]
+
       - slug: promessas
         nome: Promessas
         resumo: O que você disse que ia fazer ("sexta te mando o orçamento") vira tarefa, e o Alfred confere se você cumpriu.

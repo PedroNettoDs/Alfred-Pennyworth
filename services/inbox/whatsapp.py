@@ -2191,6 +2191,16 @@ def _pedido_de_pedro(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: b
             dizer("Esse pedido de confirmação já expirou.")
         res.update(acao="aprovacao", motivo="Pedro respondeu a um pedido de confirmação")
         return res
+    import remedios
+    try:   # "sim" / "não" / a hora, em resposta à pergunta de uma dose (remedios.passar)
+        sobre_dose = remedios.resposta_whatsapp(texto)
+    except Exception as e:
+        log(f"[whatsapp] pedido de Pedro: não consegui olhar os remédios ({e})")
+        sobre_dose = None
+    if sobre_dose:
+        res.update(acao="remedio", motivo="Pedro respondeu sobre a dose de um remédio", resposta=sobre_dose)
+        res["envio_confirmacao"] = dizer(sobre_dose)
+        return res
     log(f"[whatsapp] pedido de Pedro: {texto[:100]!r}")
     try:
         turno = conversa.enviar(_conversa_do_whatsapp(), texto)   # sem `contexto`: com ele o gemma4 parou de usar as ferramentas (10/11)

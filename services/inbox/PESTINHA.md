@@ -34,6 +34,12 @@ timers do systemd (qualquer unit oneshot do catálogo)
   com **Sim**, o pet deixa o pedido `recado_feito` e a pendência é fechada sem resposta (o "ignorar" do Painel); com
   **Não**, ou fechando pelo botão do meio, só o post-it sai e a pendência continua aguardando. Os post-its ficam
   atrás das outras janelas. Os post-its voltam ao mesmo lugar quando o pet reabre. Os mesmos recados aparecem no cartão **Anotações** do Início do Painel.
+  Cada recado leva `quando` (epoch em que foi criado): o pet escreve dia e hora na faixa de cima do post-it, e dois
+  post-its iguais se distinguem por ela.
+- **Remédios:** a dose vencida de um lembrete (`remedios.recados()`, tipo `remedio`) entra na mesma lista, antes dos
+  recados. O post-it diz "Tomar X"; o detalhe traz o horário da dose, o intervalo e os cuidados pesquisados; o botão é
+  **Tomei** e não pergunta nada: o pedido `recado_feito` fecha a dose e a contagem recomeça. Fechar pelo botão do meio
+  só tira o post-it: a dose continua aberta e o WhatsApp pergunta. Ver **Lembrete de remédio** no `about.md`.
 - **Negligência:** `estado.json` leva `negligencia` (`promessas.negligencia()`, relido a cada 30 s): o que Pedro
   deixou vencer. Cada promessa aberta com prazo passado pesa 0,4 + 0,1 por dia de atraso (teto 0,7); cada tarefa
   aberta de `tasks.yml` vencida, 0,25 + 0,05 por dia (teto 0,5). O `nivel` é a soma, até 1; `motivo` e `texto` são

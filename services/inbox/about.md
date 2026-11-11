@@ -83,6 +83,7 @@ VAULT_ALFRED/
   tasks.yml · .tasks.yml.lock                        ← "vou" cria tarefa (mesmo formato da tool alfred_tasks)
   agenda/      agenda.yml · .agenda.yml.lock         ← compromissos a caminho do calendário (ver Agenda)
                promessas.yml · .promessas.yml.lock   ← o que você disse que ia fazer (ver Promessas)
+               remedios.yml · .remedios.yml.lock     ← lembretes de remédio e a dose aberta de cada um (ver Lembrete de remédio)
                relatorios/AAAA-MM-DD_AAAA-MM-DD.md   ← fechamento semanal: feitos, desfeitos, promessas (ver Agenda)
 logs/promessas_seen.json                             ← falas suas já analisadas pela varredura de promessas
 logs/agenda_semanal.json                             ← data do último fechamento semanal da agenda
@@ -947,6 +948,38 @@ o Google guarda com outro endereço, a releitura não acha e a promise nunca res
 mas a extensão ficava parada no primeiro item novo de cada ciclo (um item por ciclo, confirmado só no ciclo seguinte,
 pelo `modifyItem`). A v1.0.1 espera 15 s; sem resposta, sincroniza o calendário e confirma pelo UID no cache (até 60 s).
 Atualizar: refaça o `.xpi` (passo 1) e instale de novo (passo 3).
+
+## Lembrete de remédio — post-it de N em N horas, WhatsApp se você não marcar (`remedios.py`)
+
+Você diz o nome do remédio e de quantas em quantas horas, na conversa (Painel, terminal ou o número do Alfred no
+WhatsApp). O Alfred cria o lembrete, pesquisa as contraindicações e o que não fazer, e passa a cobrar cada dose.
+
+```
+criar_lembrete_remedio(nome, intervalo_horas, primeira_dose?)      ← ferramenta da conversa
+    ↓ agenda/remedios.yml (o mesmo nome não duplica: só troca o intervalo)
+    ↓ researcher, modo rápido (o tema fica em VAULT_ALFRED/research/) → gemma4 (remedio_cuidados.md)
+      até 5 frases curtas: "Não beber álcool", "Contraindicado para alérgicos a penicilina"
+thread da API, a cada 60 s (remedios.passar)
+    próxima dose venceu       → dose aberta: post-it "Tomar X" no Pestinha, com a hora em que foi criado
+    10 min sem o "tomei"      → o número do Alfred pergunta no seu WhatsApp: "Já tomou? sim ou não" (uma vez por dose)
+"tomei"  (botão Tomei do post-it · tomei_remedio na conversa · resposta no WhatsApp)
+    → a dose fecha e a próxima fica para a hora em que você tomou + o intervalo
+```
+
+- **Sim no WhatsApp:** o Alfred fecha a dose na hora da resposta e pergunta "que horas mais ou menos?". A hora que
+  você disser ("14:30", "umas 2", "agora", "há 20 min") acerta a contagem. Sem resposta, vale a hora do "sim".
+- **Não no WhatsApp:** ele espera, sem perguntar de novo. O seu próximo "sim" fecha a dose e a contagem parte dele.
+  O post-it continua na tela até lá.
+- Só há uma dose aberta por remédio: enquanto ela espera, não nasce outro post-it.
+- A primeira dose é na hora em que o lembrete é criado, salvo `primeira_dose` ("22:00", "amanhã 8h").
+- `listar_remedios` mostra os lembretes e os cuidados; `parar_remedio` apaga o lembrete (fim do tratamento).
+- Os cuidados são um resumo de pesquisa na web, feito pelo modelo local: confirme na bula. Com o researcher ou o
+  Ollama fora do ar o lembrete vale do mesmo jeito, sem os cuidados.
+- Precisa da API no ar (`alfred-inbox-api`) e, para a pergunta no WhatsApp, de uma sessão de papel `assistente` e
+  de `WHATSAPP_NUMERO_PEDRO`. Sem o Pestinha aberto não há post-it; a pergunta do WhatsApp sai do mesmo jeito.
+- Não detecta se você está em casa: a regra é só o tempo sem o "tomei" (`ESPERA_MIN` em `remedios.py`).
+
+Testes: `venv/bin/python -m unittest tests.test_remedios`.
 
 ## Promessas — o que você disse que ia fazer → agenda (`promessas.py`)
 
