@@ -1,5 +1,11 @@
 """
-Alfred — síntese de voz (edge-tts) e reprodução de áudio.
+Alfred — síntese de voz e reprodução de áudio.
+
+Motor de generate_tts, tts_save e fluxo_tts: Piper, local e em CPU (nada sai da máquina). As vozes (.onnx) ficam em
+PIPER_VOZES_DIR (padrão ~/.local/share/piper-voices); baixar com
+`venv/bin/python -m piper.download_voices --download-dir <pasta> pt_BR-faber-medium pt_BR-cadu-medium`.
+Medido em 10/11/2026 num resumo de 15 s: 0,5 s de síntese + 0,2 s de ffmpeg (o edge-tts levava 1,3 a 4,3 s),
+mais 1,8 s para carregar a voz na primeira vez de cada processo.
 
 Extraído de services/briefing/tech-briefing.py para reuso pelo inbox-assistant.
 
@@ -11,28 +17,78 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from typing import Optional
 from pathlib import Path
-
-import edge_tts
 
 from _shared.lib_alfred import log
 
 DEFAULT_VOICE = "pt-BR-FranciscaNeural"
 
+# perfis.yml e os chamadores ainda nomeiam as vozes do edge-tts; aqui cada uma vira uma voz do Piper.
+# O Piper só tem vozes masculinas em pt-BR. Um nome fora da tabela é usado como nome de voz do Piper.
+VOZES_PIPER = {"pt-BR-AntonioNeural": "pt_BR-faber-medium", "pt-BR-FranciscaNeural": "pt_BR-cadu-medium"}
+_VOZES: dict = {}                  # voz carregada uma vez por processo (~1,8 s)
+_VOZES_LOCK = threading.Lock()
+
+
+def _voz_piper(voice: str):
+    from piper import PiperVoice   # aqui dentro: quem só toca áudio importa este módulo sem carregar o Piper
+    nome = VOZES_PIPER.get(voice or DEFAULT_VOICE, voice)
+    with _VOZES_LOCK:
+        if nome not in _VOZES:
+            pasta = Path(os.getenv("PIPER_VOZES_DIR", "").strip() or Path.home() / ".local/share/piper-voices")
+            _VOZES[nome] = PiperVoice.load(str(pasta / f"{nome}.onnx"))
+        return _VOZES[nome]
+
+
+def _ffmpeg_mp3(taxa: int, saida: str) -> list[str]:
+    """ffmpeg que lê o PCM do Piper (16 bits, mono) na entrada padrão e grava .mp3 em `saida`.
+    Sai sempre em 24 kHz, como o edge-tts saía: o podcast junta as falas com silêncio e vinheta nessa taxa."""
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "s16le", "-ar", str(taxa), "-ac", "1",
+            "-i", "pipe:0", "-f", "mp3", "-ar", "24000", "-b:a", "48k", "-flush_packets", "1", saida]
+
+
+def _salvar_piper(text: str, voice: str, output_path: Path):
+    """Texto → .mp3. Levanta em erro (voz não baixada, ffmpeg)."""
+    voz = _voz_piper(voice)
+    pcm = b"".join(frase.audio_int16_bytes for frase in voz.synthesize(text))
+    r = subprocess.run(_ffmpeg_mp3(voz.config.sample_rate, str(output_path)), input=pcm, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg: {r.stderr.decode(errors='replace').strip()[:300]}")
+
 
 async def generate_tts(text: str, voice: str, output_path: Path):
-    """Mesma assinatura usada pelo briefing: gera .mp3 via edge-tts."""
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(str(output_path))
+    """Mesma assinatura usada pelo briefing: gera o .mp3; levanta em erro."""
+    await asyncio.to_thread(_salvar_piper, text, voice, Path(output_path))
 
 
 async def fluxo_tts(text: str, voice: str):
-    """Os pedaços do .mp3 conforme o edge-tts entrega, sem esperar o áudio inteiro: o primeiro chega em ~0,8 s
-    (medido em 10/11/2026), seja uma frase ou uma resposta longa. Para quem toca enquanto baixa."""
-    async for parte in edge_tts.Communicate(text, voice or DEFAULT_VOICE).stream():
-        if parte["type"] == "audio":
-            yield parte["data"]
+    """Os pedaços do .mp3 conforme o Piper sintetiza, frase a frase, sem esperar o áudio inteiro.
+    Para quem toca enquanto baixa."""
+    voz = await asyncio.to_thread(_voz_piper, voice)
+    proc = await asyncio.create_subprocess_exec(
+        *_ffmpeg_mp3(voz.config.sample_rate, "pipe:1"), stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+
+    async def alimentar():
+        try:
+            frases = iter(voz.synthesize(text))
+            while (frase := await asyncio.to_thread(next, frases, None)) is not None:
+                proc.stdin.write(frase.audio_int16_bytes)
+                await proc.stdin.drain()
+        finally:
+            proc.stdin.close()
+
+    tarefa = asyncio.create_task(alimentar())
+    try:
+        while pedaco := await proc.stdout.read(4096):
+            yield pedaco
+        await tarefa
+    finally:
+        tarefa.cancel()
+        if proc.returncode is None:
+            proc.kill()
 
 
 def tts_save(text: str, voice: str, output_path: Path) -> bool:
@@ -42,7 +98,7 @@ def tts_save(text: str, voice: str, output_path: Path) -> bool:
         return False
     try:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        asyncio.run(generate_tts(text, voice or DEFAULT_VOICE, Path(output_path)))
+        _salvar_piper(text, voice, Path(output_path))
         return Path(output_path).exists() and Path(output_path).stat().st_size > 0
     except Exception as e:
         log(f"[tts] Erro ao gerar {Path(output_path).name}: {e}")

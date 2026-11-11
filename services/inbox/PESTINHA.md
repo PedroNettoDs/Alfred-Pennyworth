@@ -34,6 +34,11 @@ timers do systemd (qualquer unit oneshot do catálogo)
   com **Sim**, o pet deixa o pedido `recado_feito` e a pendência é fechada sem resposta (o "ignorar" do Painel); com
   **Não**, ou fechando pelo botão do meio, só o post-it sai e a pendência continua aguardando. Os post-its ficam
   atrás das outras janelas. Os post-its voltam ao mesmo lugar quando o pet reabre. Os mesmos recados aparecem no cartão **Anotações** do Início do Painel.
+- **Negligência:** `estado.json` leva `negligencia` (`promessas.negligencia()`, relido a cada 30 s): o que Pedro
+  deixou vencer. Cada promessa aberta com prazo passado pesa 0,4 + 0,1 por dia de atraso (teto 0,7); cada tarefa
+  aberta de `tasks.yml` vencida, 0,25 + 0,05 por dia (teto 0,5). O `nivel` é a soma, até 1; `motivo` e `texto` são
+  do item que mais pesa; `link` abre a agenda no Painel. Nada vencido: `null`. No pet isso vira o protesto de
+  **dever** (pigarro, sarcasmo, braços cruzados), que só passa quando a pendência é resolvida.
 - **Notado:** usar o Alfred conta como atenção para o pet. `lib_atividade.notado(origem)` grava `notado.json`
   e o `estado.json` leva `notado` (horário do último uso). Quem chama: o Painel (abrir uma tela, enviar,
   aprovar, falar; a atualização automática da página não conta), `/redigir` e `/reformular`, mensagem de Pedro

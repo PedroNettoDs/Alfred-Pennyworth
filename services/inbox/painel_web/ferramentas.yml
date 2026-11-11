@@ -55,9 +55,9 @@ grupos:
           A transcrição é feita nesta máquina (gemma4 no Ollama; se ele falhar, o faster-whisper, quando instalado) e o áudio não é guardado. Sem microfone no navegador, o botão some.
 
           # Ativar áudio
-          Com **Ativar áudio** ligado, cada resposta do Alfred é lida em voz alta pelo edge-tts, na mesma voz do jornal e das pendências. A escolha fica guardada no navegador.
+          Com **Ativar áudio** ligado, cada resposta do Alfred é lida em voz alta pelo Piper, na mesma voz do jornal e das pendências. A escolha fica guardada no navegador.
 
-          **Cuidado:** o edge-tts é um serviço da Microsoft. Com o áudio ligado, o texto da resposta sai da máquina, como já acontece com o jornal e o resumo das pendências.
+          O Piper roda na própria máquina, em CPU: o texto da resposta não sai dela. O mesmo vale para o jornal e o resumo das pendências. O briefing e o podcast também.
 
           # Onde aparece
           Aba **Conversa**, janela de **Escrita** e a caixinha de conversa que o Pestinha abre.
@@ -389,7 +389,7 @@ grupos:
         resumo: Resumo das notícias de tecnologia e de mercado, por RSS e SearXNG, em texto e áudio.
         doc: |
           # O que faz
-          Coleta notícias de fontes RSS e do SearXNG, agrupa por tema, escreve o briefing com o Ollama e gera o áudio com o edge-tts. Guarda em `VAULT_ALFRED/briefings/`. O que já saiu nas últimas 24 h aparece como continuação.
+          Coleta notícias de fontes RSS e do SearXNG, agrupa por tema, escreve o briefing com o Ollama e gera o áudio com o Piper. Guarda em `VAULT_ALFRED/briefings/`. O que já saiu nas últimas 24 h aparece como continuação.
 
           # Quando roda
           - `alfred-briefing-matinal.timer`: 07:00 (`matinal_tech`).
@@ -414,7 +414,7 @@ grupos:
         resumo: A cada 3 dias, um episódio de uns 10 min em duas vozes, com os temas que mais se repetiram nas notícias.
         doc: |
           # O que faz
-          Relê as edições do jornal e os briefings dos últimos 3 dias, escolhe os temas que mais apareceram e gera um diálogo: o Alfred conduz e a Lúcia faz as perguntas do ouvinte (edge-tts + ffmpeg). Sai em `VAULT_NOTICIAS/podcast/episodios/`, com um manifesto dos e-mails usados. É esse manifesto que alimenta a Limpeza.
+          Relê as edições do jornal e os briefings dos últimos 3 dias, escolhe os temas que mais apareceram e gera um diálogo: o Alfred conduz e a Lúcia faz as perguntas do ouvinte (Piper + ffmpeg). Sai em `VAULT_NOTICIAS/podcast/episodios/`, com um manifesto dos e-mails usados. É esse manifesto que alimenta a Limpeza.
 
           # Quando roda
           `alfred-semanal.timer`, todo dia às 19:00 com `--se-devido`: só gera se o último episódio tiver 3 dias ou mais (`perfis.yml`, `podcast.intervalo_dias`).

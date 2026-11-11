@@ -554,9 +554,11 @@ Desde 10/11/2026 a pendência (e-mail e WhatsApp) não nasce com `.mp3`. Ela gua
 `pendencias.yml` (`fala: {texto, voz}`) e o áudio é gerado por `core.audio_da_pendencia()` só quando alguém
 precisa dele: ao avisar Pedro pelo WhatsApp (o arquivo é apagado logo depois do envio), no botão **Ouvir**,
 em `run.sh ouvir ID` e em `GET /pendencias/{id}/audio` (player do Painel, N8N). O arquivo fica em
-`/tmp/alfred-fala/`, fora do cofre, e é reaproveitado enquanto existir. Medido: 1,3 a 4,3 s de edge-tts por
-áudio de ~35 s (118 KB); isso sai da criação de toda pendência que não é enviada pelo WhatsApp. Sem rede não
-há áudio na hora: o roteiro continua lá e o texto do `.md` também.
+`/tmp/alfred-fala/`, fora do cofre, e é reaproveitado enquanto existir. O motor é o Piper (`lib_tts.tts_save`), local e em CPU:
+~0,7 s por resumo de 15 s (o edge-tts levava 1,3 a 4,3 s e dependia da rede), mais 1,8 s para carregar a voz
+na primeira vez de cada processo. As vozes ficam em `PIPER_VOZES_DIR`; o Piper só tem vozes masculinas em
+pt-BR, então `pt-BR-AntonioNeural` vira `pt_BR-faber-medium` e `pt-BR-FranciscaNeural` vira `pt_BR-cadu-medium`
+(`lib_tts.VOZES_PIPER`). Briefing e podcast usam o mesmo motor.
 
 ### Áudios antigos de resumo do WhatsApp: apagados depois de 2 dias
 

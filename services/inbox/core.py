@@ -186,7 +186,7 @@ def tem_audio(p: dict) -> bool:
 
 
 def audio_da_pendencia(p: dict) -> Optional[Path]:
-    """O .mp3 do resumo, gerado na hora a partir do roteiro guardado em p["fala"] (~1 a 4 s de edge-tts).
+    """O .mp3 do resumo, gerado na hora a partir do roteiro guardado em p["fala"] (~0,7 s de Piper, local).
     Fica em FALA_DIR e é reaproveitado enquanto existir. Pendências antigas: o arquivo que está no cofre."""
     mp3 = (p.get("arquivos") or {}).get("mp3")
     if mp3 and (vault() / mp3).is_file():

@@ -9,9 +9,9 @@ Ouvir: a transcrição é local e o áudio não é guardado. Motor: faster-whisp
 fora da fila do Ollama; sem o pacote instalado, o gemma4 de sempre. O voz.js manda o áudio quando Pedro para de
 gravar e põe o texto na caixa; quem confere e envia é ele.
 
-Falar: o mesmo mecanismo do jornal e do resumo das pendências (lib_tts: edge-tts), na voz das pendências. O texto
-da resposta vai para o serviço da Microsoft, como nesses dois casos. Só com "Ativar áudio" ligado na tela. O voz.js
-manda frase por frase conforme a resposta chega, e o áudio de cada uma sai em fluxo: o primeiro som vem ~0,8 s
+Falar: o mesmo mecanismo do jornal e do resumo das pendências (lib_tts: Piper, local), na voz das pendências. O texto
+da resposta não sai da máquina. Só com "Ativar áudio" ligado na tela. O voz.js
+manda frase por frase conforme a resposta chega, e o áudio de cada uma sai em fluxo: o primeiro som vem ~0,3 s
 depois da primeira frase, sem esperar a resposta nem o .mp3 inteiros. Nada vai para o disco: o texto das últimas
 FALAS_GUARDADAS frases fica na memória até o navegador buscar o áudio.
 
@@ -103,8 +103,8 @@ async def _audio(texto: str):
     try:
         async for pedaco in lib_tts.fluxo_tts(texto, VOZ):
             yield pedaco
-    except Exception as e:     # o edge-tts caiu no meio: o áudio acaba ali e a resposta continua na tela
-        log(f"[voz] edge-tts falhou: {e}")
+    except Exception as e:     # o TTS caiu no meio: o áudio acaba ali e a resposta continua na tela
+        log(f"[voz] TTS falhou: {e}")
 
 
 @router.get("/api/voz/fala/{fala}.mp3")

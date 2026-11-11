@@ -789,7 +789,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--se-devido", action="store_true",
                     help="só gera se o último episódio tiver sido gerado há --dias dias ou mais (usado pelo timer)")
     sp.add_argument("--inbox", default=None)
-    sp.add_argument("--sem-audio", action="store_true", help="só roteiro e .md (sem edge-tts)")
+    sp.add_argument("--sem-audio", action="store_true", help="só roteiro e .md (sem áudio)")
     sp.add_argument("--dry-run", action="store_true", help="só mostra a seleção de notícias (nada gravado)")
     sp.add_argument("--json", action="store_true")
     sp = sub.add_parser("indexar", help="reindexa os cofres em alfred.db (SQLite FTS5) e poda o histórico do WhatsApp")

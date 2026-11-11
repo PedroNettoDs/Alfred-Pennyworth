@@ -314,7 +314,7 @@ def _intercalar_fontes(itens: list[dict], grupos: list[list[dict]]) -> list[dict
 
 
 def _gerar_audio(texto: str, voz: str, mp3_path: Path) -> bool:
-    """TTS que não derruba o briefing: em erro (edge-tts fora, voz inválida) loga, apaga o .mp3 parcial
+    """TTS que não derruba o briefing: em erro (voz do Piper não baixada, ffmpeg) loga, apaga o .mp3 parcial
     (antes ficava um arquivo de 0 byte que a tool listava como "com áudio") e devolve False."""
     try:
         asyncio.run(generate_tts(texto, voz, mp3_path))

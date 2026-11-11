@@ -43,7 +43,7 @@ mark_seen() + save_seen()  → atualiza logs/briefing_seen.json
 [se formato incluir áudio]
   render_template(audio_tecnico.md / audio_executivo.md)
   ollama_generate() → roteiro de áudio
-  edge-tts → .mp3 no vault (falha no TTS: loga, apaga o .mp3 parcial e segue sem áudio)
+  Piper (local) → .mp3 no vault (falha no TTS: loga, apaga o .mp3 parcial e segue sem áudio)
 ```
 
 O corte em `max_items × 2` acontece depois de um **rodízio** entre as fontes de coleta (1º item de cada feed/query,
@@ -113,7 +113,7 @@ extensão "Alfred — blog" troca por `postado <data>` ao postar no Blogspot: [B
 ## Dependências
 
 ```
-httpx, feedparser, pyyaml, edge-tts, scikit-learn, numpy
+httpx, feedparser, pyyaml, piper-tts, scikit-learn, numpy
 ```
 E as libs compartilhadas: `lib_alfred`, `lib_templates`, `perfis`.
 

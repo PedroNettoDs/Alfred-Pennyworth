@@ -1,6 +1,7 @@
 httpx
 pyyaml
 edge-tts
+piper-tts
 scikit-learn
 numpy
 icalendar

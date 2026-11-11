@@ -148,7 +148,7 @@ inbox:
       intervalo_dias: 3           # um episódio a cada 3 dias, cobrindo os últimos 3 dias (timer diário + --se-devido)
       incluir_briefings: true     # além do jornal do e-mail, usa os briefings por RSS (VAULT_ALFRED/briefings)
       formato: [markdown, audio]
-      vozes:                      # duas vozes edge-tts em diálogo
+      vozes:                      # duas vozes em diálogo (lib_tts.VOZES_PIPER: faber e cadu, as duas masculinas)
         ALFRED: "pt-BR-AntonioNeural"
         LUCIA:  "pt-BR-FranciscaNeural"
       template_segmento: podcast_semanal_segmento

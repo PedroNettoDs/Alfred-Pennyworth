@@ -6,7 +6,7 @@ Desde 20/10/2026 o episódio cobre um PERÍODO de N dias terminando hoje (id AAA
 o modo antigo por semana ISO (`--semana 2026-W43`) continua funcionando. O timer roda todo dia às
 19:00 com `--se-devido`: só gera se o último episódio tiver sido gerado há N dias ou mais.
 
-    edições diárias do jornal           seleção                  roteiro (gemma4)            áudio (edge-tts)
+    edições diárias do jornal           seleção                  roteiro (gemma4)            áudio (Piper)   
     VAULT_NOTICIAS/jornal/AAAA-MM-DD_*  → cluster + rank da   →  abertura + 1 segmento    →  2 vozes (ALFRED/LUCIA),
     (.md + .json com e-mails/notícias)     semana inteira        de diálogo por tema         ffmpeg concatena
                                                                                                 │
@@ -22,7 +22,6 @@ Configuração: perfis.yml → inbox.<nome>.podcast (vozes, max_temas, palavras_
     gerar_semanal(semana="2026-W43")
 """
 
-import asyncio
 import json
 import re
 import subprocess
@@ -40,7 +39,7 @@ from _shared.lib_cluster import cluster_items, rank_clusters  # noqa: E402
 from _shared.lib_mail import find_thunderbird_profile, list_accounts, fetch_messages  # noqa: E402
 from _shared.lib_templates import render_template  # noqa: E402
 from _shared.lib_titulo import generate_title_via_llm  # noqa: E402
-from _shared.lib_tts import limpar_para_fala  # noqa: E402
+from _shared.lib_tts import limpar_para_fala, tts_save  # noqa: E402
 
 VOZES_DEFAULT = {"ALFRED": "pt-BR-AntonioNeural", "LUCIA": "pt-BR-FranciscaNeural"}
 _FALA = re.compile(r"^\s*[*_#>\-\s]*(ALFRED|L[UÚ]CIA)[*_\s]*:\s*[*_]*\s*(.+?)\s*$", re.I)
@@ -293,28 +292,17 @@ def roteiro_moldura(temas: list[dict], semana_humana: str, periodo: str, n_notic
 
 
 # ══════════════════════════════════════════════════════════════
-#  Áudio (edge-tts, 2 vozes + ffmpeg)
+#  Áudio (Piper, 2 vozes + ffmpeg)
 # ══════════════════════════════════════════════════════════════
 
-async def _tts_falas(falas: list[tuple[str, str]], vozes: dict, tmp: Path, paralelo: int = 4) -> list[Path]:
-    import edge_tts
-    sem = asyncio.Semaphore(paralelo)
-
-    async def um(i: int, quem: str, texto: str) -> Optional[Path]:
+def _tts_falas(falas: list[tuple[str, str]], vozes: dict, tmp: Path) -> list[Path]:
+    """Uma fala por vez: o Piper é local e já usa os núcleos da CPU (~0,5 s por fala)."""
+    partes = []
+    for i, (quem, texto) in enumerate(falas):
         out = tmp / f"fala_{i:03d}.mp3"
-        async with sem:
-            for tentativa in range(3):
-                try:
-                    await edge_tts.Communicate(texto, vozes.get(quem) or VOZES_DEFAULT[quem]).save(str(out))
-                    if out.exists() and out.stat().st_size > 0:
-                        return out
-                except Exception as e:
-                    log(f"[semanal] TTS fala {i} tentativa {tentativa + 1}: {e}")
-                    await asyncio.sleep(2 * (tentativa + 1))
-        return None
-
-    res = await asyncio.gather(*(um(i, q, t) for i, (q, t) in enumerate(falas)))
-    return [p for p in res if p]
+        if tts_save(texto, vozes.get(quem) or VOZES_DEFAULT[quem], out):
+            partes.append(out)
+    return partes
 
 
 def _ffmpeg(*args: str) -> bool:
@@ -337,7 +325,7 @@ def gerar_audio(falas: list[tuple[str, str]], vozes: dict, destino: Path, pausa_
                 vinheta: str = "") -> bool:
     with tempfile.TemporaryDirectory(prefix="alfred_semanal_") as td:
         tmp = Path(td)
-        partes = asyncio.run(_tts_falas(falas, vozes, tmp))
+        partes = _tts_falas(falas, vozes, tmp)
         if not partes:
             log("[semanal] Nenhuma fala sintetizada")
             return False

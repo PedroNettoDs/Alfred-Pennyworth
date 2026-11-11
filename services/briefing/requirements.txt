@@ -1,5 +1,5 @@
 httpx
 feedparser
 pyyaml
-edge-tts
+piper-tts
 scikit-learn
