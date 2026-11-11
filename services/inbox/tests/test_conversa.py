@@ -402,6 +402,49 @@ class TestLaco(Base):
         self.assertEqual((msgs[1]["papel"], msgs[1]["modelo"]), ("tool", "gemma4:e4b"))
         self.assertEqual((msgs[2]["texto"], msgs[2]["modelo"]), ("Resposta final.", "modelo-teste"))
 
+    def test_acao_narrada_sem_ferramenta_e_cobrada(self):
+        """10/11: "Registrei o compromisso para quinta-feira" com 0 chamadas de ferramenta — nada foi gravado."""
+        self.ollama.roteiro = [texto("Registrei o compromisso para quinta-feira."),
+                               chamada("_t_eco", {"texto": "quinta"}), texto("Anotado, senhor.")]
+        t, evs = self.turno("na quinta tenho que testar os computadores")
+        self.assertEqual([e["tipo"] for e in evs], ["texto", "refazer", "ferramenta", "ferramenta", "texto", "fim"])
+        self.assertEqual((evs[-1]["texto"], evs[-1]["voltas"]), ("Anotado, senhor.", 1))
+        p2 = self.ollama.payloads[1]
+        self.assertIn("tools", p2)
+        self.assertEqual(p2["messages"][-2], {"role": "assistant",
+                                              "content": "Registrei o compromisso para quinta-feira."})
+        self.assertEqual(p2["messages"][-1], {"role": "user", "content": conversa.COBRANCA})
+        msgs = conversa.mensagens(t.conversa_id)   # a frase falsa e a cobrança não ficam no histórico
+        self.assertEqual([(m["papel"], m["texto"]) for m in msgs],
+                         [("user", "na quinta tenho que testar os computadores"), ("tool", ""),
+                          ("assistant", "Anotado, senhor.")])
+
+    def test_cobranca_uma_vez_so(self):
+        self.ollama.roteiro = [texto("Já removi essa pendência."), texto("A pendência foi removida.")]
+        _, evs = self.turno()
+        self.assertEqual(len(self.ollama.payloads), 2)
+        self.assertEqual((evs[-1]["tipo"], evs[-1]["texto"]), ("fim", "A pendência foi removida."))
+
+    def test_sem_acao_narrada_nao_cobra(self):
+        self.ollama.roteiro = [texto("O senhor tem três pendências; nada foi registrado ainda.")]
+        _, evs = self.turno()
+        self.assertEqual(len(self.ollama.payloads), 1)
+        self.assertEqual([e["tipo"] for e in evs], ["texto", "fim"])
+
+    def test_afirma_acao(self):
+        for frase in ("Registrei o compromisso para quinta-feira (12/11).",
+                      "A pendência do **Vitor Suaiden** foi marcada como concluída.",
+                      "marquei a tarefa como concluída para limpar sua lista",
+                      "Já removi essa pendência do sistema.",
+                      "As três que você apontou foram removidas da lista de pendências.",
+                      "Procedi com as seguintes atualizações no seu sistema de gestão:"):
+            self.assertTrue(conversa._afirma_acao(frase), frase)
+        for frase in ("O senhor tem duas tarefas para quinta-feira.",
+                      "Posso registrar isso na agenda, se desejar.",
+                      "Nada foi registrado ainda.",
+                      "Não removi nada, senhor."):
+            self.assertFalse(conversa._afirma_acao(frase), frase)
+
 
 # ══════════════════════════════════════════════════════════════
 #  Aprovação de ferramenta perigosa

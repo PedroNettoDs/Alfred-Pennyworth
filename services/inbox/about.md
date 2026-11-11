@@ -1004,6 +1004,8 @@ enviar(conversa_id, texto) ── grava a pergunta ──► fila do chat (execu
       │ texto ─────────────────► evento "texto"
       │ ferramenta segura ─────► executar() ─► evento "ferramenta" (rodando → ok | erro)
       │ ferramenta perigosa ───► evento "aprovar" ─► aprovar(id) | negar(id) | 5 min sem resposta = cancelada
+      │ "registrei/marquei/removi..." com 0 ferramentas no turno ─► evento "refazer" (a tela apaga o texto) e
+      │                           uma cobrança ao modelo, uma vez só (_afirma_acao, COBRANCA)
       └ repete (no máximo 6 voltas de ferramenta; a 7ª chamada vai sem tools e tem de responder)
    grava a resposta ──► evento "fim" (ou "erro")          parar(turno_id) corta e grava o que já veio
    depois do "fim": resumo (se passou de 32 mensagens) e _aquecer() — o começo do próximo prompt fica avaliado no Ollama

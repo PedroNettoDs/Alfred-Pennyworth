@@ -888,6 +888,24 @@ def _chamar(turno: Turno, msgs: list[dict], modelo: str, ferramentas: Optional[l
     return {**r, "texto": "".join(partes), "tool_calls": chamadas}
 
 
+# Ação narrada sem ferramenta (10/11: "Registrei o compromisso para quinta-feira" com 0 chamadas — nada gravado).
+# Heurística: verbo de escrita na 1ª pessoa do passado ou na passiva, sem negação logo antes. Falso positivo custa
+# só uma chamada a mais ao modelo.
+_RE_ACAO = re.compile(
+    r"\b(?:registrei|anotei|marquei|agendei|criei|adicionei|removi|apaguei|excluí|salvei|guardei|atualizei|concluí"
+    r"|enviei|cancelei|procedi"
+    r"|(?:foi|foram|está|estão|ficou|ficaram)\s+(?:registrad|anotad|marcad|agendad|criad|adicionad|removid|apagad"
+    r"|excluíd|salv|guardad|atualizad|concluíd|enviad|cancelad)[oa]s?)\b", re.I)
+_RE_NEGACAO = re.compile(r"\b(?:não|nada|nem)\s+(?:\w+\s+)?$", re.I)
+COBRANCA = ("Você afirmou ter feito uma ação, mas não chamou nenhuma ferramenta neste turno: nada foi gravado. "
+            "Se Pedro pediu uma ação, chame a ferramenta agora. Se não existe ferramenta para isso, diga que não foi "
+            "feito. Se você só relatava algo que já estava feito, repita a resposta.")
+
+
+def _afirma_acao(texto: str) -> bool:
+    return any(not _RE_NEGACAO.search(texto[:m.start()]) for m in _RE_ACAO.finditer(texto))
+
+
 def _aquecer(conversa_id: str, modelo: str, ferramentas: list, num_ctx: int) -> None:
     """
     Deixa avaliado no Ollama o começo do próximo prompt desta conversa: personalidade, ferramentas, resumo e
@@ -946,7 +964,7 @@ def _turno(turno: Turno) -> None:
     # modelo_ferramentas (perfis.yml) diferente: ele decide as ferramentas sem mostrar texto, e o modelo do turno
     # escreve a resposta final sem tools — ver about.md (na 3060 os dois não cabem juntos)
     modelo_f = cfg["modelo_ferramentas"] or turno.modelo
-    textos, entrada, saida, voltas = [], 0, 0, 0
+    textos, entrada, saida, voltas, cobrado = [], 0, 0, 0, False
     while True:
         com_ferramentas = voltas < MAX_VOLTAS
         modelo = modelo_f if com_ferramentas else turno.modelo
@@ -960,6 +978,13 @@ def _turno(turno: Turno) -> None:
         if modelo == turno.modelo:
             textos.append(r["texto"])
         if r["parado"] or not r["tool_calls"]:
+            if not r["parado"] and voltas == 0 and not cobrado and _afirma_acao(r["texto"]):
+                cobrado = True   # disse que fez sem chamar ferramenta: uma segunda chance, e a frase falsa sai da tela
+                log(f"[conversa] turno {turno.id}: ação narrada sem ferramenta — cobrando a chamada")
+                textos.clear()
+                _emitir(turno, "refazer")
+                msgs += [{"role": "assistant", "content": r["texto"]}, {"role": "user", "content": COBRANCA}]
+                continue
             break
         msgs.append({"role": "assistant", "content": r["texto"], "tool_calls": r["tool_calls"]})
         for chamada in r["tool_calls"]:

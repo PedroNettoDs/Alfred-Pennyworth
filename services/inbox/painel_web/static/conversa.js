@@ -194,6 +194,10 @@
       bloco.corpo.textContent = bruto;
       document.dispatchEvent(new CustomEvent("alfred:texto", { detail: { texto: ev.texto } }));   // voz.js fala frase a frase
       rolar();
+    } else if (ev.tipo === "refazer") {   // o modelo disse que fez sem chamar ferramenta: a resposta recomeça
+      bruto = "";
+      bloco.corpo.textContent = "";
+      document.dispatchEvent(new CustomEvent("alfred:refazer"));
     } else if (ev.tipo === "ferramenta") {
       mostrarFerramenta(ev);
     } else if (ev.tipo === "aprovar") {

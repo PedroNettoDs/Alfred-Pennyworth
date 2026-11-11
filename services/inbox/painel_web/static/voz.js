@@ -129,6 +129,7 @@
       resto += (e.detail && e.detail.texto) || "";
       fatiar(false);
     });
+    document.addEventListener("alfred:refazer", calar);   // a resposta recomeçou: o que já foi dito não vale
     document.addEventListener("alfred:resposta", function (e) {
       if (!audioLigado()) return;
       if (e.detail && e.detail.parado) {
