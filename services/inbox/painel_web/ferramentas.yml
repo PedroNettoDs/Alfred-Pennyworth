@@ -366,7 +366,9 @@ grupos:
         resumo: De N em N horas, um post-it no computador. Sem o "tomei" em 10 minutos, o Alfred pergunta pelo WhatsApp.
         doc: |
           # Como criar
-          Peça na conversa (Painel, terminal ou o número do Alfred no WhatsApp): "me lembra de tomar amoxicilina de 8 em 8 horas". O Alfred pesquisa as contraindicações e o que não fazer (ex.: álcool) e mostra o resumo.
+          Peça na conversa (Painel, terminal ou o número do Alfred no WhatsApp): "me lembra de tomar amoxicilina de 8 em 8 horas". O Alfred cria o lembrete na hora e manda pesquisar nas bulas as contraindicações e o que não fazer (ex.: álcool). A pesquisa roda em segundo plano, nesta máquina (5 a 20 minutos); quando termina, os cuidados chegam no seu WhatsApp e passam a aparecer no post-it.
+
+          Pode dizer também a hora da dose que já tomou ("tomei a primeira às 11:55": a próxima é ela mais o intervalo) e a duração ("por 5 dias": depois disso o lembrete sai sozinho).
 
           # A cada dose
           - Aparece o post-it "Tomar X" no Pestinha, com a hora em que foi criado. O detalhe traz os cuidados.

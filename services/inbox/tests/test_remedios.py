@@ -12,6 +12,8 @@ Offline: researcher e LLM simulados, vault temporário, envios simulados (o ambi
 from datetime import timedelta
 from unittest import mock
 
+import httpx
+
 from tests.test_whatsapp_assistente import BaseAssistente, FIM, PEDRO, turno_falso
 from tests.test_whatsapp import core, main, whatsapp
 from _shared import lib_ferramentas as lf
@@ -29,10 +31,14 @@ class Base(BaseAssistente):
     def setUp(self):
         super().setUp()
         remedios.arquivo().unlink(missing_ok=True)
+        # nenhum teste fala com o researcher de verdade: o que não for simulado recebe 503
+        fora = mock.patch.object(pesquisa, "_transporte", httpx.MockTransport(lambda req: httpx.Response(503)))
+        fora.start()
+        self.addCleanup(fora.stop)
         self.t0 = core._now().replace(hour=14, minute=5, second=0, microsecond=0)
 
     def criar(self, nome="Amoxicilina", horas=8, **kw):
-        return remedios.adicionar(nome, horas, agora=self.t0, **kw)
+        return remedios.adicionar(nome, horas, agora=self.t0, **kw)   # kw: primeira, ultima, dias
 
     def perguntado(self, nome="Amoxicilina"):
         """Remédio com a dose aberta às 14:05 e a pergunta do WhatsApp já enviada (14:15)."""
@@ -124,6 +130,7 @@ class TestDoses(Base):
         casos = {"agora": agora, "Agorinha.": agora, "há 20 min": agora - minutos(20), "faz meia hora": agora - minutos(30),
                  "faz 1 hora": agora - minutos(60), "14:10": agora.replace(minute=10), "14h10": agora.replace(minute=10),
                  "às 13h": agora.replace(hour=13, minute=0), "umas 2": agora.replace(hour=14, minute=0),
+                 "01:30": agora.replace(hour=1, minute=30), "11:55": agora.replace(hour=11, minute=55),   # com minutos: ao pé da letra
                  "23h": (agora - timedelta(days=1)).replace(hour=23, minute=0),
                  "marca reunião às 15h": None, "25h": None, "": None}
         for texto, esperado in casos.items():
@@ -142,38 +149,132 @@ class TestDoses(Base):
         with self.assertRaises(ValueError):
             self.criar("Dipirona", 0)
 
+    def test_dose_ja_tomada_a_proxima_e_ela_mais_o_intervalo(self):
+        tomou = self.t0 - timedelta(hours=2)                           # "tomei o primeiro às 12:05"
+        r = self.criar("Celecoxibe", 12, ultima=tomou)
+        self.assertEqual(r["proxima_em"], (tomou + timedelta(hours=12)).isoformat())
+        self.assertEqual(r["ultima"]["tomada_em"], tomou.isoformat())
+        self.assertEqual(remedios.passar(self.t0 + timedelta(hours=9)), [])    # nada antes das 12 h
+        self.assertEqual(remedios.passar(self.t0 + timedelta(hours=10)), [("dose", r["id"])])
+
+    def test_depois_dos_dias_do_tratamento_o_lembrete_sai_sozinho(self):
+        r = self.criar("Celecoxibe", 12, dias=1)
+        self.assertEqual(r["ate"], (self.t0 + timedelta(days=1)).isoformat())
+        for horas in (0, 12):                                          # as duas doses do dia
+            quando = self.t0 + timedelta(hours=horas)
+            remedios.passar(quando)
+            self.assertTrue(remedios.recado_feito(remedios.recados()[0]["id"], agora=quando))
+        self.assertEqual(remedios.passar(self.t0 + timedelta(hours=24)), [("fim", r["id"])])
+        self.assertEqual((remedios.listar(), remedios.recados()), ([], []))
+        with self.assertRaises(ValueError):
+            self.criar("Dipirona", 8, dias=0)
+
+
+JOB = "0123456789ab"
+SINTESE = "Não associe a bebidas alcoólicas. Contraindicado para alérgicos a penicilina."
+CUIDADOS = {"cuidados": ["Não beber álcool", " Não tomar se for alérgico a penicilina ", ""]}
+
 
 class TestCuidados(Base):
-    def pesquisar(self, sintese="Não associe a bebidas alcoólicas. Contraindicado para alérgicos a penicilina."):
-        r = self.criar()
-        llm = mock.Mock(return_value={"cuidados": ["Não beber álcool", " Não tomar se for alérgico a penicilina ", ""]})
-        busca = mock.Mock(return_value={"slug": "amoxicilina", "cached": False})
-        with mock.patch.object(pesquisa, "pesquisar", busca), mock.patch.object(remedios, "ollama_generate_json", llm), \
-                mock.patch.object(pesquisa, "obter", lambda slug: {"sintese": sintese}):
-            cuidados = remedios.pesquisar_cuidados(r["id"])
-        return r, cuidados, busca, llm
+    """Contraindicações e o que não fazer: pesquisa profunda do researcher (lê as páginas), em segundo plano."""
 
-    def test_cuidados_da_pesquisa_vao_para_o_postit_e_para_o_whatsapp(self):
-        r, cuidados, busca, llm = self.pesquisar()
-        self.assertEqual(cuidados, ["Não beber álcool", "Não tomar se for alérgico a penicilina"])
-        tema, profundo = busca.call_args.args[0], busca.call_args.kwargs.get("profundo")
-        self.assertIn("Amoxicilina", tema)
-        self.assertIn("contraindicações", tema)
-        self.assertIs(profundo, False)
-        self.assertIn("bebidas alcoólicas", llm.call_args.args[0])     # o resumo sai do que a pesquisa achou
-        self.assertEqual(remedios.obter(r["id"])["pesquisa"], {"status": "pronta", "slug": "amoxicilina"})
+    def iniciar(self, nome="Amoxicilina", *respostas):
+        r = self.criar(nome)
+        busca = mock.Mock(side_effect=list(respostas) or [{"status": "running", "job_id": JOB, "slug": "amoxicilina"}])
+        with mock.patch.object(pesquisa, "pesquisar", busca):
+            estado = remedios.iniciar_pesquisa(r["id"], agora=self.t0)
+        return r, estado, busca
+
+    def passar(self, quando, job, llm=None):
+        """Uma volta do laço com o researcher respondendo `job` (dict, ou exceção) ao andamento da pesquisa.
+        → (o que a volta fez com as pesquisas, o mock do andamento, o mock do LLM)."""
+        andamento = mock.Mock(side_effect=job) if isinstance(job, Exception) else mock.Mock(return_value=job)
+        llm = llm or mock.Mock(return_value=CUIDADOS)
+        with mock.patch.object(pesquisa, "andamento", andamento), mock.patch.object(remedios, "ollama_generate_json", llm):
+            feitos = [f for f in remedios.passar(quando) if f[0] == "cuidados"]
+        return feitos, andamento, llm
+
+    def test_pesquisa_profunda_roda_em_segundo_plano_e_os_cuidados_chegam_depois(self):
+        r, estado, busca = self.iniciar()
+        self.assertEqual((estado["status"], estado["job_id"]), ("andamento", JOB))
+        self.assertIn("Amoxicilina", busca.call_args.args[0])
+        self.assertIn("contraindicações", busca.call_args.args[0])
+        self.assertEqual(busca.call_args.kwargs, {"profundo": True})   # o modo que lê as páginas (bulas)
         remedios.passar(self.t0)
+        self.assertIn("pesquisando", remedios.recados()[0]["detalhe"])
+        feitos, andamento, llm = self.passar(self.t0 + minutos(1), {"status": "running", "etapa": "leitura"})
+        self.assertEqual(feitos, [])
+        andamento.assert_called_once_with(JOB)
+        llm.assert_not_called()
+        pronto = {"status": "done", "resultado": {"slug": "amoxicilina", "synthesis": SINTESE}}
+        feitos, _, llm = self.passar(self.t0 + minutos(5), pronto)
+        self.assertEqual(feitos, [("cuidados", r["id"])])
+        self.assertIn("bebidas alcoólicas", llm.call_args.args[0])     # o resumo sai do que a pesquisa achou
+        salvo = remedios.obter(r["id"])
+        self.assertEqual(salvo["pesquisa"], {"status": "pronta", "slug": "amoxicilina"})
+        self.assertEqual(salvo["cuidados"], ["Não beber álcool", "Não tomar se for alérgico a penicilina"])
         self.assertIn("• Não beber álcool", remedios.recados()[0]["detalhe"])
-        remedios.passar(self.t0 + minutos(10))
+        (aviso,) = self.para(PEDRO)                                    # os cuidados chegam pelo número do Alfred
+        self.assertEqual(aviso["instancia"], "alfred-assistente")
+        self.assertIn("Cuidados do *Amoxicilina*", aviso["conteudo"])
+        self.assertIn("• Não tomar se for alérgico a penicilina", aviso["conteudo"])
+        feitos, andamento, _ = self.passar(self.t0 + minutos(6), pronto)
+        self.assertEqual(feitos, [])                                   # pesquisa pronta não é olhada de novo
+        andamento.assert_not_called()
+        remedios.passar(self.t0 + minutos(10))                         # a pergunta da dose leva os cuidados
+        self.assertIn("Já tomou?", self.para(PEDRO)[-1]["conteudo"])
         self.assertIn("Não beber álcool", self.para(PEDRO)[-1]["conteudo"])
 
-    def test_pesquisa_fora_do_ar_nao_impede_o_lembrete(self):
+    def test_pesquisa_de_outro_remedio_no_cache_e_refeita_para_este(self):
+        de_outro = {"slug": "celecoxibe", "cached": True, "cache_type": "semantic", "matched_slug": "amoxicilina",
+                    "synthesis": "Amoxicilina: não associe a bebidas alcoólicas."}
+        r, estado, busca = self.iniciar("Celecoxibe", de_outro, {"status": "running", "job_id": JOB, "slug": "celecoxibe"})
+        self.assertEqual([c.kwargs for c in busca.call_args_list],
+                         [{"profundo": True}, {"profundo": True, "refresh": True}])
+        self.assertEqual((estado["status"], estado["job_id"]), ("andamento", JOB))
+        self.assertEqual(remedios.obter(r["id"])["cuidados"], [])      # os cuidados de outro remédio não entram
+
+    def test_pesquisa_profunda_recente_do_mesmo_remedio_e_reaproveitada_na_hora(self):
+        r = self.criar()
+        busca = mock.Mock(return_value={"slug": "amoxicilina", "cached": True, "cache_type": "exact", "synthesis": SINTESE})
+        with mock.patch.object(pesquisa, "pesquisar", busca), \
+                mock.patch.object(remedios, "ollama_generate_json", lambda *a, **k: CUIDADOS):
+            estado = remedios.iniciar_pesquisa(r["id"])
+        busca.assert_called_once()
+        self.assertEqual(estado, {"status": "pronta", "slug": "amoxicilina"})
+        self.assertEqual(remedios.obter(r["id"])["cuidados"][0], "Não beber álcool")
+        self.assertEqual(self.para(PEDRO), [])                         # quem pediu já recebe os cuidados na resposta
+
+    def test_researcher_fora_do_ar_nao_impede_o_lembrete(self):
         r = self.criar()
         with mock.patch.object(pesquisa, "pesquisar", side_effect=pesquisa.ErroPesquisa("researcher fora do ar")):
-            self.assertEqual(remedios.pesquisar_cuidados(r["id"]), [])
-        self.assertEqual(remedios.obter(r["id"])["pesquisa"]["status"], "falhou")
+            self.assertEqual(remedios.iniciar_pesquisa(r["id"]), {"status": "falhou"})
         remedios.passar(self.t0)
         self.assertIn("bula", remedios.recados()[0]["detalhe"])
+        self.assertEqual(self.para(PEDRO), [])
+
+    def test_pesquisa_que_falha_ou_nao_rende_cuidados_avisa_pedro(self):
+        casos = {"erro do job": {"status": "error", "erro": "Nenhuma página pôde ser lida"},
+                 "job interrompido": {"status": "interrompido"},
+                 "job desconhecido": KeyError(JOB),
+                 "relatório sem cuidados": {"status": "done", "resultado": {"slug": "x", "synthesis": "Nada sobre isso."}}}
+        for caso, job in casos.items():
+            with self.subTest(caso):
+                remedios.arquivo().unlink(missing_ok=True)
+                r, _, _ = self.iniciar()
+                feitos, _, _ = self.passar(self.t0 + minutos(5), job, llm=mock.Mock(return_value={"cuidados": []}))
+                self.assertEqual(feitos, [("cuidados", r["id"])])
+                self.assertEqual(remedios.obter(r["id"])["pesquisa"]["status"], "falhou")
+                self.assertIn("Não consegui pesquisar", self.para(PEDRO)[-1]["conteudo"])
+
+    def test_researcher_caido_no_meio_espera_e_desiste_depois_do_limite(self):
+        r, _, _ = self.iniciar()
+        inicio = core._parse_dt(remedios.obter(r["id"])["pesquisa"]["desde"])
+        fora = pesquisa.ErroPesquisa("researcher fora do ar")
+        feitos, _, _ = self.passar(inicio + minutos(5), fora)
+        self.assertEqual((feitos, remedios.obter(r["id"])["pesquisa"]["status"]), ([], "andamento"))
+        feitos, _, _ = self.passar(inicio + minutos(remedios.PESQUISA_MAX_MIN + 1), fora)
+        self.assertEqual((feitos, remedios.obter(r["id"])["pesquisa"]["status"]), ([("cuidados", r["id"])], "falhou"))
 
 
 class TestWhatsApp(Base):
@@ -245,6 +346,27 @@ class TestFerramentas(Base):
         self.assertIn("parado", lf.executar("parar_remedio", {"nome": "Amoxicilina"}))
         self.assertIn("Nenhum", lf.executar("listar_remedios"))
         self.assertIn("Não há lembrete", lf.executar("parar_remedio", {"nome": "Amoxicilina"}))
+
+    def test_dose_ja_tomada_e_duracao_quem_faz_a_conta_e_a_ferramenta(self):
+        tomou = (core._now() - timedelta(hours=1)).replace(second=0, microsecond=0)
+        with mock.patch.object(pesquisa, "pesquisar", return_value={"status": "running", "job_id": JOB}):
+            r = lf.executar("criar_lembrete_remedio", {"nome": "Celecoxibe", "intervalo_horas": 12,
+                                                        "ultima_dose": f"{tomou:%H:%M}", "dias": 5})
+        self.assertIn("segundo plano", r)                              # a pesquisa das bulas não segura a resposta
+        rem = remedios.achar("Celecoxibe")
+        self.assertEqual(rem["pesquisa"]["job_id"], JOB)
+        self.assertEqual(rem["proxima_em"], (tomou + timedelta(hours=12)).isoformat())
+        self.assertEqual(rem["ate"], (tomou + timedelta(days=5)).isoformat())
+        self.assertIn(f"Próxima dose: {tomou + timedelta(hours=12):%d/%m %H:%M}", r)
+        self.assertIn("por 5 dias", r)
+        self.assertIn("até", lf.executar("listar_remedios"))
+        esq = next(e for e in lf.esquemas() if e["function"]["name"] == "criar_lembrete_remedio")
+        self.assertIn("ultima_dose", esq["function"]["parameters"]["properties"])
+        with mock.patch.object(pesquisa, "pesquisar") as busca:
+            r = lf.executar("criar_lembrete_remedio", {"nome": "Dipirona", "intervalo_horas": 6, "ultima_dose": "ontem cedo"})
+        busca.assert_not_called()
+        self.assertIn("Não entendi", r)
+        self.assertIsNone(remedios.achar("Dipirona"))
 
     def test_intervalo_invalido_nao_cria(self):
         self.assertIn("intervalo", lf.executar("criar_lembrete_remedio", {"nome": "Dipirona", "intervalo_horas": 0}))

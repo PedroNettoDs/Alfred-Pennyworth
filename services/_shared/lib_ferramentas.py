@@ -1146,39 +1146,60 @@ def criar_compromisso(texto: str) -> str:
 def _linha_remedio(r: dict) -> str:
     quando = _inbox("core")._parse_dt((r.get("dose") or {}).get("devida_em") or r.get("proxima_em"))
     situacao = f"dose das {quando:%H:%M} esperando o \"tomei\"" if r.get("dose") else f"próxima dose {quando:%d/%m %H:%M}"
+    fim = f" · até {_inbox('core')._parse_dt(r['ate']):%d/%m %H:%M}" if r.get("ate") else ""
     cuidados = f"\n  Cuidados: {'; '.join(r['cuidados'])}" if r.get("cuidados") else ""
-    return f"• {r['nome']} — a cada {r['intervalo_horas']:g} h · {situacao}{cuidados}"
+    return f"• {r['nome']} — a cada {r['intervalo_horas']:g} h · {situacao}{fim}{cuidados}"
 
 
 @ferramenta("criar_lembrete_remedio",
             "Cria o lembrete de um remédio: de N em N horas aparece um post-it no computador e, sem o \"tomei\" em 10 "
-            "minutos, Alfred pergunta a Pedro pelo WhatsApp. Também pesquisa na web as contraindicações e o que não "
-            "fazer durante o uso (ex.: álcool) e devolve o resumo. Use quando Pedro pedir para ser lembrado de tomar "
-            "um remédio. Leva até 5 minutos por causa da pesquisa.",
+            "minutos, Alfred pergunta a Pedro pelo WhatsApp. Também manda pesquisar nas bulas as contraindicações e o "
+            "que não fazer durante o uso (ex.: álcool): a pesquisa roda em segundo plano (de 5 a 20 minutos) e os "
+            "cuidados chegam depois a Pedro pelo WhatsApp. Use quando Pedro pedir para ser lembrado de tomar um "
+            "remédio. Se ele disser que já tomou uma dose, passe a hora que ele disse em ultima_dose: a próxima "
+            "dose é calculada aqui, nunca some as horas você mesmo.",
             timeout=330)
-def criar_lembrete_remedio(nome: str, intervalo_horas: float, primeira_dose: Optional[str] = None) -> str:
+def criar_lembrete_remedio(nome: str, intervalo_horas: float, ultima_dose: Optional[str] = None,
+                           primeira_dose: Optional[str] = None, dias: Optional[float] = None) -> str:
     """
     :param nome: Nome do remédio, ex.: "Amoxicilina 500 mg"
     :param intervalo_horas: De quantas em quantas horas, ex.: 8
-    :param primeira_dose: Quando é a próxima dose, ex.: "22:00" ou "amanhã 8h" (vazio = agora)
+    :param ultima_dose: Hora em que Pedro JÁ tomou a última dose, como ele disse, ex.: "11:55" ou "há 20 min"
+    :param primeira_dose: Só se ele ainda não tomou: quando será a primeira dose, ex.: "22:00" ou "amanhã 8h" (vazio = agora)
+    :param dias: Duração do tratamento em dias, ex.: 5 para "por 5 dias" (vazio = até Pedro mandar parar)
     """
     remedios = _inbox("remedios")
-    primeira = None
-    if primeira_dose and primeira_dose.strip():
+    ultima = primeira = None
+    if ultima_dose and ultima_dose.strip():
+        ultima = remedios.hora_tomada(ultima_dose)
+        if not ultima:
+            return (f"Não entendi a hora da última dose: {ultima_dose!r}. Use \"11:55\", \"agora\" ou \"há 20 min\". "
+                    "Nada foi criado.")
+    elif primeira_dose and primeira_dose.strip():
         achado = _inbox("whatsapp").interpretar_quando(primeira_dose)
         if not achado:
             return f"Não entendi a hora da primeira dose: {primeira_dose!r}. Use \"22:00\" ou \"amanhã 8h\". Nada foi criado."
         primeira = achado[0]
     try:
-        r = remedios.adicionar(nome, intervalo_horas, primeira)
+        r = remedios.adicionar(nome, intervalo_horas, primeira, ultima=ultima, dias=dias)
     except ValueError as e:
         return f"Lembrete não criado: {e}."
-    cuidados = remedios.pesquisar_cuidados(r["id"])
-    quando = f"{primeira:%d/%m %H:%M}" if primeira else "agora (o post-it aparece em até 1 minuto)"
-    return (f"Lembrete criado: {r['nome']} a cada {r['intervalo_horas']:g} h. Primeira dose: {quando}. Sem o "
-            "\"tomei\" em 10 minutos, pergunto pelo WhatsApp.\n"
-            + ("Cuidados (resumo de pesquisa na web; confirme na bula):\n" + "\n".join(f"• {c}" for c in cuidados)
-               if cuidados else "Não consegui pesquisar os cuidados agora; o lembrete vale assim mesmo. Confira a bula."))
+    pesquisa = remedios.iniciar_pesquisa(r["id"]).get("status")
+    cuidados = (remedios.obter(r["id"]) or {}).get("cuidados") or []
+    core = _inbox("core")
+    quando = (f"Próxima dose: {core._parse_dt(r['proxima_em']):%d/%m %H:%M}" if ultima or primeira
+              else "Primeira dose: agora (o post-it aparece em até 1 minuto)")
+    duracao = f", por {dias:g} dias (até {core._parse_dt(r['ate']):%d/%m %H:%M})" if r.get("ate") and dias else ""
+    if pesquisa == "andamento":
+        sobre = ("Os cuidados (contraindicações e o que não fazer) estão sendo pesquisados nas bulas, em segundo plano: "
+                 "leva de 5 a 20 minutos. Quando terminar, eles vão para o WhatsApp de Pedro e para o post-it de cada dose. "
+                 "Não cite nenhum cuidado antes disso.")
+    elif cuidados:
+        sobre = "Cuidados (resumo de pesquisa na web; confirme na bula):\n" + "\n".join(f"• {c}" for c in cuidados)
+    else:
+        sobre = "Não consegui pesquisar os cuidados agora; o lembrete vale assim mesmo. Confira a bula."
+    return (f"Lembrete criado: {r['nome']} a cada {r['intervalo_horas']:g} h{duracao}. {quando}. Sem o "
+            f"\"tomei\" em 10 minutos, pergunto pelo WhatsApp.\n{sobre}")
 
 
 @ferramenta("listar_remedios", "Lista os lembretes de remédio: intervalo, próxima dose e os cuidados de cada um.")

@@ -3,11 +3,13 @@ Alfred — lembrete de remédio: de N em N horas um post-it no computador; sem o
 Alfred pergunta no WhatsApp.
 
     adicionar(nome, intervalo_horas)   → VAULT_ALFRED/agenda/remedios.yml (o mesmo nome não duplica)
-    pesquisar_cuidados(id)             → o researcher (pesquisa.py) acha as contraindicações e o que não fazer;
-                                         o Ollama resume em frases curtas (prompt remedio_cuidados.md)
+    iniciar_pesquisa(id)               → pesquisa profunda do researcher (pesquisa.py): ele lê as páginas (bulas) e
+                                         acha as contraindicações e o que não fazer, em segundo plano (5 a 20 min)
     passar()                           ← thread da API, a cada 60 s
         proxima_em venceu      → abre a dose: post-it "Tomar X" (recados() → estado.json → Pestinha)
         10 min sem o "tomei"   → o número do Alfred pergunta a Pedro: "Já tomou? sim ou não" (uma vez por dose)
+        pesquisa terminou      → o Ollama resume em frases curtas (prompt remedio_cuidados.md), que vão para o
+                                 post-it, para a pergunta da dose e, uma vez, para o WhatsApp de Pedro
     tomei(id, quando)                  ← "Tomei" no post-it, ferramenta tomei_remedio, resposta no WhatsApp
         fecha a dose; a próxima fica para quando + intervalo
     resposta_whatsapp(texto)           ← whatsapp._pedido_de_pedro, antes do motor da conversa
@@ -35,12 +37,16 @@ from _shared.lib_templates import render_template
 
 ESPERA_MIN = 10            # minutos com o post-it na tela, sem "tomei", até o WhatsApp perguntar
 INTERVALO_MAX_H = 24 * 7
-MAX_CUIDADOS = 5           # o detalhe do post-it tem 600 caracteres
-CUIDADO_MAX = 90
-SINTESE_MAX = 6000         # caracteres da pesquisa que vão ao resumo
+DIAS_MAX = 365             # duração máxima de um tratamento com fim marcado
+MAX_CUIDADOS = 6           # o detalhe do post-it tem 600 caracteres
+CUIDADO_MAX = 80
+SINTESE_MAX = 12000        # caracteres do relatório da pesquisa que vão ao resumo
+PESQUISA_MAX_MIN = 180     # pesquisa profunda que não termina nesse tempo conta como falha. Folgado de propósito:
+                           # com Pedro usando o Alfred, a porta da GPU segura o job (até 300 s por chamada ao modelo)
 TEMA = "{nome}: contraindicações, interações e o que não fazer durante o uso (álcool, alimentos, outros remédios)"
 AVISO = "Resumo de pesquisa na web: confirme na bula."
 SEM_CUIDADOS = {"pendente": "Cuidados ainda não pesquisados: confira a bula.",
+                "andamento": "Ainda pesquisando os cuidados: confira a bula.",
                 "falhou": "Não consegui pesquisar os cuidados: confira a bula."}
 
 SCHEMA_CUIDADOS = {
@@ -115,29 +121,37 @@ def achar(nome: str) -> Optional[dict]:
 
 
 def adicionar(nome: str, intervalo_horas: float, primeira: Optional[datetime] = None,
-              agora: Optional[datetime] = None) -> dict:
-    """Lembrete novo, com a primeira dose em `primeira` (padrão: agora). Um nome que já existe só troca o intervalo
-    (e a próxima dose, se `primeira` veio). Nome vazio ou intervalo fora de 0–168 h → ValueError."""
+              agora: Optional[datetime] = None, ultima: Optional[datetime] = None, dias: Optional[float] = None) -> dict:
+    """Lembrete novo. A primeira dose é em `primeira` (padrão: agora); se Pedro já tomou uma (`ultima`), a próxima
+    é ela + o intervalo: a conta é feita aqui, não por quem chama. `dias` é a duração do tratamento, contada da
+    primeira dose: passado isso o lembrete sai sozinho (passar). Um nome que já existe não duplica: troca o
+    intervalo e o que mais vier. Nome vazio, intervalo fora de 0–168 h ou dias fora de 0–365 → ValueError."""
     nome = " ".join(str(nome or "").split())[:60]
     horas = float(intervalo_horas)
     if not nome:
         raise ValueError("falta o nome do remédio")
     if not 0 < horas <= INTERVALO_MAX_H:
         raise ValueError(f"o intervalo precisa ficar entre 0 e {INTERVALO_MAX_H} horas")
+    if dias is not None and not 0 < float(dias) <= DIAS_MAX:
+        raise ValueError(f"a duração precisa ficar entre 0 e {DIAS_MAX} dias")
     agora = agora or core._now()
     with _trava():
         data = _load()
         r = next((x for x in data["remedios"] if _chave(x["nome"]) == _chave(nome)), None)
         if r:
             r["intervalo_horas"] = horas
-            if primeira and not r.get("dose"):
-                r["proxima_em"] = _iso(primeira)
         else:
             slug = re.sub(r"[^a-z0-9]+", "-", _chave(nome)).strip("-")[:24] or "remedio"
             r = {"id": f"{slug}-{secrets.token_hex(2)}", "nome": nome, "intervalo_horas": horas,
-                 "criado_em": _iso(agora), "proxima_em": _iso(primeira or agora), "cuidados": [],
+                 "criado_em": _iso(agora), "proxima_em": _iso(agora), "cuidados": [],
                  "pesquisa": {"status": "pendente"}}
             data["remedios"].append(r)
+        if ultima:
+            _fechar(r, ultima, "conversa")
+        elif primeira and not r.get("dose"):
+            r["proxima_em"] = _iso(primeira)
+        if dias is not None:
+            r["ate"] = _iso((ultima or core._parse_dt(r["proxima_em"])) + timedelta(days=float(dias)))
         _save(data)
     return r
 
@@ -157,33 +171,96 @@ def parar(nome: str) -> Optional[dict]:
 #  Cuidados: contraindicações e o que não fazer (researcher + Ollama)
 # ══════════════════════════════════════════════════════════════
 
-def pesquisar_cuidados(rid: str) -> list[str]:
-    """Pesquisa o remédio (modo rápido do researcher, até 5 min; a pesquisa fica no cofre) e guarda até MAX_CUIDADOS
-    frases curtas no lembrete. Researcher ou Ollama fora do ar → [] e pesquisa.status = "falhou"."""
-    r = obter(rid)
-    if not r:
-        return []
-    cuidados, slug = [], ""
-    try:
-        resp = pesquisa.pesquisar(TEMA.format(nome=r["nome"]), profundo=False)
-        slug = pesquisa.slug_resultado(resp)
-        sintese = resp.get("synthesis") or (pesquisa.obter(slug) or {}).get("sintese") or ""
-        if sintese.strip():
-            dados = ollama_generate_json(
-                render_template("remedio_cuidados", {"nome": r["nome"], "sintese": sintese[:SINTESE_MAX]}),
-                schema=SCHEMA_CUIDADOS, timeout=180) or {}
-            brutos = dados.get("cuidados") if isinstance(dados, dict) else None
-            cuidados = [" ".join(str(c).split())[:CUIDADO_MAX] for c in brutos or [] if str(c).strip()][:MAX_CUIDADOS]
-    except pesquisa.ErroPesquisa as e:
-        log(f"[remedios] {r['nome']}: pesquisa dos cuidados falhou ({e})")
+def _gravar_pesquisa(rid: str, estado: dict, cuidados: Optional[list] = None) -> dict:
+    """Grava o estado da pesquisa (e os cuidados, se vieram) no lembrete. → o estado."""
     with _trava():
         data = _load()
-        atual = _do_id(data, rid)
-        if atual:
-            atual["cuidados"] = cuidados
-            atual["pesquisa"] = {"status": "pronta" if cuidados else "falhou", "slug": slug}
+        r = _do_id(data, rid)
+        if r:
+            r["pesquisa"] = estado
+            if cuidados is not None:
+                r["cuidados"] = cuidados
             _save(data)
-    return cuidados
+    return estado
+
+
+def _resumir(rid: str, nome: str, slug: str, sintese: str) -> dict:
+    """O relatório da pesquisa vira até MAX_CUIDADOS frases curtas (Ollama, só com o que está no relatório).
+    Relatório vazio, Ollama fora do ar ou nenhum cuidado achado → pesquisa.status = "falhou"."""
+    sintese = sintese or (pesquisa.obter(slug) or {}).get("sintese") or ""
+    cuidados = []
+    if sintese.strip():
+        dados = ollama_generate_json(
+            render_template("remedio_cuidados", {"nome": nome, "sintese": sintese[:SINTESE_MAX]}),
+            schema=SCHEMA_CUIDADOS, timeout=180) or {}
+        brutos = dados.get("cuidados") if isinstance(dados, dict) else None
+        cuidados = [" ".join(str(c).split())[:CUIDADO_MAX] for c in brutos or [] if str(c).strip()][:MAX_CUIDADOS]
+    return _gravar_pesquisa(rid, {"status": "pronta" if cuidados else "falhou", "slug": slug}, cuidados)
+
+
+def iniciar_pesquisa(rid: str, agora: Optional[datetime] = None) -> dict:
+    """Pede ao researcher a pesquisa PROFUNDA do remédio: ele lê as páginas (bulas, sites de saúde), o que o modo
+    rápido não faz. Roda em segundo plano: uns 5 min com a placa livre, mais se Pedro estiver usando o Alfred
+    (a porta da GPU dá a vez a ele). → o estado gravado em `pesquisa`:
+      andamento  o researcher aceitou (job_id); passar() acompanha e, no fim, resume e avisa Pedro
+      pronta     já havia pesquisa profunda recente deste remédio: os cuidados saem agora
+      falhou     researcher fora do ar"""
+    r = obter(rid)
+    if not r:
+        return {}
+    tema = TEMA.format(nome=r["nome"])
+    try:
+        resp = pesquisa.pesquisar(tema, profundo=True)
+        if resp.get("cache_type") == "semantic":
+            # o researcher devolveu a pesquisa de um tema "parecido": a de OUTRO remédio (o tema só muda no nome).
+            # Cuidados de outro remédio não servem: pesquisa este de novo, sem cache.
+            resp = pesquisa.pesquisar(tema, profundo=True, refresh=True)
+    except pesquisa.ErroPesquisa as e:
+        log(f"[remedios] {r['nome']}: a pesquisa dos cuidados não começou ({e})")
+        return _gravar_pesquisa(rid, {"status": "falhou"})
+    if resp.get("job_id"):
+        return _gravar_pesquisa(rid, {"status": "andamento", "job_id": resp["job_id"],
+                                      "desde": _iso(agora or core._now())})
+    return _resumir(rid, r["nome"], pesquisa.slug_resultado(resp), resp.get("synthesis") or "")
+
+
+def _aviso_cuidados(r: dict) -> str:
+    if not r.get("cuidados"):
+        return f"💊 Não consegui pesquisar os cuidados do *{r['nome']}*. O lembrete vale do mesmo jeito: confira a bula."
+    return (f"💊 Cuidados do *{r['nome']}* (resumo da pesquisa do Alfred; confirme na bula):\n"
+            + "\n".join(f"• {c}" for c in r["cuidados"]))
+
+
+def _acompanhar_pesquisas(agora: datetime) -> list[tuple[str, str]]:
+    """As pesquisas em andamento: a que terminou é resumida e os cuidados vão ao WhatsApp de Pedro; a que falhou,
+    sumiu ou passou de PESQUISA_MAX_MIN vira "falhou" (e Pedro é avisado). Researcher fora do ar: espera a próxima
+    volta. → [("cuidados", id)] das que fecharam nesta volta."""
+    feitos = []
+    for r in listar():
+        p = r.get("pesquisa") or {}
+        if p.get("status") != "andamento":
+            continue
+        velha = agora - (core._parse_dt(p.get("desde")) or agora) > timedelta(minutes=PESQUISA_MAX_MIN)
+        try:
+            job = pesquisa.andamento(p.get("job_id") or "")
+        except KeyError:
+            job = {"status": "error", "erro": "o researcher não conhece mais essa pesquisa"}
+        except pesquisa.ErroPesquisa as e:
+            job = {"status": "error" if velha else "running", "erro": str(e)}
+        if job.get("status") == "done":
+            res = job.get("resultado") or {}
+            _resumir(r["id"], r["nome"], res.get("slug") or "", res.get("synthesis") or "")
+        elif job.get("status") != "running" or velha:
+            log(f"[remedios] {r['nome']}: pesquisa dos cuidados falhou ({job.get('erro') or job.get('status')})")
+            _gravar_pesquisa(r["id"], {"status": "falhou"}, [])
+        else:
+            continue
+        atual = obter(r["id"])
+        if atual:                              # o lembrete pode ter sido parado no meio da pesquisa
+            if not _enviar_a_pedro(_aviso_cuidados(atual)):
+                log(f"[remedios] {r['nome']}: cuidados prontos, mas não consegui mandar no WhatsApp")
+            feitos.append(("cuidados", r["id"]))
+    return feitos
 
 
 # ══════════════════════════════════════════════════════════════
@@ -234,24 +311,35 @@ def _enviar_a_pedro(texto: str) -> bool:
 
 
 def passar(agora: Optional[datetime] = None) -> list[tuple[str, str]]:
-    """Uma volta do laço: abre as doses vencidas e pergunta no WhatsApp pelas que esperam há ESPERA_MIN.
-    → [("dose" | "pergunta", id do remédio)] do que aconteceu nesta volta."""
+    """Uma volta do laço: abre as doses vencidas, encerra o lembrete cujo tratamento acabou (`ate`), pergunta no
+    WhatsApp pelas doses que esperam há ESPERA_MIN e fecha as pesquisas de cuidados que terminaram.
+    → [("dose" | "fim" | "pergunta" | "cuidados", id do remédio)] desta volta."""
     agora = agora or core._now()
-    feitos, abertas, perguntar = [], [], []
+    feitos, abertas, acabados, perguntar = [], [], [], []
     with _trava():
         data = _load()
-        for r in data["remedios"]:
+        for r in list(data["remedios"]):
             dose = r.get("dose")
             if not dose:
-                if (core._parse_dt(r.get("proxima_em")) or agora) <= agora:
-                    r["dose"] = {"devida_em": r.get("proxima_em") or _iso(agora), "avisada_em": _iso(agora)}
-                    r.pop("hora_perguntada_em", None)
-                    abertas.append(r)
+                devida = core._parse_dt(r.get("proxima_em")) or agora
+                if devida > agora:
+                    continue
+                if r.get("ate") and devida >= core._parse_dt(r["ate"]):   # passou a duração do tratamento
+                    data["remedios"].remove(r)
+                    acabados.append(r)
+                    continue
+                r["dose"] = {"devida_em": _iso(devida), "avisada_em": _iso(agora)}
+                r.pop("hora_perguntada_em", None)
+                abertas.append(r)
             elif not dose.get("perguntada_em") and \
                     agora - core._parse_dt(dose["avisada_em"]) >= timedelta(minutes=ESPERA_MIN):
                 perguntar.append(r)
-        if abertas:
+        if abertas or acabados:
             _save(data)
+    for r in acabados:
+        log(f"[remedios] {r['nome']}: fim do tratamento, lembrete encerrado")
+        lib_atividade.evento("remedio", f"Fim do tratamento: {r['nome']}")
+        feitos.append(("fim", r["id"]))
     for r in abertas:
         lib_atividade.evento("remedio", f"Tomar {r['nome']}")
         feitos.append(("dose", r["id"]))
@@ -271,7 +359,7 @@ def passar(agora: Optional[datetime] = None) -> list[tuple[str, str]]:
                 dose["sem_whatsapp"] = True
                 log(f"[remedios] {r['nome']}: não consegui perguntar no WhatsApp (sessão assistente ou envio)")
             _save(data)
-    return feitos
+    return feitos + _acompanhar_pesquisas(agora)
 
 
 def _fechar(r: dict, quando: datetime, via: str) -> None:
@@ -308,7 +396,8 @@ def anotado(rs: list[dict]) -> str:
 
 def hora_tomada(texto: str, agora: Optional[datetime] = None) -> Optional[datetime]:
     """'agora' · 'há 20 min' · 'faz meia hora' · '14:10' · '14h10' · 'às 13h' · 'umas 2' → quando Pedro tomou.
-    A hora dita é sempre a ocorrência mais recente que já passou ('umas 2' às 14:30 = 14:00; '23h' = ontem).
+    A hora dita é sempre a ocorrência mais recente que já passou ('23h' às 14:30 = ontem). Hora sem minutos de 1
+    a 11 pode ser da tarde ('umas 2' às 14:30 = 14:00); com minutos vale ao pé da letra ('01:30' = 01:30).
     None se o texto inteiro não for uma hora."""
     agora = agora or core._now()
     t = _chave(texto).strip(" .!?,")
@@ -321,7 +410,8 @@ def hora_tomada(texto: str, agora: Optional[datetime] = None) -> Optional[dateti
     if not m or int(m.group(1)) > 23 or int(m.group(2) or 0) > 59:
         return None
     hh, base = int(m.group(1)), agora.replace(hour=0, minute=int(m.group(2) or 0), second=0, microsecond=0)
-    horas = [hh, hh + 12] if 1 <= hh < 12 else [hh]          # "umas 2" pode ser 2 da tarde
+    solta = not m.group(2) and not m.group(1).startswith("0")   # "umas 2" pode ser 2 da tarde; "02:30" e "2:30", não
+    horas = [hh, hh + 12] if solta and 1 <= hh < 12 else [hh]
     passadas = [c for h in horas for c in (base.replace(hour=h), base.replace(hour=h) - timedelta(days=1))
                 if c <= agora + timedelta(minutes=5)]
     return min(max(passadas), agora)

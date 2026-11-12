@@ -955,11 +955,13 @@ Você diz o nome do remédio e de quantas em quantas horas, na conversa (Painel,
 WhatsApp). O Alfred cria o lembrete, pesquisa as contraindicações e o que não fazer, e passa a cobrar cada dose.
 
 ```
-criar_lembrete_remedio(nome, intervalo_horas, primeira_dose?)      ← ferramenta da conversa
+criar_lembrete_remedio(nome, intervalo_horas, ultima_dose?, primeira_dose?, dias?)      ← ferramenta da conversa
     ↓ agenda/remedios.yml (o mesmo nome não duplica: só troca o intervalo)
-    ↓ researcher, modo rápido (o tema fica em VAULT_ALFRED/research/) → gemma4 (remedio_cuidados.md)
-      até 5 frases curtas: "Não beber álcool", "Contraindicado para alérgicos a penicilina"
+    ↓ researcher, modo profundo: lê as páginas (bulas, sites de saúde), em segundo plano; a ferramenta responde na hora
 thread da API, a cada 60 s (remedios.passar)
+    pesquisa terminou         → gemma4 (remedio_cuidados.md) resume em até 6 frases curtas ("Não beber álcool",
+                                "Contraindicado para alérgicos a penicilina"): vão para o post-it, para a pergunta
+                                da dose e, uma vez, para o seu WhatsApp
     próxima dose venceu       → dose aberta: post-it "Tomar X" no Pestinha, com a hora em que foi criado
     10 min sem o "tomei"      → o número do Alfred pergunta no seu WhatsApp: "Já tomou? sim ou não" (uma vez por dose)
 "tomei"  (botão Tomei do post-it · tomei_remedio na conversa · resposta no WhatsApp)
@@ -971,7 +973,22 @@ thread da API, a cada 60 s (remedios.passar)
 - **Não no WhatsApp:** ele espera, sem perguntar de novo. O seu próximo "sim" fecha a dose e a contagem parte dele.
   O post-it continua na tela até lá.
 - Só há uma dose aberta por remédio: enquanto ela espera, não nasce outro post-it.
-- A primeira dose é na hora em que o lembrete é criado, salvo `primeira_dose` ("22:00", "amanhã 8h").
+- A primeira dose é na hora em que o lembrete é criado, salvo `primeira_dose` ("22:00", "amanhã 8h"). Se você já
+  tomou uma ("tomei o primeiro às 11:55"), o modelo passa essa hora em `ultima_dose` e a próxima é ela + o
+  intervalo: a conta é do `remedios.adicionar`, não do modelo (em 11/11 o gemma4 somou 2 h em vez de 12).
+- "Por 5 dias" vira `dias=5`, contados da primeira dose (`ate` no `remedios.yml`). Passado isso o lembrete sai
+  sozinho, com um aviso "Fim do tratamento" no pet. Sem `dias`, vale até você mandar parar.
+- **Pesquisa dos cuidados:** é a pesquisa profunda do researcher (`pesquisa.pesquisar(tema, profundo=True)`), a
+  mesma da aba Pesquisar: SearXNG local, leitura das páginas e relatório com citações em `VAULT_ALFRED/research/`,
+  tudo com o Ollama desta máquina. O modo rápido não serve: só vê os trechos da busca, que não trazem as
+  contraindicações (visto em 11/11 com o Celecoxibe). O `remedios.yml` guarda `pesquisa: {status: andamento, job_id}`
+  e o laço da API consulta o job a cada volta; por isso a pesquisa sobrevive a um reinício da API.
+- **Quanto demora:** uns 5 min com a placa livre. Se você falou com o Alfred há menos de 15 min, a porta da GPU
+  (`lib_porta`) segura cada chamada do job por até 300 s, para a conversa não ficar lenta: conte 5 a 20 min.
+  Depois de `PESQUISA_MAX_MIN` (180) sem terminar, ou se o job falhar, o Alfred avisa no WhatsApp que não conseguiu.
+- A pesquisa de um remédio nunca reaproveita a de outro: se o researcher responde pelo cache de tema parecido
+  (`cache_type: semantic`), ela é refeita com `refresh`. A profunda do mesmo remédio, feita há menos de 7 dias, é
+  reaproveitada na hora e os cuidados já saem na resposta da ferramenta.
 - `listar_remedios` mostra os lembretes e os cuidados; `parar_remedio` apaga o lembrete (fim do tratamento).
 - Os cuidados são um resumo de pesquisa na web, feito pelo modelo local: confirme na bula. Com o researcher ou o
   Ollama fora do ar o lembrete vale do mesmo jeito, sem os cuidados.

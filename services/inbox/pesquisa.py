@@ -82,11 +82,12 @@ def _pedir(metodo: str, caminho: str, timeout: float, **kw) -> httpx.Response:
                            "Confira systemctl --user status alfred-researcher.")
 
 
-def pesquisar(tema: str, profundo: bool) -> dict:
+def pesquisar(tema: str, profundo: bool, refresh: bool = False) -> dict:
     """POST /research. → a resposta do researcher: rápido 200 (`slug`); profundo 202 (`job_id`) ou 200 de cache.
-    Acerto de cache semântico traz `matched_slug`: a síntese mostrada é a dele (ver slug_resultado)."""
+    Acerto de cache semântico traz `matched_slug`: a síntese mostrada é a dele (ver slug_resultado).
+    `refresh` pula os dois caches (o exato e o de tema parecido) e pesquisa de novo."""
     r = _pedir("POST", "/research", TIMEOUT_CURTO if profundo else TIMEOUT_RAPIDO,
-               json={"topic": tema, "profundo": profundo})
+               json={"topic": tema, "profundo": profundo, **({"refresh": True} if refresh else {})})
     if r.status_code in (200, 202):
         return r.json()
     if r.status_code == 401:
