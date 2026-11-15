@@ -1282,6 +1282,11 @@ O que custa e o que continua lento:
   (`redigir.py`): quando uma roda entre dois turnos, o turno seguinte custa 19 a 27 s. `OLLAMA_NUM_CTX=16384` no
   `.env` cobre todas; é a pendência de 31/10 (abaixo), decisão de Pedro.
 - Depois de 5 minutos sem uso o Ollama descarrega o modelo: o turno seguinte paga a carga e os ~8 s.
+- **Descarga** (`lib_porta`, 15/11/2026): por padrão o Alfred não espera esses 5 minutos. `OLLAMA_DESCARREGAR_S`
+  segundos (padrão 10) depois da última chamada, sem ninguém na placa, todos os modelos saem da memória do Ollama; o
+  processo que termina antes disso descarrega na saída. Com a descarga ligada o aquecimento não roda, e todo turno
+  depois de uma pausa paga a carga do modelo e a avaliação do prompt inteiro. `OLLAMA_DESCARREGAR_S=-1` volta ao
+  comportamento antigo (modelo na memória e aquecimento).
 - Na janela de escrita o documento vai na mensagem do turno e é avaliado a cada pedido; o resto do prompt é
   reaproveitado.
 - Os pontos guardados são detalhe do Ollama 0.34.4. Se uma versão nova mudar isso, o `prompt` do log do turno sobe.

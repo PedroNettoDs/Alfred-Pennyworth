@@ -19,6 +19,9 @@ Travas fora do Laya (erro dele não pode parar o Alfred):
   - placa livre e Pedro longe → entra sem perguntar
   - ninguém espera mais que TETO_S
 
+Descarga: OLLAMA_DESCARREGAR_S segundos (padrão 10) depois da última chamada sem ninguém na placa, os modelos
+saem da memória do Ollama (keep_alive 0). O Ollama só fica com modelo carregado enquanto há trabalho.
+
 logs/porta/
   rodando/<pid>-<id>.json        uma chamada ao Ollama em andamento; só o processo dono grava e apaga
   dono                           a data do arquivo é a última vez que Pedro falou com o Alfred
@@ -31,10 +34,12 @@ Os imports do projeto ficam dentro das funções: o gerador e o avaliador do tre
 arquivo sozinho, no venv do Laya.
 """
 
+import atexit
 import contextvars
 import json
 import os
 import secrets
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -233,6 +238,65 @@ def passagem(modelo: str, num_ctx: Optional[int] = None):
                 _dono_falou()
         except OSError:
             pass
+        _agendar_descarga()
+
+
+# ── descarga: o Ollama só fica com modelo na memória enquanto há trabalho ─────
+
+_descarga = None            # threading.Timer da descarga marcada por este processo
+_descarga_lock = threading.Lock()
+
+
+def descarga_s() -> Optional[float]:
+    """Segundos sem chamada ao Ollama até os modelos saírem da memória (OLLAMA_DESCARREGAR_S, padrão 10).
+    None = desligado (valor negativo ou inválido): o modelo fica pelo keep_alive do próprio Ollama."""
+    try:
+        s = float(os.getenv("OLLAMA_DESCARREGAR_S", "").strip() or 10)
+    except ValueError:
+        return None
+    return s if s >= 0 else None
+
+
+def descarregar() -> list[str]:
+    """Tira da memória do Ollama todos os modelos carregados, se nenhuma chamada está em andamento
+    (em qualquer processo). → nomes descarregados. Nunca levanta exceção."""
+    try:
+        import httpx
+        from _shared.lib_alfred import DEFAULT_OLLAMA_URL, log
+        if _rodando() != PLACA_LIVRE:
+            return []
+        url = os.getenv("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_URL
+        nomes = [m["name"] for m in carregados() or [] if m.get("name")]
+        for nome in nomes:
+            httpx.post(f"{url}/api/generate", json={"model": nome, "keep_alive": 0}, timeout=20)
+        if nomes:
+            log(f"[porta] Ollama descarregado: {', '.join(nomes)}")
+        return nomes
+    except Exception:
+        return []
+
+
+def _agendar_descarga() -> None:
+    """Marca (ou remarca) a descarga para daqui a descarga_s(): a espera cobre o intervalo entre as chamadas de
+    uma mesma tarefa. Processo que termina antes disso descarrega na saída."""
+    global _descarga
+    espera = descarga_s()
+    if espera is None:
+        return
+    with _descarga_lock:
+        if _descarga is None:
+            atexit.register(_descarga_na_saida)
+        else:
+            _descarga.cancel()
+        _descarga = threading.Timer(espera, descarregar)
+        _descarga.daemon = True
+        _descarga.start()
+
+
+def _descarga_na_saida() -> None:
+    if _descarga is not None and _descarga.is_alive():
+        _descarga.cancel()
+        descarregar()
 
 
 # ── vagas: no máximo N de uma coisa ao mesmo tempo ────────────

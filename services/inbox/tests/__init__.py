@@ -14,3 +14,7 @@ os.environ.setdefault("LAYA_URL", "http://127.0.0.1:9")
 # carrega o .env sem sobrescrever o que já está no ambiente): senão abrir /painel/aplicativo num teste poderia
 # gerar um token em logs/app_token.json e desconectar o aplicativo de Pedro. tests.test_painel_app liga por conta.
 os.environ.setdefault("PAINEL_HOSTS_APP", "")
+
+# A descarga do Ollama (lib_porta) fica desligada nos testes: senão um teste que passa pela porta tiraria da
+# memória o modelo de verdade. tests.test_porta liga por conta.
+os.environ.setdefault("OLLAMA_DESCARREGAR_S", "-1")

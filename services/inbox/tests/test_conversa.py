@@ -738,6 +738,15 @@ class TestResumo(Base):
         self.assertEqual((p["model"], p["tools"], p["think"], p["options"]),
                          ("modelo-teste", [{"type": "function"}], False, {"num_ctx": 16384, "num_predict": 1}))
 
+    def test_com_a_descarga_ligada_nao_aquece(self):
+        """O modelo sai da memória logo depois do turno (lib_porta): aquecer o próximo prompt seria carga à toa."""
+        self.ollama.roteiro = [texto("Bom dia, senhor.")]
+        with mock.patch.dict(os.environ, {"OLLAMA_DESCARREGAR_S": "10"}), \
+                mock.patch.object(conversa.lib_porta, "_agendar_descarga"):
+            self.turno("bom dia")
+            self.esperar_livre()
+        self.aquecer.assert_not_called()
+
     def test_aquecimento_que_falha_nao_derruba(self):
         self.aquecer.side_effect = RuntimeError("Ollama fora do ar")
         self.ollama.roteiro = [texto("Pois não.")]

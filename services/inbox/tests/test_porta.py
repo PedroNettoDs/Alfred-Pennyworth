@@ -179,5 +179,48 @@ class TestSinais(unittest.TestCase):
             self.assertEqual(cliente.post.call_args.kwargs["json"]["model"], "porta")
 
 
+class TestDescarga(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"ALFRED_PORTA_DIR": self.tmp.name, "OLLAMA_DESCARREGAR_S": "0.05"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(lambda: lib_porta._descarga and lib_porta._descarga.cancel())
+        ps = mock.patch.object(lib_porta, "carregados", return_value=[{"name": GEMMA}, {"name": "bge-m3:latest"}])
+        ps.start()
+        self.addCleanup(ps.stop)
+
+    def test_descarrega_todos_os_modelos_com_a_placa_livre(self):
+        with mock.patch("httpx.post") as post:
+            self.assertEqual(lib_porta.descarregar(), [GEMMA, "bge-m3:latest"])
+        self.assertEqual([c.kwargs["json"] for c in post.call_args_list],
+                         [{"model": GEMMA, "keep_alive": 0}, {"model": "bge-m3:latest", "keep_alive": 0}])
+
+    def test_nao_descarrega_com_chamada_em_andamento(self):
+        rodando = Path(self.tmp.name) / "rodando"
+        rodando.mkdir(parents=True)
+        (rodando / f"{os.getpid()}-abcd.json").write_text('{"origem": "x", "inicio": 1}', encoding="utf-8")
+        with mock.patch("httpx.post") as post:
+            self.assertEqual(lib_porta.descarregar(), [])
+        post.assert_not_called()
+
+    def test_passagem_marca_a_descarga_para_depois_da_ultima_chamada(self):
+        with mock.patch.object(lib_porta, "_esperar"), mock.patch.object(lib_porta, "descarregar") as descarregar:
+            with lib_porta.passagem(GEMMA):
+                pass
+            with lib_porta.passagem(GEMMA):      # a segunda chamada remarca: uma descarga só
+                descarregar.assert_not_called()
+            time.sleep(0.3)
+        descarregar.assert_called_once_with()
+
+    def test_desligada_nao_marca_nada(self):
+        lib_porta._descarga = None
+        with mock.patch.dict(os.environ, {"OLLAMA_DESCARREGAR_S": "-1"}), mock.patch.object(lib_porta, "_esperar"):
+            with lib_porta.passagem(GEMMA):
+                pass
+        self.assertIsNone(lib_porta._descarga)
+
+
 if __name__ == "__main__":
     unittest.main()

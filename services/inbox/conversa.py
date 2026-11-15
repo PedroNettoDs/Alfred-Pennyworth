@@ -1106,7 +1106,10 @@ def _turno(turno: Turno) -> None:
         log(f"[conversa] resumo falhou ({_curto(e)})")
     try:   # depois do resumo: se ele cortou o histórico, o prompt que vem é o novo
         # resumo e aquecimento no modelo padrão, não no do plano: o próximo turno costuma ser o completo
-        _aquecer(turno.conversa_id, cfg["modelo_ferramentas"] or cfg["modelo"], ferramentas, cfg["num_ctx"], think)
+        # com a descarga ligada (lib_porta.descarga_s) o modelo sai da memória em seguida: aquecer seria carga à toa
+        if lib_porta.descarga_s() is None:
+            _aquecer(turno.conversa_id, cfg["modelo_ferramentas"] or cfg["modelo"], ferramentas, cfg["num_ctx"],
+                     think)
     except Exception as e:
         log(f"[conversa] aquecimento do próximo prompt falhou ({_curto(e)})")
 
