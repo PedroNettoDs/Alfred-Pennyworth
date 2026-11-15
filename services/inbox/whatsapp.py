@@ -2231,7 +2231,10 @@ def _pedido_de_pedro(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: b
     resposta = resposta or "✖ Deu erro depois de eu começar a executar. Confira no Painel antes de repetir."
     res["resposta"] = resposta
     res["notificacao"] = {"numero": destino, "texto": resposta, "pendencia_id": None, "audio_url": None}
-    res["envio_confirmacao"] = dizer(resposta)
+    # cada parágrafo é um assunto (aviso, o que vai fazer, o resultado): uma mensagem para cada um
+    for parte in re.split(r"\n\s*\n", resposta):
+        if parte.strip():
+            res["envio_confirmacao"] = dizer(parte.strip())
     return res
 
 

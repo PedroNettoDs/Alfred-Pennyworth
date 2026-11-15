@@ -144,6 +144,16 @@ class TestPedroFalaComOAlfred(BaseAssistente):
         self.assertEqual(agenda.listar(), [])
         self.llm.assert_not_called()
 
+    def test_cada_paragrafo_da_resposta_vira_uma_mensagem(self):
+        self.motor.side_effect = lambda *a, **k: turno_falso(
+            {"tipo": "ferramenta", "nome": "executar_script", "estado": "ok"},
+            {"tipo": "fim", "parado": False,
+             "texto": "Há 33 tarefas vencidas.\n\nVou iniciar o script.\n \nO vídeo já consta:\n- Mr. Robot.mp4\n"})
+        d = self.receber("baixe o vídeo", numero=PEDRO, nome="Pedro")
+        self.assertEqual([e["conteudo"] for e in self.para(PEDRO)],
+                         ["Há 33 tarefas vencidas.", "Vou iniciar o script.", "O vídeo já consta:\n- Mr. Robot.mp4"])
+        self.assertIn("Vou iniciar o script.", d["resposta"])   # a resposta registrada continua inteira
+
     def test_agenda_roda_sem_perguntar_e_comando_espera_o_sim(self):
         self.motor.side_effect = lambda *a, **k: turno_falso(
             {"tipo": "aprovar", "id": "ap1", "nome": "criar_compromisso", "argumentos": {"texto": "dentista sexta 9h"}}, FIM)
