@@ -20,8 +20,12 @@ Travas fora do Laya (erro dele não pode parar o Alfred):
   - ninguém espera mais que TETO_S
 
 logs/porta/
-  rodando/<pid>-<id>.json   uma chamada ao Ollama em andamento; só o processo dono grava e apaga
-  dono                      a data do arquivo é a última vez que Pedro falou com o Alfred
+  rodando/<pid>-<id>.json        uma chamada ao Ollama em andamento; só o processo dono grava e apaga
+  dono                           a data do arquivo é a última vez que Pedro falou com o Alfred
+  vagas/<nome>/<pid>-<id>.json   quem está dentro ou na fila de uma vaga(nome)
+
+Sinais e semáforos para o orquestrador (lib_orquestrador), sem o Laya: carregados() e vram_livre_mb()
+dizem o que está na placa; vaga(nome, limite) deixa só `limite` blocos de um tipo rodarem juntos.
 
 Os imports do projeto ficam dentro das funções: o gerador e o avaliador do treino carregam este
 arquivo sozinho, no venv do Laya.
@@ -143,17 +147,35 @@ def _dono() -> str:
     return DONO_SEGUNDOS if ha < SEGUNDOS_S else DONO_MINUTOS if ha < MINUTOS_S else DONO_LONGE
 
 
-def _modelo_carregado(modelo: str, num_ctx: Optional[int]) -> bool:
-    """O Ollama já tem `modelo` na memória com este num_ctx? Sem resposta do /api/ps: True (não segura por isso)."""
+def carregados() -> Optional[list[dict]]:
+    """Modelos na memória do Ollama (/api/ps): [{"name", "size_vram", "context_length", ...}]. None = sem resposta."""
     import httpx
     from _shared.lib_alfred import DEFAULT_OLLAMA_URL
     try:
         url = os.getenv("OLLAMA_BASE_URL", "").strip() or DEFAULT_OLLAMA_URL
-        carregados = httpx.get(f"{url}/api/ps", timeout=2).json().get("models") or []
+        return httpx.get(f"{url}/api/ps", timeout=2).json().get("models") or []
     except Exception:
+        return None
+
+
+def _modelo_carregado(modelo: str, num_ctx: Optional[int]) -> bool:
+    """O Ollama já tem `modelo` na memória com este num_ctx? Sem resposta do /api/ps: True (não segura por isso)."""
+    lista = carregados()
+    if lista is None:
         return True
     return any(m.get("name") in (modelo, f"{modelo}:latest")
-               and (not num_ctx or m.get("context_length") == num_ctx) for m in carregados)
+               and (not num_ctx or m.get("context_length") == num_ctx) for m in lista)
+
+
+def vram_livre_mb() -> Optional[int]:
+    """VRAM livre da primeira placa, em MiB (nvidia-smi). None = sem placa ou sem resposta."""
+    import subprocess
+    try:
+        saida = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                               capture_output=True, text=True, timeout=3, check=True).stdout
+        return int(saida.split()[0])
+    except Exception:
+        return None
 
 
 # ── a decisão ─────────────────────────────────────────────────
@@ -209,5 +231,55 @@ def passagem(modelo: str, num_ctx: Optional[int] = None):
                 arq.unlink(missing_ok=True)
             if dono:
                 _dono_falou()
+        except OSError:
+            pass
+
+
+# ── vagas: no máximo N de uma coisa ao mesmo tempo ────────────
+
+def _posicao(arq: Path) -> int:
+    """Quantos pedidos vivos chegaram antes de `arq` na mesma vaga. Apaga o que sobrou de processo morto."""
+    fila = []
+    for outro in arq.parent.glob("*.json"):
+        try:
+            if not _vivo(int(outro.name.split("-")[0])):
+                outro.unlink(missing_ok=True)
+                continue
+            fila.append((json.loads(outro.read_text(encoding="utf-8"))["inicio"], outro.name))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    fila.sort()
+    nomes = [nome for _, nome in fila]
+    return nomes.index(arq.name) if arq.name in nomes else 0
+
+
+@contextmanager
+def vaga(nome: str, limite: int = 1, teto_s: float = TETO_S):
+    """
+    Semáforo de contagem entre processos: no máximo `limite` blocos `nome` rodam ao mesmo tempo (ex.:
+    vaga("script"), um script por vez), por ordem de chegada. Não pergunta ao Laya. Mesmas travas da
+    passagem: ninguém espera mais que `teto_s`, e erro aqui não impede o bloco de rodar.
+    """
+    arq = None
+    try:
+        arq = pasta() / "vagas" / nome / f"{os.getpid()}-{secrets.token_hex(4)}.json"
+        arq.parent.mkdir(parents=True, exist_ok=True)
+        arq.write_text(json.dumps({"origem": _ORIGEM.get()[0], "inicio": time.time()}), encoding="utf-8")
+        inicio = time.monotonic()
+        while _posicao(arq) >= limite:
+            if time.monotonic() - inicio >= teto_s:
+                from _shared.lib_alfred import log
+                log(f"[porta] vaga {nome}: passou do teto de {teto_s:.0f} s, entra assim mesmo")
+                break
+            time.sleep(PASSO_S)
+    except Exception as e:
+        from _shared.lib_alfred import log
+        log(f"[porta] vaga {nome} não funcionou, o bloco segue: {e}")
+    try:
+        yield
+    finally:
+        try:
+            if arq:
+                arq.unlink(missing_ok=True)
         except OSError:
             pass

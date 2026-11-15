@@ -307,6 +307,25 @@ conversa:
                                 # a resposta final (sem tools) — na 3060 os dois não cabem juntos: troca a cada turno
   num_ctx: 16384                # o gemma4:12b ocupa ~8,4 GB de VRAM com 4k ou 32k: o contexto não pesa aqui
 
+# ── Orquestrador — _shared/lib_orquestrador.py ────────────────
+# Classifica o pedido por regras (texto / ferramenta / codigo), escolhe o modelo de cada tipo olhando o que já
+# está na placa e a VRAM livre, e avalia o risco de comandos e scripts sugeridos por um modelo.
+# Só entram modelos instalados (`ollama list`); nome que o Ollama não tem é pulado.
+orquestrador:
+  ativo: true                   # false = tudo no modelo da conversa, como antes
+  modelos:                      # por tipo, em ordem de preferência; [] = o modelo da conversa
+    texto: ["gemma4:e4b", "gemma4:12b"]   # o já carregado vence; nada carregado → o primeiro que couber na VRAM livre
+    ferramenta: []              # [] = conversa.modelo_ferramentas, ou conversa.modelo
+    codigo: ["gemma4:12b"]      # qwen3.6:35b-a3b (22 GB) não cabe na 3060: só se também entrar em pode_trocar
+  pode_trocar: []               # tipos que podem tirar o modelo da conversa da placa (~10 s na ida e na volta)
+  folga_vram_mb: 600            # sobra exigida além do tamanho do modelo para carregar sem tirar ninguém
+  vram_mb: {}                   # VRAM medida por modelo, ex.: {"gemma4:12b": 8400}; sem isso: arquivo × 1,15
+  desempate_laya: false         # pedido sem sinal nas regras: true pergunta ao Laya (zero-shot, ainda não medido);
+                                # false = vai como "ferramenta", o turno completo
+  risco:
+    segunda_opiniao: true       # sem regra que decida, um LLM local opina; sem resposta → pergunta a Pedro
+    modelo: ""                  # vazio = o modelo de `codigo` (o que já estiver carregado)
+
 # ── Defaults globais ──────────────────────────────────────────
 defaults:
   vault_alfred_subfolders:
