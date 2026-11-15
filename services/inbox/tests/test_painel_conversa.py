@@ -93,6 +93,9 @@ class Base(unittest.TestCase):
                   mock.patch.object(conversa, "_stream_ollama", ollama),
                   mock.patch.object(conversa, "_aquecer", lambda *a, **k: None),   # chamada extra depois do turno
                   mock.patch.object(conversa, "_cfg", lambda: {"modelo": "m", "modelo_ferramentas": "", "num_ctx": 16384}),
+                  mock.patch.object(conversa.lib_orquestrador, "planejar",   # orquestrador neutro: o turno de sempre
+                                    lambda pedido, padrao="", padrao_ferramentas="": conversa.lib_orquestrador.Plano(
+                                        "ferramenta", padrao, padrao_ferramentas or padrao, "teste")),
                   mock.patch.object(conversa.lib_memoria, "contexto", lambda *a, **k: ""),
                   mock.patch.object(conversa.lib_rag, "contexto", lambda *a, **k: ""),
                   mock.patch.object(conversa, "ollama_generate", lambda *a, **k: ""),
@@ -410,6 +413,43 @@ class TestLista(Base):
         self.assertIn("Nenhuma conversa com essas palavras.", self.cli.get("/painel/conversa", params={"q": "zzzz"}).text)
         html = self.cli.get("/painel/conversa").text
         self.assertLess(html.index(b["url"]), html.index(a["url"]))   # sem busca: a mais recente primeiro
+
+    def test_lista_e_historico_em_json(self):
+        """O que o aplicativo do celular lê: a lista (com a busca) e o histórico com o markdown cru."""
+        self.assertEqual(self.cli.get("/painel/api/conversas").status_code, 401)
+        self.assertEqual(self.cli.get("/painel/api/conversas/qualquer").status_code, 401)
+        self.entrar()
+        def soma(a: int, b: int) -> str:
+            return str(a + b)
+        self.registrar("_t_soma_json", soma)
+        self.roteiro = [chamada("_t_soma_json", {"a": 2, "b": 3}), texto("O total é **5**."), texto("Bata as claras.")]
+        a = self.enviar("Quanto é 2 + 3?")
+        self.eventos(a["turno"])
+        b = self.enviar("Receita de bolo de laranja")
+        self.eventos(b["turno"])
+        lista = self.cli.get("/painel/api/conversas").json()["conversas"]
+        self.assertEqual([c["id"] for c in lista], [b["conversa"], a["conversa"]])      # a mais recente primeiro
+        self.assertEqual(set(lista[0]), {"id", "titulo", "url", "quando", "relativo", "iso", "trecho"})
+        achadas = self.cli.get("/painel/api/conversas", params={"q": "claras"}).json()["conversas"]
+        self.assertEqual([c["id"] for c in achadas], [b["conversa"]])
+        self.assertTrue(achadas[0]["trecho"])
+        d = self.cli.get(f"/painel/api/conversas/{a['conversa']}").json()
+        self.assertEqual((d["id"], d["turno_ativo"]), (a["conversa"], ""))
+        (t,) = d["turnos"]
+        self.assertEqual((t["pergunta"], t["resposta"]), ("Quanto é 2 + 3?", "O total é **5**."))   # sem HTML
+        (chip,) = t["ferramentas"]
+        self.assertEqual((chip["nome"], chip["resultado"], chip["estado"]), ("_t_soma_json", "5", "ok"))
+        self.assertIn("<strong>5</strong>", self.cli.get(a["url"]).text)                 # a tela continua em HTML
+        self.assertEqual(self.cli.get("/painel/api/conversas/nao-existe").status_code, 404)
+
+    def test_historico_em_json_mostra_o_turno_em_andamento(self):
+        self.entrar()
+        self.roteiro = [lento()]
+        d = self.enviar("devagar")
+        j = self.cli.get(f"/painel/api/conversas/{d['conversa']}").json()
+        self.assertEqual(j["turno_ativo"], d["turno"])
+        self.post(f"/painel/api/turnos/{d['turno']}/parar")
+        self.eventos(d["turno"])
 
     def test_apagar(self):
         self.entrar()

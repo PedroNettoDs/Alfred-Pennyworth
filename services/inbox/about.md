@@ -29,6 +29,7 @@ Lê os e-mails que o Thunderbird já baixou (cópias offline, sem senha e sem re
 ./run.sh serve           # API HTTP (FastAPI :7073) para o N8N e para o webhook da Evolution + Painel em /painel
 ./run.sh conversa "quais pendências tenho?"   # conversa com o Alfred no terminal (ferramentas, aprovação) — ver Conversa; no navegador, a aba Conversa do Painel
 ./run.sh conversa-comprimir                   # conversas paradas há um dia viram resumo no cofre e fatos na memória (timer às 04:00)
+./run.sh pensamentos [--turno ID]             # banco de pensamentos: pedido, raciocínio (think), ferramentas, riscos, aprovações e desfecho de cada turno
 ./run.sh promessas                     # o que você disse que ia fazer (abertas e atrasadas) — ver Promessas
 ./run.sh fila                          # o que o Alfred faz agora e a fila (adicionar TIPO [--frente] | frente ID | cancelar ID) — ver PESTINHA.md
 ./run.sh integracoes                   # Pestinha, o pet de tela: estado | instalar | atualizar | abrir | fechar | login-ligar | login-desligar — ver PESTINHA.md
@@ -225,7 +226,9 @@ com o Alfred, sobre o motor `conversa.py` — ver [Conversa](#conversa-aba-do-pa
   invalida todas. **Sair** apaga o cookie e revoga a sessão; a lista de revogadas fica em memória até a API reiniciar.
 - **Só esta máquina:** toda rota `/painel/*` (login e estáticos inclusive) exige cliente 127.0.0.1 ou ::1 **e** header
   Host 127.0.0.1, localhost ou [::1] (anti DNS-rebinding). O resto recebe 403 "Painel disponível apenas em 127.0.0.1." —
-  inclusive containers Docker (172.17.x.x) e a rede local, embora a API escute em 0.0.0.0.
+  inclusive containers Docker (172.17.x.x) e a rede local, embora a API escute em 0.0.0.0. A única exceção é o
+  aplicativo do celular, pela Tailscale e só com `PAINEL_HOSTS_APP` no `.env` — ver
+  [Aplicativo do celular](#aplicativo-do-celular).
 - **CSRF:** todo POST exige a sessão, o header `X-CSRF-Token` (derivado da sessão e posto num `<meta>` da página) e
   Origin (ou, sem ele, Referer) da própria origem. O login checa só a origem.
 - O token nunca vai para URL, HTML, JS ou log. As respostas saem com CSP `default-src 'self'` (nenhum JS ou estilo
@@ -325,6 +328,8 @@ recarrega a cada seta) e Enter ou **Buscar** aplicam.
 | POST `/painel/api/conversas` `{texto}` · `/painel/api/conversas/{id}/mensagens` `{texto}` | cria a conversa com a primeira mensagem / continua uma → `{conversa, titulo, turno, url, nova}`; 400 vazio ou > 20 mil caracteres; 409 com turno em andamento |
 | GET `/painel/api/turnos/{id}/eventos` (SSE) · POST `/painel/api/turnos/{id}/parar` · POST `/painel/api/aprovacoes/{id}/executar\|negar` · POST `/painel/api/conversas/{id}/apagar` | eventos do turno (`texto`, `ferramenta`, `aprovar`, `fim` com `html`, `erro`; turno já acabado e fila vazia → `fim` com `recarregar`), parar, cartão de aprovação (409 se já decidida), apagar (409 com turno em andamento) |
 | GET `/painel/static/painel.css`, `/painel/static/painel.js`, `/painel/static/conversa.css`, `/painel/static/conversa.js` | estáticos (lista fechada; `escrita.*` entram pela janela de escrita) |
+| GET `/painel/aplicativo` · POST `/painel/api/aplicativo/token` | token semanal do aplicativo do celular, com QR code, e o botão que gera outro (só em 127.0.0.1) |
+| GET `/painel/api/avisos[?desde=&limite=]` · `/painel/api/avisos/fluxo[?desde=]` (SSE) · `/painel/api/lembretes` · `/painel/api/conversas[?q=]` · `/painel/api/conversas/{id}` · POST `/painel/api/doses/{id}/tomei` | o JSON que o aplicativo lê — ver [Aplicativo do celular](#aplicativo-do-celular) |
 
 Respostas das ações: 200 `{ok, mensagem, …}`; 400 validação; 401 sessão; 403 CSRF/origem/rede; 404; 409 já resolvida;
 502 falha de envio (`pode_tentar_de_novo: true`).
@@ -425,6 +430,64 @@ com personalidade, bloco "Agora", memória, RAG, as ferramentas e a aprovação 
 - Tudo dentro da CSP atual: `conversa.css` e `conversa.js` são estáticos próprios (registrados em `painel.ESTATICOS`),
   nada inline, `EventSource` nativo. Ainda sem: citações `[n]` clicáveis, seletor de modelo e voz
   ([plano](../../docs/planos/chat-alfred.md)).
+
+### Aplicativo do celular
+
+O aplicativo Android em [`app/`](../../app/README.md) é um **cliente do Painel** que chega pela Tailscale: mostra os
+avisos (com notificação no celular), os lembretes e a conversa em telas próprias, e abre o resto do Painel numa
+WebView. Não há API separada: ele entra em `POST /painel/login`, recebe o cookie de sessão e usa as rotas
+`/painel/api/*` (o CSRF vem no cabeçalho `X-CSRF-Token` de `GET /painel/api/contadores`).
+
+**Ligar.** No `.env`, `PAINEL_HOSTS_APP=` com o IP ou o nome deste computador na Tailscale, sem a porta (ex.:
+`100.95.104.56,batcomputador`), e reinicie a API. Vazio, nada muda: o Painel só responde em 127.0.0.1. O `segno`
+(QR code) entrou no `requirements.txt`: num venv que já existia, `venv/bin/pip install -r requirements.txt` (sem ele a
+tela mostra só o texto).
+
+**Token da semana** (`app_token.py`, estado em `logs/app_token.json`, modo 600). O aplicativo entra com um token de
+7 dias, e não com o `SHELL_EXECUTOR_TOKEN`. O laço de 60 s da API gera o token quando falta ou vence e o manda a
+Pedro pelo número do Alfred (sessão assistente), em duas mensagens: o aviso com o endereço e, sozinho, o token. Envio
+que falha é tentado de novo a cada 10 min. No modo simulado o token não é enviado (o envio simulado grava o texto em
+`logs/whatsapp_enviados.jsonl`). A tela **Ferramentas → Aplicativo do celular** (`/painel/aplicativo`, só em
+127.0.0.1) mostra o endereço, o token, a validade e o QR code com `{"u": endereço, "t": token}`; **Gerar novo token**
+desconecta o aplicativo na hora. O token nunca vai para o log nem para o feed de avisos.
+
+**O que a tailnet alcança** (testado em `tests/test_painel_app.py`):
+
+- Um aparelho da Tailscale (`100.64.0.0/10`) só chega a `/painel/*` e ao áudio das pendências, e sempre sem o
+  cabeçalho `Authorization` (`main._PortaoTailnet`): `/health`, `/pendencias`, `/whatsapp` e as outras rotas da API
+  respondem 403 para ele, com ou sem o token mestre. Isso vale mesmo com o aplicativo desligado.
+- No Painel, ele é aceito só se chamar um dos nomes de `PAINEL_HOSTS_APP` (cabeçalho Host; DNS rebinding e proxy local
+  ficam de fora). O login dele aceita **só** o token semanal; em 127.0.0.1 continua valendo **só** o mestre.
+- A sessão do aplicativo é outra: cookie `a1.…`, assinado também com o token da semana e com validade no máximo até
+  ele vencer. Cookie local (`v1`) não vale na tailnet e vice-versa. Token vencido ou trocado derruba a sessão na hora,
+  inclusive o fluxo de avisos que estiver aberto.
+- A sessão do aplicativo vale o Painel inteiro, inclusive responder a um contato e aprovar ferramenta. O que segura é
+  a Tailscale (só os seus aparelhos), os 7 dias e o botão de gerar outro. Não use `tailscale serve` nem `funnel` para
+  esta porta: o pedido chegaria como 127.0.0.1 e herdaria a confiança local.
+
+**Feed de avisos** (`lib_db.avisos`, tabela `avisos` do `alfred.db`, 30 dias). É o que o aplicativo mostra e
+acompanha. Entram: todo texto enviado ao WhatsApp de Pedro que saiu de fato (`lib_whatsapp.enviar_texto`), a
+notificação simples do desktop (`core._notify`), a pendência nova (`core.avisar_pendencia`, um aviso só para o
+desktop e o WhatsApp, pelo `ref` igual em 120 s), o item confirmado na agenda, a dose de remédio vencida e o fim do
+tratamento, o WhatsApp desconectado (vigia) e os briefings. Cada aviso tem `tipo` (`whatsapp`, `aviso`, `pendencia`,
+`agenda`, `remedio`), `titulo`, `texto` e `link` (caminho no Painel). `aviso=False` em `enviar_texto` e em `_notify`
+deixa de fora o que repetiria um aviso ou é segredo (o token).
+
+| Rota | Devolve |
+|---|---|
+| GET `/painel/api/avisos[?desde=<id>&limite=]` | `{avisos: [{id, quando, tipo, titulo, texto, link, ref}]}` em ordem de chegada |
+| GET `/painel/api/avisos/fluxo[?desde=<id>]` | SSE: um `data: {aviso}` por aviso novo, `: ping` a cada 30 s. Acaba quando a sessão deixa de valer |
+| GET `/painel/api/lembretes` | `{doses, recados, agenda, pendencias}`: o que espera Pedro |
+| POST `/painel/api/doses/{id}/tomei` | fecha a dose aberta (409 se já foi) |
+| GET `/painel/api/conversas[?q=]` · `/painel/api/conversas/{id}` | lista (com a busca) e histórico com o markdown cru e `turno_ativo` |
+
+O resto o aplicativo faz pelas rotas que o Painel já tinha (conversa, voz, agenda, pendências). O SSE de um turno tem
+um leitor só: o aplicativo só ouve os turnos que ele mesmo abriu.
+
+```bash
+cd services/inbox
+venv/bin/python -m unittest tests.test_app_token tests.test_painel_app tests.test_avisos -v
+```
 
 ### Fora do escopo e limitações
 
@@ -804,6 +867,7 @@ Um arquivo só, `VAULT_ALFRED/.alfred/alfred.db` (o Obsidian ignora a pasta com 
 | `notas` (FTS5, derivada) | os `.md` de `VAULT_ALFRED` e `VAULT_PEDRO`, sem `.obsidian/` e pastas com ponto. Sem acento, prefixo (`pendência` acha `pendências`), bm25 com título pesando 8x | ferramenta `buscar_cofre` (via `lib_rag`), `GET /busca`, `./run.sh buscar` |
 | `wa_msgs` + `wa_fts` | texto (ou transcrição) das mensagens de WhatsApp, inclusive as de Pedro a contatos (`from_me`; só desde 04/11/2026 — antes o webhook não gravava; áudio e mídia sem legenda de Pedro ficam como "(audio enviada)"). Pula grupo ignorado, `contatos_ignorar`, reação/figurinha | as 5 últimas da conversa vão no campo `historico` do prompt `pergunta_whatsapp.md`; `GET /whatsapp/buscar`, `./run.sh buscar --whatsapp` |
 | `cache_classif` | e-mail de envio em massa classificado 3x como `promocao`/`transacional`, WhatsApp 3x como `automatico`/`spam` | `core.classificar` e `whatsapp.classificar_whatsapp` pulam o gemma4 (`origem: "cache"`) |
+| `avisos` | o que o Alfred avisou a Pedro (WhatsApp, notificação do desktop, dose de remédio), 30 dias | o [aplicativo do celular](#aplicativo-do-celular): `GET /painel/api/avisos` e o fluxo SSE |
 
 - **Reindexação**: ao fim de cada `ciclo` (07:30 / 18:30), por `./run.sh indexar` ou `POST /indexar`. É incremental por `mtime`; apagar o `.db` reconstrói tudo (menos o histórico do WhatsApp e o cache, que recomeçam do zero). A mesma rotina poda o histórico além de `historico_dias`.
 - **Cache — por que é conservador**: só categorias não acionáveis, só com confiança ≥ 0,9, só depois de 3 respostas iguais do LLM, com validade de 30 dias (depois, uma resposta do LLM o revalida). Uma categoria diferente zera a contagem. Errar uma promoção custa um item a mais no jornal; errar uma mensagem de gente custaria uma resposta perdida, por isso `profissional`/`pessoal` nunca entram. `cache_classificacao: false` (em `inbox:` e `whatsapp:`) desliga na hora; `origem: "cache"` aparece no log (`[cache] ...`) e no resumo do ciclo, e `GET /health` traz as contagens (`db.cache_usos`).

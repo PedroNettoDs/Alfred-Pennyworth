@@ -12,6 +12,9 @@ registrada com @ferramenta(nome, descricao, perigosa=False); o JSON Schema dos p
                                   responder pendência / limpeza, gravar no cofre, completar tarefa, criar
                                   compromisso). A aprovação NÃO é feita aqui: quem conversa pergunta
                                   "Executar? [Sim] [Não]" antes de chamar executar()
+    motivo_risco(nome, args)    → ferramenta registrada com `risco=`: o perigo depende dos argumentos (gravar um
+                                  arquivo novo é livre, sobrescrever um que já existe pede o "sim"). Texto vazio =
+                                  sem risco; perigosa(nome, args) é o bool disso
 
 Código do repositório é chamado direto (services/inbox: core, agenda, whatsapp, limpeza; _shared: lib_db,
 lib_memoria, lib_rag, lib_mail via core.coletar). HTTP só para os serviços separados — Shell Executor
@@ -26,12 +29,16 @@ Sobreposições das tools antigas, juntas aqui:
 """
 
 import contextvars
+import ast
 import copy
 import importlib
 import inspect
 import json
 import os
+import hashlib
 import re
+import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -115,13 +122,14 @@ def _esquema_parametros(funcao) -> dict:
     return {"type": "object", "properties": props, "required": obrigatorios}
 
 
-def ferramenta(nome: str, descricao: str, perigosa: bool = False, timeout: float = TIMEOUT_PADRAO):
+def ferramenta(nome: str, descricao: str, perigosa: bool = False, timeout: float = TIMEOUT_PADRAO, risco=None):
     """Registra a função como ferramenta `nome`. Tipo de parâmetro fora de str/int/float/bool/Optional/Literal
-    ou nome repetido levantam já na importação (erro de programação, não do modelo)."""
+    ou nome repetido levantam já na importação (erro de programação, não do modelo). `risco` = função com os
+    mesmos parâmetros que devolve o motivo do risco desta chamada ("" = nenhum): a aprovação só é pedida com motivo."""
     def registrar(funcao):
         if nome in _REGISTRO:
             raise ValueError(f"ferramenta repetida: {nome}")
-        _REGISTRO[nome] = {"funcao": funcao, "descricao": descricao, "perigosa": bool(perigosa),
+        _REGISTRO[nome] = {"funcao": funcao, "descricao": descricao, "perigosa": bool(perigosa), "risco": risco,
                            "timeout": float(timeout), "parametros": _esquema_parametros(funcao)}
         return funcao
     return registrar
@@ -134,10 +142,33 @@ def esquemas() -> list[dict]:
             for nome, f in _REGISTRO.items()]
 
 
-def perigosa(nome: str) -> bool:
+def motivo_risco(nome: str, argumentos=None) -> str:
+    """Por que esta chamada precisa do "sim" de Pedro; "" = pode rodar direto. Ferramenta `perigosa` sempre tem
+    motivo. Com `risco=` no registro, quem decide são os argumentos; sem argumentos (ou se a regra falhar) vale
+    o pior caso. Argumento inválido → "": executar() devolve o erro e nada roda."""
+    f = _REGISTRO.get(nome)
+    if not f:
+        return ""
+    if f["perigosa"]:
+        return "age fora da conversa"
+    if not f["risco"]:
+        return ""
+    if argumentos is None:
+        return "depende dos argumentos"
+    try:
+        kwargs = _argumentos(f, argumentos)
+    except ValueError:
+        return ""
+    try:
+        return str(f["risco"](**kwargs) or "")
+    except Exception as e:
+        return f"não consegui avaliar o risco ({_curto(e)})"
+
+
+def perigosa(nome: str, argumentos=None) -> bool:
     """True se a ferramenta precisa de "Executar? [Sim] [Não]" antes de executar(). Nome desconhecido → False
-    (executar() não faz nada com ele)."""
-    return bool((_REGISTRO.get(nome) or {}).get("perigosa"))
+    (executar() não faz nada com ele). Ver motivo_risco()."""
+    return bool(motivo_risco(nome, argumentos))
 
 
 def _curto(e) -> str:
@@ -340,11 +371,18 @@ def _saida(comando: str, timeout: int = 10) -> str:
     return (d.get("stdout") or "").strip() or (d.get("stderr") or "").strip()
 
 
+def _risco_comando(comando: str, **_) -> str:
+    """Comando só de leitura (df, docker ps, journalctl...) roda direto; o resto pede o "sim" com o motivo."""
+    from _shared import lib_orquestrador
+    r = lib_orquestrador.avaliar_risco(comando, "comando")
+    return r.motivo if r.arriscado else ""
+
+
 @ferramenta("executar_comando",
             "Executa um comando shell real na máquina do Pedro (Shell Executor, com whitelist) e devolve a saída. "
             "Use para docker, disco, memória, GPU, rede, processos e logs. As units do Alfred são de usuário: "
             "sempre systemctl --user e journalctl --user. Nunca invente a saída: execute e mostre o resultado real.",
-            perigosa=True, timeout=1810)
+            risco=_risco_comando, timeout=1810)
 def executar_comando(comando: str, timeout: int = 15) -> str:
     """
     :param comando: Comando, ex.: "df -h", "nvidia-smi", "docker ps", "journalctl --user -u alfred-inbox -n 30
@@ -1424,3 +1462,295 @@ def salvar_nota(titulo: str, conteudo: str, pasta: str = "logs") -> str:
     with open(arquivo, "x", encoding="utf-8") as fh:
         fh.write("---\n" + yaml.safe_dump(meta, allow_unicode=True, sort_keys=False) + "---\n\n" + conteudo)
     return f"Nota salva em: {arquivo.relative_to(raiz)}"
+
+
+# ══════════════════════════════════════════════════════════════
+#  Arquivos e scripts do computador
+# ══════════════════════════════════════════════════════════════
+# Alcance: a home de Pedro inteira, menos segredos (_protegido). Ler e listar é livre. Gravar e executar pedem o
+# "sim" só quando há risco (_risco_escrita, _risco_script): arquivo novo fora de pasta oculta é livre; script de
+# Pedro roda direto; script criado ou alterado pelo Alfred passa pelo lib_orquestrador.avaliar_risco e só pede o
+# "sim" se houver risco (uma vez por versão).
+
+ARQUIVOS_ALFRED = PROJECT_ROOT / "logs" / "arquivos_alfred.json"   # {caminho: {sha, aprovado}} do que o Alfred gravou
+LISTA_MAX = 200           # entradas de listar_arquivos
+LEITURA_LINHAS = 300      # linhas de ler_arquivo por chamada
+SCRIPT_SAIDA = 4000       # caracteres finais da saída de um script
+# ambiente dos scripts: só o necessário. O processo do Alfred carrega o .env inteiro (tokens, senhas)
+_ENV_SCRIPT = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+               "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "TERM")
+_PASTAS_PROTEGIDAS = ("/.ssh/", "/.gnupg/", "/.mozilla/", "/.thunderbird/", "/.config/thunderbird/", "/.docker/",
+                      "/.config/Claude/", "/.claude/", "/.local/share/keyrings/", "/.config/google-chrome/",
+                      "/.config/BraveSoftware/", "/.config/chromium/", "/.password-store/")
+_NOMES_PROTEGIDOS = (".netrc", ".pgpass", "token", "id_rsa", "id_ed25519", ".git-credentials")
+_PULAR = {"__pycache__", "node_modules", "venv", ".venv", "site-packages"}
+
+
+def pasta_ferramentas() -> Path:
+    """Onde ficam os scripts de Pedro e os que o Alfred cria (PASTA_FERRAMENTAS no .env)."""
+    v = os.getenv("PASTA_FERRAMENTAS", "").strip()
+    return Path(v).expanduser() if v else Path.home() / "ferramentas-para-profissionais-nada-complicadas"
+
+
+def _protegido(real: Path) -> bool:
+    nome = real.name
+    if nome.startswith(".env") or nome in _NOMES_PROTEGIDOS or real.suffix in (".pem", ".key", ".kdbx"):
+        return True
+    return any(p in f"{real}/" for p in _PASTAS_PROTEGIDAS)
+
+
+def _caminho(caminho: str, base: Optional[Path] = None) -> Path:
+    """Texto do modelo → caminho real dentro da home. Relativo parte de `base` (padrão: a home). Fora da home,
+    segredo ou symlink que leva a um deles → ValueError."""
+    casa = Path.home().resolve()
+    p = Path((caminho or "").strip() or ".").expanduser()
+    real = (p if p.is_absolute() else (base or casa) / p).resolve()
+    if not real.is_relative_to(casa):
+        raise ValueError(f"fora da home de Pedro: {caminho!r}")
+    if _protegido(real):
+        raise ValueError(f"caminho protegido (segredos): {caminho!r}")
+    return real
+
+
+def _sha(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _ler_marcas() -> dict:
+    try:
+        d = json.loads(ARQUIVOS_ALFRED.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _marcar(p: Path, aprovado: bool) -> None:
+    """Anota a versão atual de `p` como gravada pelo Alfred (`aprovado` = Pedro já deixou esta versão rodar)."""
+    d = _ler_marcas()
+    d[str(p)] = {"sha": _sha(p), "aprovado": aprovado}
+    ARQUIVOS_ALFRED.parent.mkdir(parents=True, exist_ok=True)
+    gravar_atomico(ARQUIVOS_ALFRED, json.dumps(d, ensure_ascii=False, indent=1))
+
+
+def _marca(p: Path) -> Optional[dict]:
+    """A marca de `p` se o arquivo ainda é a versão que o Alfred gravou; None se é de Pedro (ou ele mexeu depois)."""
+    m = _ler_marcas().get(str(p))
+    try:
+        return m if m and m.get("sha") == _sha(p) else None
+    except OSError:
+        return None
+
+
+def _tamanho(n: int) -> str:
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return f"{n:.0f} {u}" if u == "B" else f"{n:.1f} {u}"
+        n /= 1024
+    return ""
+
+
+@ferramenta("listar_arquivos",
+            "Lista uma pasta do computador de Pedro (qualquer uma dentro da home) ou procura arquivos pelo nome. "
+            "Use para navegar pelos arquivos e achar um arquivo antes de ler, editar ou executar.")
+def listar_arquivos(caminho: str = "~", procurar: str = "") -> str:
+    """
+    :param caminho: Pasta, ex.: "~/Downloads", "~/dev". Relativo parte da home
+    :param procurar: Trecho do nome para procurar na pasta e nas subpastas, ex.: "baixar", ".pdf". Vazio lista só a pasta
+    """
+    pasta = _caminho(caminho)
+    if not pasta.is_dir():
+        raise ValueError(f"não é uma pasta: {pasta}")
+    if procurar.strip():
+        alvo, achados = procurar.strip().lower(), []
+        for raiz, dirs, nomes in os.walk(pasta):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in _PULAR)
+            achados += [str(Path(raiz) / n) for n in sorted(nomes) if alvo in n.lower()]
+            if len(achados) >= LISTA_MAX:
+                break
+        achados = [a for a in achados if not _protegido(Path(a))][:LISTA_MAX]
+        return "\n".join(achados) or f"Nada com {procurar!r} no nome em {pasta}."
+    linhas = []
+    for e in sorted(pasta.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+        try:
+            linhas.append(f"{e.name}/" if e.is_dir() else f"{e.name}  ({_tamanho(e.stat().st_size)})")
+        except OSError:
+            linhas.append(e.name)
+    extra = f"\n… (mais {len(linhas) - LISTA_MAX})" if len(linhas) > LISTA_MAX else ""
+    return f"{pasta}:\n" + ("\n".join(linhas[:LISTA_MAX]) or "(vazia)") + extra
+
+
+@ferramenta("ler_arquivo",
+            "Lê um arquivo de texto do computador de Pedro (código, script, configuração, nota), com as linhas "
+            "numeradas. Leia o arquivo antes de editá-lo.")
+def ler_arquivo(caminho: str, inicio: int = 1, linhas: int = LEITURA_LINHAS) -> str:
+    """
+    :param caminho: Arquivo, ex.: "~/ferramentas-para-profissionais-nada-complicadas/download/baixar_vid.py"
+    :param inicio: Primeira linha a ler
+    :param linhas: Quantas linhas, até 300
+    """
+    p = _caminho(caminho)
+    if not p.is_file():
+        raise ValueError(f"arquivo não encontrado: {p}")
+    bruto = p.read_bytes()
+    if b"\0" in bruto[:4096]:
+        return f"{p} é binário ({_tamanho(len(bruto))}): não dá para ler como texto."
+    todas = bruto.decode("utf-8", errors="replace").splitlines()
+    inicio, linhas = max(inicio, 1), min(max(linhas, 1), LEITURA_LINHAS)
+    trecho = todas[inicio - 1:inicio - 1 + linhas]
+    resto = len(todas) - (inicio - 1 + len(trecho))
+    return (f"{p} ({len(todas)} linhas)\n" + "\n".join(f"{inicio + i}\t{l}" for i, l in enumerate(trecho))
+            + (f"\n… (mais {resto} linhas: chame de novo com inicio={inicio + len(trecho)})" if resto > 0 else ""))
+
+
+def _risco_escrita(caminho: str, **_) -> str:
+    try:
+        p = _caminho(caminho, base=pasta_ferramentas())
+    except ValueError:
+        return ""   # executar() recusa: nada a aprovar
+    if p.is_relative_to(PROJECT_ROOT.resolve()):
+        return "é o código do próprio Alfred"
+    if any(parte.startswith(".") for parte in p.relative_to(Path.home().resolve()).parts):
+        return "fica em pasta oculta ou de configuração"
+    if p.exists() and not _marca(p):
+        return "altera um arquivo que já existe e não foi criado pelo Alfred"
+    return ""
+
+
+@ferramenta("escrever_arquivo",
+            "Cria um arquivo (ou troca o conteúdo inteiro de um) no computador de Pedro. Use para CRIAR um script "
+            "novo quando nenhum de listar_scripts faz o que Pedro pediu: grave em "
+            "ferramentas-para-profissionais-nada-complicadas/<pasta>/<nome>.py, com uma docstring na primeira "
+            "linha dizendo o que faz, só biblioteca padrão quando der, e argumentos por argparse (nada de input()).",
+            risco=_risco_escrita)
+def escrever_arquivo(caminho: str, conteudo: str) -> str:
+    """
+    :param caminho: Arquivo. Relativo parte da pasta de ferramentas, ex.: "download/baixar_audio.py"
+    :param conteudo: Conteúdo completo do arquivo
+    """
+    p = _caminho(caminho, base=pasta_ferramentas())
+    if p.is_dir():
+        raise ValueError(f"é uma pasta: {p}")
+    novo = not p.exists()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    gravar_atomico(p, conteudo)
+    _marcar(p, aprovado=False)
+    return f"{'Criado' if novo else 'Regravado'}: {p} ({len(conteudo.encode())} bytes)."
+
+
+@ferramenta("editar_arquivo",
+            "Modifica um arquivo existente trocando um trecho exato por outro. Leia o arquivo com ler_arquivo antes "
+            "e copie o trecho como está (sem os números de linha).",
+            risco=_risco_escrita)
+def editar_arquivo(caminho: str, trecho_antigo: str, trecho_novo: str) -> str:
+    """
+    :param caminho: Arquivo. Relativo parte da pasta de ferramentas
+    :param trecho_antigo: Texto exato a trocar; tem de aparecer uma única vez no arquivo
+    :param trecho_novo: Texto que entra no lugar
+    """
+    p = _caminho(caminho, base=pasta_ferramentas())
+    if not p.is_file():
+        raise ValueError(f"arquivo não encontrado: {p}")
+    texto = p.read_text(encoding="utf-8")
+    n = texto.count(trecho_antigo)
+    if n != 1:
+        raise ValueError(f"o trecho aparece {n} vezes em {p.name}; tem de ser exatamente uma. Nada foi alterado.")
+    gravar_atomico(p, texto.replace(trecho_antigo, trecho_novo))
+    _marcar(p, aprovado=False)
+    return f"Editado: {p}."
+
+
+def _resumo_script(p: Path) -> str:
+    """Primeira linha da docstring (.py) ou do primeiro comentário."""
+    try:
+        texto = p.read_text(encoding="utf-8", errors="ignore")
+        if p.suffix == ".py":
+            doc = ast.get_docstring(ast.parse(texto)) or ""
+            if doc.strip():
+                return doc.strip().splitlines()[0]
+        for linha in texto.splitlines()[:15]:
+            if linha.startswith("#") and not linha.startswith("#!") and linha.strip("# "):
+                return linha.strip("# ")
+    except (OSError, SyntaxError, ValueError):
+        pass
+    return ""
+
+
+@ferramenta("listar_scripts",
+            "Lista os scripts prontos da pasta ferramentas-para-profissionais-nada-complicadas com o que cada um "
+            "faz (baixar vídeo do YouTube e de outros sites, transcrever áudio ou vídeo, vídeo para GIF, edição, "
+            "thumbnail). Chame ANTES de dizer que não consegue fazer algo no computador: se um script serve, rode "
+            "com executar_script; se nenhum serve, crie um com escrever_arquivo.")
+def listar_scripts() -> str:
+    raiz = pasta_ferramentas().resolve()
+    linhas = []
+    for base, dirs, nomes in os.walk(raiz):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in _PULAR)
+        for n in sorted(nomes):
+            p = Path(base) / n
+            if p.suffix in (".py", ".sh"):
+                m = _marca(p)
+                nota = " [criado pelo Alfred" + ("" if m["aprovado"] else ", ainda sem o sim de Pedro") + "]" if m else ""
+                linhas.append(f"- {p.relative_to(raiz)}: {_resumo_script(p) or '(sem descrição)'}{nota}")
+    return (f"Scripts em {raiz} (use ler_arquivo para ver os argumentos de um):\n" + "\n".join(linhas)) if linhas \
+        else f"Nenhum script em {raiz}."
+
+
+def _risco_script(script: str, **_) -> str:
+    try:
+        p = _caminho(script, base=pasta_ferramentas())
+    except ValueError:
+        return ""
+    if not p.is_relative_to(pasta_ferramentas().resolve()):
+        return "script fora da pasta de ferramentas"
+    m = _marca(p)
+    if m and not m.get("aprovado"):   # escrito pelo modelo: o orquestrador lê o conteúdo (regras, depois um LLM)
+        from _shared import lib_orquestrador
+        try:
+            r = lib_orquestrador.avaliar_risco(p.read_text(encoding="utf-8", errors="replace"),
+                                               "python" if p.suffix == ".py" else "shell")
+        except OSError:
+            return ""
+        return f"script criado ou alterado pelo Alfred — {r.motivo}" if r.arriscado else ""
+    return ""
+
+
+@ferramenta("executar_script",
+            "Executa um script (.py ou .sh) no computador de Pedro e devolve a saída real. Use para os scripts de "
+            "listar_scripts (ex.: baixar um vídeo com download/baixar_vid.py URL) e para os que você criou. Nunca "
+            "invente a saída.",
+            risco=_risco_script, timeout=1810)
+def executar_script(script: str, argumentos: str = "", timeout: int = 600) -> str:
+    """
+    :param script: Caminho do script. Relativo parte da pasta de ferramentas, ex.: "download/baixar_vid.py"
+    :param argumentos: Argumentos como numa linha de comando, ex.: "https://youtu.be/abc -q 720"
+    :param timeout: Limite em segundos, de 1 a 1800
+    """
+    p = _caminho(script, base=pasta_ferramentas())
+    if not p.is_file():
+        raise ValueError(f"script não encontrado: {p} — veja listar_scripts")
+    interpretes = {".py": ["python3"], ".sh": ["bash"]}
+    if p.suffix not in interpretes:
+        raise ValueError("só executo scripts .py e .sh")
+    timeout = min(max(timeout, 1), 1800)
+    if _marca(p):   # chegou aqui: Pedro deu o sim para esta versão
+        _marcar(p, aprovado=True)
+    argv = interpretes[p.suffix] + [str(p)] + [os.path.expanduser(a) if a.startswith("~") else a   # sem shell: o ~ é daqui
+                                               for a in shlex.split(argumentos or "")]
+    env = {k: os.environ[k] for k in _ENV_SCRIPT if k in os.environ}
+    t0 = time.monotonic()
+    from _shared import lib_porta
+    with lib_porta.vaga("script"):   # um script por vez: dois ffmpeg ou dois whisper juntos travam o PC
+        proc = subprocess.Popen(argv, cwd=str(p.parent), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            saida, _ = proc.communicate(timeout=timeout)
+            fim = f"rc={proc.returncode}"
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)   # o script e os filhos dele (ffmpeg, yt-dlp)
+            saida, _ = proc.communicate()
+            fim = f"interrompido: passou de {timeout} s"
+    texto = saida.decode("utf-8", errors="replace").strip()
+    if len(texto) > SCRIPT_SAIDA:
+        texto = "… " + texto[-SCRIPT_SAIDA:]
+    log(f"[ferramentas] script {p.name}: {fim} em {time.monotonic() - t0:.0f} s")
+    return f"[{p} — {fim}, {time.monotonic() - t0:.0f} s, pasta de trabalho {p.parent}]\n{texto or '(sem saída)'}"

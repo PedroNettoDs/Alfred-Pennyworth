@@ -305,6 +305,8 @@ conversa:
   modelo: ""                    # vazio = MODEL_CHAT
   modelo_ferramentas: ""        # vazio = o mesmo. Ex.: "gemma4:e4b" decide as ferramentas e o modelo acima escreve
                                 # a resposta final (sem tools) — na 3060 os dois não cabem juntos: troca a cada turno
+  pensar: true                  # think do Ollama: o modelo raciocina antes de responder e o raciocínio vai para o
+                                # banco de pensamentos (run.sh pensamentos). false = respostas mais rápidas
   num_ctx: 16384                # o gemma4:12b ocupa ~8,4 GB de VRAM com 4k ou 32k: o contexto não pesa aqui
 
 # ── Orquestrador — _shared/lib_orquestrador.py ────────────────

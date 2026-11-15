@@ -498,13 +498,35 @@ grupos:
         arquivos: [services/inbox/painel.py]
         docs: [services/inbox/about.md, README.md]
 
+      - slug: aplicativo
+        nome: Aplicativo do celular
+        resumo: O Alfred fora de casa, pela Tailscale. Aqui ficam o token da semana e o QR code para o aplicativo entrar.
+        tela: /painel/aplicativo
+        abrir: Ver token e QR code
+        doc: |
+          # O que é
+          O aplicativo Android mostra os avisos do Alfred (o que ele manda no WhatsApp, as notificações do computador e as doses de remédio), os lembretes e a conversa, e abre o resto do Painel. Ele fala direto com este computador pela Tailscale: nada fica exposto na internet.
+
+          # Ligar
+          Em `.env`, ponha em `PAINEL_HOSTS_APP` o IP ou o nome deste computador na Tailscale (ex.: `100.95.104.56`) e reinicie a API. Vazio, o Painel só responde em 127.0.0.1.
+
+          # Token da semana
+          O aplicativo entra com um token que vale 7 dias, e não com o `SHELL_EXECUTOR_TOKEN`: esse nunca é aceito de fora da máquina. O Alfred gera o token, manda ao seu WhatsApp pelo número dele e mostra aqui, com o QR code. Quando vence, o aplicativo pede o novo.
+
+          **Gerar novo token** desconecta o aplicativo na hora. Use se o celular foi perdido ou se o token vazou.
+
+          # O que a tailnet alcança
+          Um aparelho da Tailscale só chega ao Painel. As outras rotas da API (`/health`, `/pendencias`, `/whatsapp`) respondem 403 para ele, com ou sem o token mestre.
+        arquivos: [services/inbox/app_token.py, services/inbox/painel_app.py, services/inbox/painel.py, app/lib]
+        docs: [services/inbox/about.md, app/README.md]
+
       - slug: comandos
         nome: Comandos no computador
         resumo: O Alfred roda comandos no computador por uma lista fechada de comandos permitidos.
         doc: |
           # Como funciona
           O Shell Executor (porta 7071, só 127.0.0.1, Bearer `SHELL_EXECUTOR_TOKEN`) executa só comandos que começam por um dos prefixos de `ALLOWED_PREFIXES`. O resto volta "Comando não permitido".
-          - `executar_comando` pede a sua aprovação na conversa a cada uso.
+          - `executar_comando` roda direto quando é só leitura (`df`, `docker ps`, `journalctl`); o resto pede a sua aprovação na conversa, com o motivo.
           - `relatorio_sistema`, `status_disco` e `status_gpu` só leem (CPU, RAM, disco, GPU e containers) e rodam direto.
 
           # Liberar um comando novo
@@ -515,6 +537,36 @@ grupos:
         ferramentas: [executar_comando, relatorio_sistema, status_disco, status_gpu]
         arquivos: [services/shell-executor/main.py]
         docs: [services/shell-executor/about.md]
+
+      - slug: arquivos-scripts
+        nome: Arquivos e scripts do computador
+        resumo: O Alfred navega pela sua home, lê e altera arquivos, roda os seus scripts e cria os que faltam.
+        tela: /painel/conversa
+        doc: |
+          # O que faz
+          Pela conversa (Painel, terminal ou WhatsApp para o número do Alfred) ele lista pastas, procura e lê arquivos, edita, cria e executa scripts `.py` e `.sh`. Os scripts ficam em `~/ferramentas-para-profissionais-nada-complicadas` (`PASTA_FERRAMENTAS` no `.env` troca a pasta).
+
+          # Alcance
+          A sua home inteira. Ficam sempre de fora: `.env`, chaves (`.pem`, `.key`, `id_rsa`), `~/.ssh`, `~/.gnupg`, `~/.claude`, perfis de navegador e do Thunderbird. Os scripts rodam sem as variáveis do `.env` do Alfred.
+
+          # Quando ele pede o seu "sim"
+          - **Roda direto:** listar, ler, criar arquivo novo em pasta visível, executar um script seu da pasta de ferramentas.
+          - **Pede o sim:** alterar arquivo que já existe e não foi criado por ele, gravar em pasta oculta ou no código do próprio Alfred, executar script fora da pasta de ferramentas, e executar script criado ou alterado por ele quando o orquestrador (`lib_orquestrador.avaliar_risco`: regras, depois um LLM local) vê risco no conteúdo.
+          - No WhatsApp a pergunta chega com o risco e espera **sim** ou **não** por 5 minutos. No Painel é o cartão **Executar** / **Não**.
+
+          # Banco de pensamentos
+          Cada turno grava o pedido, o raciocínio do modelo (think), as ferramentas escolhidas, os riscos, as aprovações e o desfecho na tabela `pensamentos` de `VAULT_ALFRED/conversas.db`.
+
+          ```bash
+          cd services/inbox
+          ./run.sh pensamentos              # os 60 registros mais recentes
+          ./run.sh pensamentos --turno ID
+          ./run.sh pensamentos --conversa ID
+          ```
+          `pensar: false` na seção `conversa:` do `perfis.yml` desliga o think (respostas mais rápidas; as decisões continuam gravadas).
+        ferramentas: [listar_arquivos, ler_arquivo, escrever_arquivo, editar_arquivo, listar_scripts, executar_script]
+        arquivos: [services/_shared/lib_ferramentas.py, services/inbox/conversa.py]
+        docs: [services/inbox/about.md]
 
       - slug: vigia
         nome: Vigia

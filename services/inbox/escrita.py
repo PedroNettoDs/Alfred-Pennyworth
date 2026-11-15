@@ -79,7 +79,7 @@ def _abrir_turno(pergunta: str, alcance: str, conversa_id: Optional[str]) -> dic
     conversa_id = conversa_id or conversa.nova_conversa()["id"]
     try:
         turno = conversa.enviar(conversa_id, pergunta, contexto=bloco,
-                                num_ctx=NUM_CTX_GRANDE if len(texto) > TEXTO_GRANDE else None)
+                                num_ctx=NUM_CTX_GRANDE if len(texto) > TEXTO_GRANDE else None, origem="escrita")
     except KeyError:
         raise _ErroEscrita(404, "Conversa não encontrada. Comece uma nova.") from None
     except RuntimeError:

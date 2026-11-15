@@ -104,6 +104,9 @@ class Base(unittest.TestCase):
                   mock.patch.object(conversa, "_stream_ollama", self.ollama),
                   mock.patch.object(conversa, "_aquecer", self.aquecer),
                   mock.patch.object(conversa, "_cfg", lambda: dict(self.cfg)),
+                  mock.patch.object(conversa.lib_orquestrador, "planejar",   # orquestrador neutro: o turno de sempre
+                                    lambda pedido, padrao="", padrao_ferramentas="": conversa.lib_orquestrador.Plano(
+                                        "ferramenta", padrao, padrao_ferramentas or padrao, "teste")),
                   mock.patch.object(conversa.lib_memoria, "contexto", self.memoria),
                   mock.patch.object(conversa.lib_rag, "contexto", self.rag),
                   mock.patch.object(conversa, "ollama_generate", self.resumo),
@@ -296,7 +299,8 @@ class TestContexto(Base):
         with mock.patch.object(perfis, "load", return_value={"conversa": {"num_ctx": 8192,
                                                                          "modelo_ferramentas": "gemma4:e4b"}}):
             cfg = _CFG_ORIGINAL()   # o _cfg de verdade (o setUp troca o do módulo)
-        self.assertEqual(cfg, {"modelo": "modelo-teste", "modelo_ferramentas": "gemma4:e4b", "num_ctx": 8192})
+        self.assertEqual(cfg, {"modelo": "modelo-teste", "modelo_ferramentas": "gemma4:e4b", "num_ctx": 8192,
+                               "pensar": True})
         with mock.patch.object(perfis, "load", return_value={}):
             self.assertEqual(_CFG_ORIGINAL()["num_ctx"], 16384)
 
@@ -510,6 +514,105 @@ class TestAprovacao(Base):
 #  Parar e a fila de um worker só
 # ══════════════════════════════════════════════════════════════
 
+class TestPensamentos(Base):
+    """Banco de pensamentos: cada turno deixa o pedido, o raciocínio, as escolhas, as aprovações e o desfecho."""
+
+    def test_turno_com_think_e_ferramenta_de_risco_variavel(self):
+        self.cfg["pensar"] = True
+        feitos = []
+        def gravar(alvo: str) -> str:
+            feitos.append(alvo)
+            return f"gravado: {alvo}"
+        lf.ferramenta("_t_risco", "ferramenta de teste", risco=lambda alvo: "sobrescreve" if alvo == "velho" else "")(gravar)
+        self.addCleanup(lf._REGISTRO.pop, "_t_risco", None)
+        pensando = [{"message": {"role": "assistant", "content": "", "thinking": "Pedro quer gravar; "}, "done": False},
+                    {"message": {"role": "assistant", "content": "", "thinking": "uso _t_risco."}, "done": False}]
+        self.ollama.roteiro = [pensando + chamada("_t_risco", {"alvo": "novo"}),
+                               chamada("_t_risco", {"alvo": "velho"}), texto("Feito, senhor.")]
+        cid = conversa.nova_conversa()["id"]
+        t = conversa.enviar(cid, "grave os dois", origem="whatsapp")
+        evs = self.eventos(t, ao_aprovar=lambda ev: conversa.aprovar(ev["id"]))
+        self.assertEqual(feitos, ["novo", "velho"])
+        self.assertTrue(self.ollama.payloads[0]["think"])
+        cartoes = [e for e in evs if e["tipo"] == "aprovar"]   # só o de risco pediu o sim, com o motivo
+        self.assertEqual([(c["argumentos"], c["motivo"]) for c in cartoes], [({"alvo": "velho"}, "sobrescreve")])
+        self.assertNotIn("Pedro quer gravar", "".join(e.get("texto", "") for e in evs))   # raciocínio não vai à tela
+
+        reg = conversa.pensamentos(turno_id=t.id)
+        self.assertEqual([r["tipo"] for r in reg], ["pedido", "modelo", "ferramenta", "modelo", "aprovacao",
+                                                    "ferramenta", "modelo", "fim"])
+        self.assertEqual({r["origem"] for r in reg}, {"whatsapp"})
+        self.assertEqual((reg[0]["texto"], reg[0]["dados"]["think"]), ("grave os dois", True))
+        self.assertEqual(reg[1]["texto"], "Pedro quer gravar; uso _t_risco.")
+        self.assertEqual(reg[1]["dados"]["ferramentas"], [{"nome": "_t_risco", "argumentos": {"alvo": "novo"}}])
+        self.assertEqual((reg[2]["dados"]["risco"], reg[2]["dados"]["resultado"]), ("", "gravado: novo"))
+        self.assertEqual((reg[4]["dados"]["motivo"], reg[4]["dados"]["decisao"]), ("sobrescreve", "aprovada"))
+        self.assertEqual((reg[-1]["texto"], reg[-1]["dados"]["voltas"]), ("Feito, senhor.", 2))
+
+    def test_erro_e_cobranca_ficam_registrados(self):
+        self.ollama.roteiro = [texto("Registrei o compromisso."), texto("Não foi feito, senhor.")]
+        t, _ = self.turno("marca aí")
+        self.assertIn("cobranca", [r["tipo"] for r in conversa.pensamentos(turno_id=t.id)])
+        self.ollama.roteiro = [RuntimeError("Ollama fora do ar")]
+        t, _ = self.turno("oi")
+        self.assertEqual(conversa.pensamentos(turno_id=t.id)[-1]["tipo"], "erro")
+
+    def test_registro_que_falha_nao_derruba_o_turno(self):
+        self.ollama.roteiro = [texto("Pois não.")]
+        with mock.patch.object(conversa.json, "dumps", side_effect=TypeError("x")):
+            conversa.pensar("c", "t", "painel", "pedido", "oi")   # não levanta
+
+    def test_cli(self):
+        self.ollama.roteiro = [texto("Pois não.")]
+        t, _ = self.turno("oi")
+        saida = io.StringIO()
+        with redirect_stdout(saida):
+            self.assertEqual(conversa.cmd_pensamentos(Namespace(turno=t.id, conversa=None, n=60)), 0)
+        self.assertIn(f"turno {t.id}", saida.getvalue())
+        self.assertIn("resposta (modelo-teste): Pois não.", saida.getvalue())
+
+
+class TestOrquestrador(Base):
+    """O plano do lib_orquestrador decide o modelo do turno e se ele leva ferramentas."""
+
+    def plano(self, tipo, modelo, modelo_f):
+        p = mock.patch.object(conversa.lib_orquestrador, "planejar",
+                              lambda *a, **k: conversa.lib_orquestrador.Plano(tipo, modelo, modelo_f, "regra de teste"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_texto_vai_ao_modelo_leve_sem_ferramentas(self):
+        self.plano("texto", "leve", "")
+        self.ollama.roteiro = [texto("Segue o texto, senhor.")]
+        t, evs = self.turno("escreva um parágrafo sobre chá")
+        self.esperar_livre()
+        p, = self.ollama.payloads
+        self.assertEqual((p["model"], "tools" in p), ("leve", False))
+        self.assertEqual(evs[-1]["modelo"], "leve")
+        pedido = conversa.pensamentos(turno_id=t.id)[0]["dados"]
+        self.assertEqual((pedido["plano"], pedido["modelo"], pedido["ferramentas_oferecidas"]), ("texto", "leve", 0))
+        self.aquecer.assert_called_once()   # o próximo prompt é aquecido no modelo padrão, não no leve
+        self.assertEqual(self.aquecer.call_args.args[1], "modelo-teste")
+
+    def test_texto_que_narra_acao_volta_ao_turno_completo(self):
+        self.plano("texto", "leve", "")
+        feitos = []
+        self.registrar("_t_anota", lambda: feitos.append(1) or "anotado")
+        self.ollama.roteiro = [texto("Registrei o compromisso."), chamada("_t_anota"), texto("Anotado, senhor.")]
+        _, evs = self.turno("anota aí")
+        self.assertEqual(feitos, [1])
+        self.assertEqual([(p["model"], "tools" in p) for p in self.ollama.payloads],
+                         [("leve", False), ("modelo-teste", True), ("modelo-teste", True)])
+        self.assertEqual(evs[-1]["modelo"], "modelo-teste")
+
+    def test_modelo_pedido_por_quem_chamou_nao_e_trocado(self):
+        self.plano("texto", "leve", "")
+        self.ollama.roteiro = [texto("Pois não.")]
+        cid = conversa.nova_conversa()["id"]
+        self.eventos(conversa.enviar(cid, "oi", modelo="outro"))
+        self.assertEqual((self.ollama.payloads[0]["model"], "tools" in self.ollama.payloads[0]), ("outro", True))
+
+
 class TestParar(Base):
     def test_parar_no_meio_do_texto(self):
         liberar = threading.Event()
@@ -626,7 +729,7 @@ class TestResumo(Base):
         self.ollama.roteiro = [texto("Bom dia, senhor.")]
         t, _ = self.turno("bom dia")
         self.esperar_livre()
-        self.aquecer.assert_called_once_with(t.conversa_id, "modelo-teste", self.ollama.payloads[0]["tools"], 16384)
+        self.aquecer.assert_called_once_with(t.conversa_id, "modelo-teste", self.ollama.payloads[0]["tools"], 16384, False)
         _AQUECER_ORIGINAL(t.conversa_id, "modelo-teste", [{"type": "function"}], 16384)
         p = self.ollama.payloads[-1]
         self.assertEqual([(m["role"], m["content"]) for m in p["messages"]],

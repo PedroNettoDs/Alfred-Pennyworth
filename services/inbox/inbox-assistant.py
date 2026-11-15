@@ -563,10 +563,11 @@ def cmd_aguardar_agenda(args):
     url = core.url_painel(f"agenda/{item['id']}")
     r = _notificacao_dbus(titulo, corpo, [("ok", "Ok"), ("detalhes", "Mais detalhes"), ("desfazer", "Desfazer")])
     if r is None:
-        core._notify(titulo, corpo + f"\nMais detalhes: {url}\nDesfazer: run.sh agenda desfazer {item['id']}")
+        core._notify(titulo, corpo + f"\nMais detalhes: {url}\nDesfazer: run.sh agenda desfazer {item['id']}",
+                     aviso=False)   # agenda.notificar_item já pôs este item no feed de avisos
         return 0
     if r == "detalhes" and not core.abrir_no_navegador(url):
-        core._notify("Alfred — agenda", f"Abra {url} no navegador para ver os detalhes.")
+        core._notify("Alfred — agenda", f"Abra {url} no navegador para ver os detalhes.", aviso=False)
     if r == "desfazer":
         it = agenda.desfazer(args.id)
         core._notify("Alfred — agenda", f"Desfeito: {it['titulo']}"
@@ -888,6 +889,9 @@ def main() -> int:
     if args.cmd == "conversa-comprimir":
         import conversa
         return conversa.cmd_comprimir(args)
+    if args.cmd == "pensamentos":
+        import conversa
+        return conversa.cmd_pensamentos(args)
     if args.cmd == "integracoes":
         import integracoes
         return integracoes.cmd_integracoes(args)

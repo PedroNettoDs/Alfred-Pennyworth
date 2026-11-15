@@ -59,7 +59,7 @@ import httpx
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from _shared import lib_ferramentas, lib_memoria, lib_porta, lib_rag, lib_wordcraft  # noqa: E402
+from _shared import lib_ferramentas, lib_memoria, lib_orquestrador, lib_porta, lib_rag, lib_wordcraft  # noqa: E402
 from _shared.lib_alfred import DEFAULT_MODEL_CHAT, DEFAULT_OLLAMA_URL, gravar_atomico, log, ollama_generate  # noqa: E402
 from _shared.lib_titulo import extrair_titulo_manchete  # noqa: E402
 
@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS aprovacoes(
     turno_id TEXT NOT NULL, ferramenta TEXT NOT NULL, argumentos TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('aguardando', 'aprovada', 'negada', 'expirada', 'cancelada')),
     criada_em TEXT NOT NULL, decidida_em TEXT, resultado TEXT);
+CREATE TABLE IF NOT EXISTS pensamentos(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, conversa_id TEXT, turno_id TEXT, origem TEXT NOT NULL DEFAULT '',
+    tipo TEXT NOT NULL, texto TEXT NOT NULL DEFAULT '', dados TEXT NOT NULL DEFAULT '{{}}', criada_em TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS pensamentos_turno ON pensamentos(turno_id, id);
 CREATE TABLE IF NOT EXISTS conversas_notas(
     conversa_id TEXT PRIMARY KEY REFERENCES conversas(id) ON DELETE CASCADE,
     caminho TEXT NOT NULL DEFAULT '', ate_mensagem INTEGER NOT NULL, comprimida_em TEXT NOT NULL);
@@ -136,6 +140,7 @@ def _cfg() -> dict:
                               or os.getenv("MODEL_CHAT", "").strip() or DEFAULT_MODEL_CHAT,
         "modelo_ferramentas": str(sec.get("modelo_ferramentas") or "").strip(),
         "num_ctx":            int(sec.get("num_ctx") or NUM_CTX_PADRAO),
+        "pensar":             bool(sec.get("pensar", True)),
     }
 
 
@@ -173,6 +178,43 @@ def _gravar_mensagem(con: sqlite3.Connection, conversa_id: str, papel: str, text
         (conversa_id, turno_id, papel, texto or "", *(extra.get(c) for c in _COLUNAS), agora))
     con.execute("UPDATE conversas SET atualizada_em = ? WHERE id = ?", (agora, conversa_id))
     return cur.lastrowid
+
+
+PENSAMENTO_MAX = 6000     # caracteres de texto de um registro de pensamento
+
+
+def pensar(conversa_id: Optional[str], turno_id: Optional[str], origem: str, tipo: str, texto: str = "",
+           **dados) -> None:
+    """
+    Uma linha no banco de pensamentos (tabela `pensamentos` do conversas.db): o que o Alfred recebeu, raciocinou,
+    decidiu e fez. Tipos: pedido | modelo (raciocínio do think, resposta bruta, ferramentas escolhidas) |
+    aprovacao | ferramenta | cobranca | queda (caiu para outro caminho) | fim | erro. Nunca levanta: registrar
+    não pode derrubar o turno. Leitura: pensamentos() e `run.sh pensamentos`.
+    """
+    try:
+        with closing(_conectar()) as con, con:
+            con.execute("INSERT INTO pensamentos(conversa_id, turno_id, origem, tipo, texto, dados, criada_em)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (conversa_id, turno_id, origem, tipo, (texto or "")[:PENSAMENTO_MAX],
+                         json.dumps(dados, ensure_ascii=False, default=str), _agora()))
+    except Exception as e:
+        log(f"[conversa] pensamento não gravado ({_curto(e)})")
+
+
+def pensamentos(turno_id: Optional[str] = None, conversa_id: Optional[str] = None, limite: int = 60) -> list[dict]:
+    """Registros em ordem de gravação: de um turno, de uma conversa ou os `limite` mais recentes."""
+    onde, args = [], []
+    for coluna, valor in (("turno_id", turno_id), ("conversa_id", conversa_id)):
+        if valor:
+            onde.append(f"{coluna} = ?")
+            args.append(valor)
+    sql = ("SELECT * FROM pensamentos" + (" WHERE " + " AND ".join(onde) if onde else "")
+           + " ORDER BY id DESC LIMIT ?")
+    with closing(_conectar()) as con:
+        linhas = [dict(r) for r in con.execute(sql, (*args, limite))]
+    for r in linhas:
+        r["dados"] = json.loads(r["dados"] or "{}")
+    return linhas[::-1]
 
 
 def _titulo(pergunta: str) -> str:
@@ -649,10 +691,11 @@ class Turno:
     """Um pedido de Pedro e a resposta do Alfred. Estado: na_fila → rodando ⇄ aguardando_aprovacao →
     fim | parado | erro."""
 
-    def __init__(self, conversa_id: str, pergunta: str, modelo: str, contexto: str = "", num_ctx: Optional[int] = None):
+    def __init__(self, conversa_id: str, pergunta: str, modelo: str, contexto: str = "", num_ctx: Optional[int] = None,
+                 origem: str = "painel"):
         self.id = secrets.token_hex(8)
         self.conversa_id, self.pergunta, self.modelo = conversa_id, pergunta, modelo
-        self.contexto, self.num_ctx = contexto, num_ctx
+        self.contexto, self.num_ctx, self.origem = contexto, num_ctx, origem
         self.mensagem_id: Optional[int] = None
         self.fila: queue.Queue = queue.Queue()
         self.parar = threading.Event()
@@ -694,18 +737,23 @@ def turno_ativo(conversa_id: str) -> Optional[Turno]:
         return next((t for t in _TURNOS.values() if t.conversa_id == conversa_id and t.terminado is None), None)
 
 
+def _pensar(turno: Turno, tipo: str, texto: str = "", **dados) -> None:
+    pensar(turno.conversa_id, turno.id, turno.origem, tipo, texto, **dados)
+
+
 def _emitir(turno: Turno, tipo: str, **dados) -> None:
     turno._n += 1   # só o worker do turno emite
     turno.fila.put({"tipo": tipo, "turno": turno.id, "n": turno._n, **dados})
 
 
 def enviar(conversa_id: str, texto: str, modelo: Optional[str] = None, contexto: str = "",
-           num_ctx: Optional[int] = None) -> Turno:
+           num_ctx: Optional[int] = None, origem: str = "painel") -> Turno:
     """
     Grava a mensagem de Pedro e põe o turno na fila do chat. → Turno (eventos em turno.fila).
     Conversa inexistente → KeyError; texto vazio → ValueError; já há turno em andamento nesta conversa →
     RuntimeError (uma pergunta por vez: a ordem do histórico depende disso). `contexto` = bloco extra só deste turno
-    (também libera as ferramentas documento_*); `num_ctx` troca o do perfis.yml neste turno.
+    (também libera as ferramentas documento_*); `num_ctx` troca o do perfis.yml neste turno. `origem` = por onde
+    o pedido chegou (painel | whatsapp | terminal | escrita), para o banco de pensamentos.
     """
     global _ATIVOS, _EXECUTOR
     texto = (texto or "").strip()
@@ -714,7 +762,7 @@ def enviar(conversa_id: str, texto: str, modelo: Optional[str] = None, contexto:
     with _LOCK:
         if any(t.conversa_id == conversa_id and t.terminado is None for t in _TURNOS.values()):
             raise RuntimeError("já há um turno em andamento nesta conversa")
-    turno = Turno(conversa_id, texto, modelo or _cfg()["modelo"], contexto, num_ctx)
+    turno = Turno(conversa_id, texto, modelo or _cfg()["modelo"], contexto, num_ctx, origem)
     with closing(_conectar()) as con, con:
         conv = con.execute("SELECT titulo FROM conversas WHERE id = ?", (conversa_id,)).fetchone()
         if not conv:
@@ -769,7 +817,7 @@ def parar(turno_id: str) -> bool:
     return True
 
 
-def _pedir_aprovacao(turno: Turno, nome: str, argumentos: dict) -> _Aprovacao:
+def _pedir_aprovacao(turno: Turno, nome: str, argumentos: dict, motivo: str = "") -> _Aprovacao:
     """Grava a aprovação, emite "aprovar" e espera a decisão (ou APROVACAO_S → expirada)."""
     ap = _Aprovacao(turno, nome, argumentos)
     expira = datetime.now().astimezone() + timedelta(seconds=APROVACAO_S)
@@ -783,7 +831,7 @@ def _pedir_aprovacao(turno: Turno, nome: str, argumentos: dict) -> _Aprovacao:
         _decidir(ap.id, "cancelada")
     else:
         turno.estado = "aguardando_aprovacao"
-        _emitir(turno, "aprovar", id=ap.id, nome=nome, argumentos=argumentos,
+        _emitir(turno, "aprovar", id=ap.id, nome=nome, argumentos=argumentos, motivo=motivo,
                 expira_em=expira.isoformat(timespec="seconds"))
     ap.evento.wait(APROVACAO_S)
     _decidir(ap.id, "expirada")   # sem efeito se Pedro já decidiu
@@ -793,6 +841,8 @@ def _pedir_aprovacao(turno: Turno, nome: str, argumentos: dict) -> _Aprovacao:
     with closing(_conectar()) as con, con:
         con.execute("UPDATE aprovacoes SET status = ?, decidida_em = ? WHERE id = ?", (ap.decisao, _agora(), ap.id))
     log(f"[conversa] aprovação de {nome}: {ap.decisao}")
+    _pensar(turno, "aprovacao", f"{nome}: {ap.decisao}", ferramenta=nome, argumentos=argumentos, motivo=motivo,
+            decisao=ap.decisao)
     return ap
 
 
@@ -809,8 +859,9 @@ def _argumentos(bruto) -> dict:
 def _usar_ferramenta(turno: Turno, nome: str, bruto, modelo: str) -> str:
     """Segura: executa. Perigosa: pede aprovação antes. → texto para a mensagem role "tool"."""
     argumentos = _argumentos(bruto)
-    perigosa = lib_ferramentas.perigosa(nome)
-    ap = _pedir_aprovacao(turno, nome, argumentos) if perigosa else None
+    motivo = lib_ferramentas.motivo_risco(nome, bruto)   # "" = sem risco: roda direto
+    perigosa = bool(motivo)
+    ap = _pedir_aprovacao(turno, nome, argumentos, motivo) if perigosa else None
     if ap and ap.decisao != "aprovada":
         resultado, estado, ms = _NAO_EXECUTADA[ap.decisao].format(nome=nome), ap.decisao, None
     else:
@@ -822,6 +873,8 @@ def _usar_ferramenta(turno: Turno, nome: str, bruto, modelo: str) -> str:
         log(f"[conversa] {nome}: {estado} em {ms} ms")
     _emitir(turno, "ferramenta", nome=nome, argumentos=argumentos, estado=estado, perigosa=perigosa,
             resultado=resultado, tempo_ms=ms)
+    _pensar(turno, "ferramenta", f"{nome}: {estado}", ferramenta=nome, argumentos=argumentos, estado=estado,
+            risco=motivo, tempo_ms=ms, resultado=resultado[:2000])
     with closing(_conectar()) as con, con:
         _gravar_mensagem(con, turno.conversa_id, "tool", "", turno.id, ferramenta=nome,
                          argumentos=json.dumps(argumentos, ensure_ascii=False), resultado=resultado,
@@ -859,12 +912,14 @@ def _stream_ollama(payload: dict) -> Iterator[dict]:
 
 
 def _chamar(turno: Turno, msgs: list[dict], modelo: str, ferramentas: Optional[list], num_ctx: int,
-            emitir: bool) -> dict:
-    """Uma chamada ao /api/chat. → {texto, tool_calls, entrada, saida, parado}. `emitir`: texto vira evento."""
-    payload = {"model": modelo, "messages": msgs, "stream": True, "think": False, "options": {"num_ctx": num_ctx}}
+            emitir: bool, think: bool = False) -> dict:
+    """Uma chamada ao /api/chat. → {texto, pensamento, tool_calls, entrada, saida, parado}. `emitir`: texto vira
+    evento. `think`: o modelo raciocina antes (campo "thinking" do stream); o raciocínio não vai para a tela, só
+    para o banco de pensamentos — toda chamada vira um registro "modelo"."""
+    payload = {"model": modelo, "messages": msgs, "stream": True, "think": think, "options": {"num_ctx": num_ctx}}
     if ferramentas:
         payload["tools"] = ferramentas
-    partes, chamadas, r = [], [], {"entrada": 0, "saida": 0, "parado": False}
+    partes, raciocinio, chamadas, r = [], [], [], {"entrada": 0, "saida": 0, "parado": False}
     pedacos = _stream_ollama(payload)
     try:
         for pedaco in pedacos:
@@ -872,6 +927,8 @@ def _chamar(turno: Turno, msgs: list[dict], modelo: str, ferramentas: Optional[l
                 r["parado"] = True
                 break
             msg = pedaco.get("message") or {}
+            if msg.get("thinking"):
+                raciocinio.append(msg["thinking"])
             if msg.get("content"):
                 partes.append(msg["content"])
                 if emitir:
@@ -885,7 +942,12 @@ def _chamar(turno: Turno, msgs: list[dict], modelo: str, ferramentas: Optional[l
                     turno.medidas[chave] += int(pedaco.get(campo) or 0) / 1e9
     finally:
         pedacos.close()   # parar no meio fecha a conexão: o Ollama para de gerar
-    return {**r, "texto": "".join(partes), "tool_calls": chamadas}
+    r = {**r, "texto": "".join(partes), "pensamento": "".join(raciocinio), "tool_calls": chamadas}
+    _pensar(turno, "modelo", r["pensamento"], modelo=modelo, resposta=r["texto"][:PENSAMENTO_MAX],
+            com_ferramentas=bool(ferramentas), tokens_entrada=r["entrada"], tokens_saida=r["saida"], parado=r["parado"],
+            ferramentas=[{"nome": (c.get("function") or {}).get("name"),
+                          "argumentos": _argumentos((c.get("function") or {}).get("arguments"))} for c in chamadas])
+    return r
 
 
 # Ação narrada sem ferramenta (10/11: "Registrei o compromisso para quinta-feira" com 0 chamadas — nada gravado).
@@ -906,7 +968,7 @@ def _afirma_acao(texto: str) -> bool:
     return any(not _RE_NEGACAO.search(texto[:m.start()]) for m in _RE_ACAO.finditer(texto))
 
 
-def _aquecer(conversa_id: str, modelo: str, ferramentas: list, num_ctx: int) -> None:
+def _aquecer(conversa_id: str, modelo: str, ferramentas: list, num_ctx: int, think: bool = False) -> None:
     """
     Deixa avaliado no Ollama o começo do próximo prompt desta conversa: personalidade, ferramentas, resumo e
     histórico já com o turno que acabou. Roda depois do "fim", com Pedro lendo (ou ouvindo) a resposta.
@@ -917,11 +979,11 @@ def _aquecer(conversa_id: str, modelo: str, ferramentas: list, num_ctx: int) -> 
     sem o bloco: com bloco + pedido acima de ~500 tokens (o normal: "Agora" + memória) o turno seguinte
     reavaliava tudo (~8 s). O prompt desta chamada termina no histórico, então o ponto guardado serve ao próximo
     turno, que avalia só 512 tokens mais o bloco e o pedido (~1,2 s). Mesmo modelo, ferramentas e num_ctx do
-    turno: mudou um, o prompt (ou o modelo carregado) é outro. Custa ~1 s de GPU (~7 s logo depois de carregar o
+    turno (e think): mudou um, o prompt (ou o modelo carregado) é outro. Custa ~1 s de GPU (~7 s logo depois de carregar o
     modelo).
     """
     payload = {"model": modelo, "messages": _estavel(conversa_id), "tools": ferramentas, "stream": True,
-               "think": False, "options": {"num_ctx": num_ctx, "num_predict": 1}}
+               "think": think, "options": {"num_ctx": num_ctx, "num_predict": 1}}
     for _ in _stream_ollama(payload):
         pass
 
@@ -941,6 +1003,7 @@ def _rodar(turno: Turno) -> None:
         _turno(turno)
     except Exception as e:
         log(f"[conversa] turno {turno.id} falhou: {type(e).__name__}: {_curto(e)}")
+        _pensar(turno, "erro", f"{type(e).__name__}: {_curto(e)}")
         _terminar(turno, "erro", "erro", erro=_curto(e))
     finally:
         with _LOCK:
@@ -956,6 +1019,7 @@ def _turno(turno: Turno) -> None:
     turno.estado = "rodando"
     cfg = _cfg()
     cfg["num_ctx"] = turno.num_ctx or cfg["num_ctx"]
+    think = bool(cfg.get("pensar"))
     t0 = time.monotonic()
     msgs = montar_contexto(turno.conversa_id, turno.pergunta, ate_id=turno.mensagem_id, contexto=turno.contexto)
     ferramentas = lib_ferramentas.esquemas()
@@ -963,16 +1027,30 @@ def _turno(turno: Turno) -> None:
         ferramentas = [f for f in ferramentas if f["function"]["name"] not in lib_wordcraft.FERRAMENTAS]
     # modelo_ferramentas (perfis.yml) diferente: ele decide as ferramentas sem mostrar texto, e o modelo do turno
     # escreve a resposta final sem tools — ver about.md (na 3060 os dois não cabem juntos)
-    modelo_f = cfg["modelo_ferramentas"] or turno.modelo
+    # orquestrador: classifica o pedido e escolhe quem toma a frente (texto → modelo leve e sem ferramentas;
+    # ferramenta → modelo de ferramentas decide; código → modelo de código). Quem chamou enviar(modelo=...) ou
+    # abriu um documento (contexto) já escolheu: não mexe.
+    plano = None
+    if turno.modelo == cfg["modelo"] and not turno.contexto:
+        plano = lib_orquestrador.planejar(turno.pergunta, padrao=turno.modelo,
+                                          padrao_ferramentas=cfg["modelo_ferramentas"])
+        turno.modelo = plano.modelo
+        log(f"[conversa] turno {turno.id}: {plano.tipo} → {plano.modelo} ({plano.motivo})")
+    so_texto = bool(plano) and not plano.modelo_ferramentas
+    modelo_f = (plano.modelo_ferramentas if plano else cfg["modelo_ferramentas"]) or turno.modelo
+    _pensar(turno, "pedido", turno.pergunta, modelo=turno.modelo, modelo_ferramentas="" if so_texto else modelo_f,
+            think=think, ferramentas_oferecidas=0 if so_texto else len(ferramentas), num_ctx=cfg["num_ctx"],
+            com_contexto=bool(turno.contexto), plano=plano.tipo if plano else "",
+            plano_motivo=plano.motivo if plano else "")
     textos, entrada, saida, voltas, cobrado = [], 0, 0, 0, False
     while True:
-        com_ferramentas = voltas < MAX_VOLTAS
+        com_ferramentas = not so_texto and voltas < MAX_VOLTAS
         modelo = modelo_f if com_ferramentas else turno.modelo
         r = _chamar(turno, msgs, modelo, ferramentas if com_ferramentas else None, cfg["num_ctx"],
-                    emitir=modelo == turno.modelo)
+                    emitir=modelo == turno.modelo, think=think)
         entrada, saida = r["entrada"] or entrada, saida + r["saida"]
         if not r["tool_calls"] and not r["parado"] and modelo != turno.modelo:
-            r = _chamar(turno, msgs, turno.modelo, None, cfg["num_ctx"], emitir=True)
+            r = _chamar(turno, msgs, turno.modelo, None, cfg["num_ctx"], emitir=True, think=think)
             modelo = turno.modelo
             entrada, saida = r["entrada"] or entrada, saida + r["saida"]
         if modelo == turno.modelo:
@@ -981,8 +1059,13 @@ def _turno(turno: Turno) -> None:
             if not r["parado"] and voltas == 0 and not cobrado and _afirma_acao(r["texto"]):
                 cobrado = True   # disse que fez sem chamar ferramenta: uma segunda chance, e a frase falsa sai da tela
                 log(f"[conversa] turno {turno.id}: ação narrada sem ferramenta — cobrando a chamada")
+                _pensar(turno, "cobranca", "disse que fez sem chamar ferramenta: resposta descartada e chamada cobrada",
+                        resposta=r["texto"])
                 textos.clear()
                 _emitir(turno, "refazer")
+                if so_texto:   # o plano errou (era ação, não texto): volta ao turno completo, com ferramentas
+                    so_texto, turno.modelo = False, cfg["modelo"]
+                    modelo_f = cfg["modelo_ferramentas"] or turno.modelo
                 msgs += [{"role": "assistant", "content": r["texto"]}, {"role": "user", "content": COBRANCA}]
                 continue
             break
@@ -1013,14 +1096,17 @@ def _turno(turno: Turno) -> None:
         f"entrada, {saida} de saída, {tempo_ms / 1000:.1f} s (1ª palavra {primeira}; Ollama: carga "
         f"{m['carga_s']:.1f} s, prompt {m['prompt_s']:.1f} s, geração {m['geracao_s']:.1f} s)"
         + (" — interrompido" if parado else ""))
+    _pensar(turno, "fim", texto, voltas=voltas, parado=parado, tempo_ms=tempo_ms, tokens_entrada=entrada,
+            tokens_saida=saida)
     _terminar(turno, "parado" if parado else "fim", "fim", mensagem_id=mid, texto=texto, parado=parado,
               modelo=turno.modelo, tokens_entrada=entrada, tokens_saida=saida, tempo_ms=tempo_ms, voltas=voltas)
     try:   # depois do "fim": Pedro já tem a resposta; o worker (e ocupado()) segura só mais um pouco
-        _atualizar_resumo(turno.conversa_id, turno.modelo, cfg["num_ctx"])
+        _atualizar_resumo(turno.conversa_id, cfg["modelo"], cfg["num_ctx"])
     except Exception as e:
         log(f"[conversa] resumo falhou ({_curto(e)})")
     try:   # depois do resumo: se ele cortou o histórico, o prompt que vem é o novo
-        _aquecer(turno.conversa_id, modelo_f, ferramentas, cfg["num_ctx"])
+        # resumo e aquecimento no modelo padrão, não no do plano: o próximo turno costuma ser o completo
+        _aquecer(turno.conversa_id, cfg["modelo_ferramentas"] or cfg["modelo"], ferramentas, cfg["num_ctx"], think)
     except Exception as e:
         log(f"[conversa] aquecimento do próximo prompt falhou ({_curto(e)})")
 
@@ -1039,6 +1125,11 @@ def adicionar_parser(sub) -> None:
     sp = sub.add_parser("conversa-comprimir", help="conversas paradas viram resumo no cofre (conversas/) e fatos na "
                                                    "memória")
     sp.add_argument("--horas", type=float, default=COMPRIMIR_HORAS, help="horas sem mensagem para contar como parada")
+    sp = sub.add_parser("pensamentos", help="o que o Alfred raciocinou, decidiu e fez em cada turno (banco de "
+                                            "pensamentos)")
+    sp.add_argument("--turno", default=None, help="id de um turno")
+    sp.add_argument("--conversa", default=None, help="id de uma conversa")
+    sp.add_argument("-n", type=int, default=60, help="quantos registros (os mais recentes)")
 
 
 def _uma_linha(texto: str, n: int = 160) -> str:
@@ -1053,10 +1144,30 @@ def cmd_comprimir(args) -> int:
     return 1 if r["pendentes"] else 0
 
 
+def cmd_pensamentos(args) -> int:
+    turno = None
+    for r in pensamentos(args.turno, args.conversa, args.n):
+        if r["turno_id"] != turno:
+            turno = r["turno_id"]
+            print(f"\n══ turno {turno} · conversa {r['conversa_id']} · {r['origem']}")
+        d = r["dados"]
+        print(f"[{r['criada_em'][5:19].replace('T', ' ')}] {r['tipo']:<10} {_uma_linha(r['texto'], 600)}")
+        if r["tipo"] == "modelo":
+            for f in d.get("ferramentas") or []:
+                print(f"{'':<27}→ escolheu {f['nome']} {json.dumps(f['argumentos'], ensure_ascii=False)}")
+            if d.get("resposta"):
+                print(f"{'':<27}resposta ({d.get('modelo')}): {_uma_linha(d['resposta'], 400)}")
+        elif r["tipo"] == "ferramenta":
+            print(f"{'':<27}{json.dumps(d.get('argumentos'), ensure_ascii=False)} → {_uma_linha(d.get('resultado'), 300)}")
+        elif r["tipo"] == "aprovacao" and d.get("motivo"):
+            print(f"{'':<27}risco: {d['motivo']}")
+    return 0
+
+
 def cmd_conversa(args) -> int:
     cid = args.conversa or nova_conversa()["id"]
     try:
-        turno = enviar(cid, " ".join(args.texto), modelo=args.modelo)
+        turno = enviar(cid, " ".join(args.texto), modelo=args.modelo, origem="terminal")
     except (KeyError, ValueError, RuntimeError) as e:
         print(f"Erro: {e.args[0] if e.args else e}")
         return 1
@@ -1076,7 +1187,8 @@ def cmd_conversa(args) -> int:
             else:
                 print(f"  ↳ {ev['estado']}: {_uma_linha(ev['resultado'])}", flush=True)
         elif ev["tipo"] == "aprovar":
-            print(f"\n  ⚠ {ev['nome']} {json.dumps(ev['argumentos'], ensure_ascii=False)} precisa da sua aprovação.")
+            print(f"\n  ⚠ {ev['nome']} {json.dumps(ev['argumentos'], ensure_ascii=False)} precisa da sua aprovação"
+                  + (f" ({ev['motivo']})." if ev.get("motivo") else "."))
             try:
                 r = input("  Executar? [s/N] ").strip().lower()
             except (EOFError, KeyboardInterrupt):

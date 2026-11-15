@@ -185,6 +185,9 @@ class BaseConversa(Base):
                   mock.patch.object(conversa, "_stream_ollama", ollama),
                   mock.patch.object(conversa, "_aquecer", lambda *a, **k: None),   # chamada extra depois do turno
                   mock.patch.object(conversa, "_cfg", lambda: {"modelo": "m", "modelo_ferramentas": "", "num_ctx": 16384}),
+                  mock.patch.object(conversa.lib_orquestrador, "planejar",   # orquestrador neutro: o turno de sempre
+                                    lambda pedido, padrao="", padrao_ferramentas="": conversa.lib_orquestrador.Plano(
+                                        "ferramenta", padrao, padrao_ferramentas or padrao, "teste")),
                   mock.patch.object(conversa.lib_memoria, "contexto", lambda *a, **k: ""),
                   mock.patch.object(conversa.lib_rag, "contexto", lambda *a, **k: ""),
                   mock.patch.object(escrita.lib_rag, "buscar", lambda *a, **k: []),

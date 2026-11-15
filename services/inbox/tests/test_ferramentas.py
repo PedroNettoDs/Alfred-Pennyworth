@@ -152,7 +152,9 @@ class TestRegistro(Base):
         self.assertTrue(lf.esquemas()[0]["function"]["parameters"]["properties"])
 
     def test_marcacao_de_perigosas(self):
-        self.assertEqual({n for n in lf._REGISTRO if lf.perigosa(n)}, PERIGOSAS)
+        # sem argumentos, as de risco variável (arquivos e scripts) contam pelo pior caso
+        self.assertEqual({n for n in lf._REGISTRO if lf.perigosa(n)},
+                         PERIGOSAS | {"escrever_arquivo", "editar_arquivo", "executar_script"})
         self.assertFalse(lf.perigosa("nao_existe"))
         self.assertFalse(lf.perigosa("adicionar_tarefa"))
 
@@ -1185,3 +1187,89 @@ class TestWeb(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestArquivosEScripts(unittest.TestCase):
+    """Arquivos e scripts do computador: alcance (home, sem segredos) e aprovação só quando há risco."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.pasta = self.tmp / "ferramentas"
+        (self.pasta / "download").mkdir(parents=True)
+        (self.pasta / "download" / "baixar.py").write_text('"""Baixa um vídeo."""\nimport sys\nprint("baixei", sys.argv[1:])\n')
+        from _shared import lib_orquestrador
+        self.risco = mock.Mock(return_value=lib_orquestrador.Risco(True, "apaga arquivos: 'rm'", "regra"))
+        for p in (mock.patch.object(lf, "ARQUIVOS_ALFRED", self.tmp / "marcas.json"),
+                  mock.patch.object(lib_orquestrador, "avaliar_risco", self.risco),
+                  mock.patch.dict(os.environ, {"HOME": str(self.tmp), "PASTA_FERRAMENTAS": str(self.pasta),
+                                               "SEGREDO_DO_ENV": "xyz"})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_listar_e_ler(self):
+        self.assertIn("download/", lf.executar("listar_arquivos", {"caminho": "~/ferramentas"}))
+        self.assertIn("baixar.py", lf.executar("listar_arquivos", {"caminho": "~", "procurar": "baixar"}))
+        self.assertIn("download/baixar.py: Baixa um vídeo.", lf.executar("listar_scripts"))
+        self.assertIn('1\t"""Baixa um vídeo."""', lf.executar("ler_arquivo", {"caminho": "~/ferramentas/download/baixar.py"}))
+
+    def test_fora_da_home_e_segredos_sao_recusados(self):
+        (self.tmp / ".ssh").mkdir()
+        (self.tmp / ".ssh" / "config").write_text("x")
+        (self.tmp / ".env").write_text("TOKEN=1")
+        for caminho in ("/etc/passwd", "~/.ssh/config", "~/.env", "~/../fora.txt"):
+            self.assertTrue(lf.executar("ler_arquivo", {"caminho": caminho}).startswith("[erro]"), caminho)
+            self.assertTrue(lf.executar("escrever_arquivo", {"caminho": caminho, "conteudo": "x"}).startswith("[erro]"))
+        self.assertEqual((self.tmp / ".env").read_text(), "TOKEN=1")
+
+    def test_script_de_pedro_roda_sem_aprovacao_e_sem_o_env_do_alfred(self):
+        args = {"script": "download/baixar.py", "argumentos": "https://youtu.be/abc -q 720"}
+        self.assertFalse(lf.perigosa("executar_script", args))
+        saida = lf.executar("executar_script", args)
+        self.assertIn("rc=0", saida)
+        self.assertIn("baixei ['https://youtu.be/abc', '-q', '720']", saida)
+        (self.pasta / "env.py").write_text("import os\nprint(os.environ.get('SEGREDO_DO_ENV'))\n")
+        self.assertIn("None", lf.executar("executar_script", {"script": "env.py"}))
+
+    def test_script_criado_pelo_alfred_pede_o_sim_ate_ser_aprovado(self):
+        novo = {"caminho": "util/ola.py", "conteudo": '"""Diz olá."""\nprint("olá")\n'}
+        self.assertFalse(lf.perigosa("escrever_arquivo", novo))            # arquivo novo: livre
+        self.assertIn("Criado", lf.executar("escrever_arquivo", novo))
+        self.assertIn("criado pelo Alfred, ainda sem o sim", lf.executar("listar_scripts"))
+        self.assertEqual(lf.motivo_risco("executar_script", {"script": "util/ola.py"}),
+                         "script criado ou alterado pelo Alfred — apaga arquivos: 'rm'")
+        self.assertEqual(self.risco.call_args.args, ('"""Diz olá."""\nprint("olá")\n', "python"))   # avalia o conteúdo
+        self.assertIn("olá", lf.executar("executar_script", {"script": "util/ola.py"}))   # só depois do "sim"
+        self.assertFalse(lf.perigosa("executar_script", {"script": "util/ola.py"}))      # esta versão ficou aprovada
+        edicao = {"caminho": "util/ola.py", "trecho_antigo": '"olá"', "trecho_novo": '"oi"'}
+        self.assertFalse(lf.perigosa("editar_arquivo", edicao))            # arquivo do próprio Alfred
+        self.assertIn("Editado", lf.executar("editar_arquivo", edicao))
+        self.assertTrue(lf.perigosa("executar_script", {"script": "util/ola.py"}))       # versão nova: pede de novo
+
+    def test_script_do_alfred_sem_risco_roda_direto(self):
+        from _shared import lib_orquestrador
+        self.risco.return_value = lib_orquestrador.Risco(False, "só lê e imprime", "llm")
+        lf.executar("escrever_arquivo", {"caminho": "util/ola.py", "conteudo": 'print("olá")\n'})
+        self.assertFalse(lf.perigosa("executar_script", {"script": "util/ola.py"}))
+
+    def test_comando_so_pede_o_sim_com_risco(self):
+        from _shared import lib_orquestrador
+        self.risco.return_value = lib_orquestrador.Risco(False, "só comandos de leitura", "regra")
+        self.assertFalse(lf.perigosa("executar_comando", {"comando": "df -h"}))
+        self.risco.return_value = lib_orquestrador.Risco(True, "reinicia serviço", "regra")
+        self.assertEqual(lf.motivo_risco("executar_comando", {"comando": "systemctl --user restart x"}), "reinicia serviço")
+
+    def test_alterar_arquivo_de_pedro_ou_pasta_oculta_pede_o_sim(self):
+        self.assertIn("já existe", lf.motivo_risco("escrever_arquivo", {"caminho": "download/baixar.py", "conteudo": "x"}))
+        self.assertIn("já existe", lf.motivo_risco("editar_arquivo", {"caminho": "download/baixar.py",
+                                                                      "trecho_antigo": "a", "trecho_novo": "b"}))
+        self.assertIn("oculta", lf.motivo_risco("escrever_arquivo", {"caminho": "~/.config/autostart/x.desktop",
+                                                                     "conteudo": "x"}))
+        self.assertTrue(lf.executar("editar_arquivo", {"caminho": "download/baixar.py", "trecho_antigo": "nao tem",
+                                                       "trecho_novo": "b"}).startswith("[erro]"))
+
+    def test_timeout_mata_o_script(self):
+        (self.pasta / "lento.py").write_text("import time\ntime.sleep(30)\n")
+        t0 = time.monotonic()
+        self.assertIn("interrompido", lf.executar("executar_script", {"script": "lento.py", "timeout": 1}))
+        self.assertLess(time.monotonic() - t0, 10)

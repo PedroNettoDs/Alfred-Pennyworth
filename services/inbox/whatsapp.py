@@ -1123,7 +1123,8 @@ def notificar_pedro(pid: str, agrupada: Optional[dict] = None, enviar: bool = Tr
         res["erro"] = "WHATSAPP_NUMERO_PEDRO não definido"
         return res
     inst = (entry.get("whatsapp") or {}).get("instancia")   # a sessão que recebeu a mensagem é a que avisa
-    r = enviar_texto(destino, notif["texto"], inst=inst)   # rede fora da trava
+    r = enviar_texto(destino, notif["texto"], inst=inst, aviso=False)   # rede fora da trava
+    core.avisar_pendencia(entry, agrupada)   # no feed vai a pendência (com o link), não a cópia do texto do WhatsApp
     res["envio_texto"] = r
     if r.get("ok") and r.get("message_id") and not agrupada:
         with core.trava_pendencias():
@@ -2149,7 +2150,8 @@ def _acompanhar(turno, dizer, livres) -> tuple[Optional[str], bool]:
                 else:
                     _APROVACAO_WA["id"] = ev["id"]
                     args = json.dumps(ev.get("argumentos") or {}, ensure_ascii=False)[:300]
-                    dizer(f"⚠ Para executar *{ev['nome']}* {args}, responda *sim* ou *não* (5 min).")
+                    risco = f" Risco: {ev['motivo']}." if ev.get("motivo") else ""
+                    dizer(f"⚠ Para executar *{ev['nome']}* {args}, responda *sim* ou *não* (5 min).{risco}")
             elif ev["tipo"] == "ferramenta" and ev.get("estado") == "ok":
                 usou = True
             elif ev["tipo"] == "fim":
@@ -2203,7 +2205,7 @@ def _pedido_de_pedro(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: b
         return res
     log(f"[whatsapp] pedido de Pedro: {texto[:100]!r}")
     try:
-        turno = conversa.enviar(_conversa_do_whatsapp(), texto)   # sem `contexto`: com ele o gemma4 parou de usar as ferramentas (10/11)
+        turno = conversa.enviar(_conversa_do_whatsapp(), texto, origem="whatsapp")   # sem `contexto`: com ele o gemma4 parou de usar as ferramentas (10/11)
     except RuntimeError:
         res["motivo"] = "pedido anterior ainda em andamento"
         res["envio_confirmacao"] = dizer("Ainda estou no pedido anterior. Mande de novo em instantes.")
@@ -2214,13 +2216,17 @@ def _pedido_de_pedro(msg: dict, cfg: dict, res: dict, enviar: bool, notificar: b
     if resposta and not usou and _DIZ_QUE_FEZ.search(resposta):   # cobra uma vez antes de desistir do motor
         log(f"[whatsapp] pedido de Pedro: o modelo disse que fez sem usar ferramenta ({resposta[:80]!r}) → cobrando")
         try:
-            resposta, usou = _acompanhar(conversa.enviar(turno.conversa_id, COBRANCA), dizer, livres_)
+            conversa.pensar(turno.conversa_id, turno.id, "whatsapp", "cobranca",
+                            "a resposta diz que fez, mas nenhuma ferramenta rodou: cobrando num turno novo", resposta=resposta)
+            resposta, usou = _acompanhar(conversa.enviar(turno.conversa_id, COBRANCA, origem="whatsapp"), dizer, livres_)
         except Exception as e:
             log(f"[whatsapp] pedido de Pedro: a cobrança falhou ({e})")
         if not usou:
             log("[whatsapp] pedido de Pedro: de novo sem ferramenta → agenda direta")
             resposta = None
     if resposta is None and not usou:   # motor fora do ar ou resposta sem ação: ao menos o lembrete não se perde
+        conversa.pensar(turno.conversa_id, turno.id, "whatsapp", "queda",
+                        "o motor da conversa não agiu: o pedido vai para a agenda direta como lembrete", pedido=texto)
         return _nota_para_mim({**msg, "texto": texto, "tipo_msg": "texto"}, cfg, res, enviar, notificar, assistente=True)
     resposta = resposta or "✖ Deu erro depois de eu começar a executar. Confira no Painel antes de repetir."
     res["resposta"] = resposta

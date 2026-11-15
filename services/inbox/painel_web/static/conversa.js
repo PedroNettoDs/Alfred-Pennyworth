@@ -167,6 +167,7 @@
   function mostrarAprovacao(ev) {
     var cartao = novo("div", "aprovacao");
     cartao.appendChild(novo("p", "aprovacao__titulo", "Alfred quer executar " + ev.nome));
+    if (ev.motivo) cartao.appendChild(novo("p", "aprovacao__rotulo", "Risco: " + ev.motivo));
     cartao.appendChild(novo("p", "aprovacao__rotulo", "Argumentos"));
     cartao.appendChild(novo("pre", "aprovacao__texto", JSON.stringify(ev.argumentos || {}, null, 2)));
     var acoes = novo("div", "aprovacao__acoes");

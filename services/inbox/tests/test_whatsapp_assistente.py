@@ -138,7 +138,7 @@ class TestPedroFalaComOAlfred(BaseAssistente):
         d = self.receber("como está a placa de vídeo?", numero=PEDRO, nome="Pedro")
         self.assertEqual((d["acao"], d["resposta"]), ("pedido", "Pronto, senhor."), d)
         (cid, texto), kw = self.motor.call_args
-        self.assertEqual((cid, texto, kw), ("c1", "como está a placa de vídeo?", {}))   # o mesmo prompt do Painel
+        self.assertEqual((cid, texto, kw), ("c1", "como está a placa de vídeo?", {"origem": "whatsapp"}))   # o mesmo prompt do Painel
         conf = self.para(PEDRO)
         self.assertEqual([(e["conteudo"], e["instancia"]) for e in conf], [("Pronto, senhor.", "alfred-assistente")])
         self.assertEqual(agenda.listar(), [])
