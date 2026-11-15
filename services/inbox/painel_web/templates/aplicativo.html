@@ -1,0 +1,33 @@
+{#
+  Aplicativo do celular (/painel/aplicativo, só em 127.0.0.1). Vars de painel_app.tela():
+  ligado (bool: PAINEL_HOSTS_APP definido no .env) e, quando ligado: url (endereço que o aplicativo usa),
+  token (o da semana), validade ("dd/mm/aaaa hh:mm"), enviado (bool: já foi ao WhatsApp de Pedro),
+  qr_img (data-URI do SVG com {"u": url, "t": token}, ou "" sem o pacote segno).
+#}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block titulo %}Aplicativo{% endblock %}
+{% block conteudo %}
+{{ m.cabecalho("Aplicativo do celular", "O Alfred fora de casa, pela Tailscale", voltar=("/painel/sistema", "Sistema")) }}
+<div class="pilha">
+  {%- if not ligado %}
+  {{ m.aviso("neutro", "Desligado. Para ligar, ponha em PAINEL_HOSTS_APP, no .env, o IP ou o nome deste computador na Tailscale (ex.: 100.95.104.56) e reinicie a API.") }}
+  {%- else %}
+  <section class="cartao qr">
+    {%- if qr_img %}
+    <img class="qr__imagem" src="{{ qr_img }}" alt="QR code com o endereço e o token do aplicativo" width="264" height="264">
+    {%- endif %}
+    {{ m.chave_valor([("Endereço", url), ("Token da semana", token), ("Vale até", validade)]) }}
+    <p>No aplicativo, em Configuração: leia o QR code, ou cole o endereço e o token. O celular precisa estar com a Tailscale ligada.</p>
+    <p class="pequeno suave">{% if enviado %}Este token já foi enviado ao seu WhatsApp pelo número do Alfred.{% else %}O token segue para o seu WhatsApp pelo número do Alfred (com o WhatsApp simulado ou sem a sessão assistente, fica só aqui).{% endif %} Quando ele vence, o Alfred gera e manda outro.</p>
+  </section>
+  <section class="cartao">
+    <form class="lote__form" data-acao="/painel/api/aplicativo/token" data-apos-sucesso="recarregar">
+      <p>Gerar outro token desconecta o aplicativo na hora: use se o celular foi perdido ou se o token vazou.</p>
+      <div class="acoes">{{ m.botao("Gerar novo token") }}</div>
+      {{ m.resultado() }}
+    </form>
+  </section>
+  {%- endif %}
+</div>
+{% endblock %}

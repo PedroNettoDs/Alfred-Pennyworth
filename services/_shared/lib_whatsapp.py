@@ -35,6 +35,7 @@ from typing import Optional, Union
 
 import httpx
 
+from _shared import lib_db
 from _shared.lib_alfred import log, PROJECT_ROOT
 
 ENVIADOS_FILE = PROJECT_ROOT / "logs" / "whatsapp_enviados.jsonl"
@@ -221,12 +222,20 @@ def segundos_desde_ultimo_envio() -> Optional[float]:
 
 # ── Envio ─────────────────────────────────────────────────────
 
+def _copiar_para_avisos(destino: str, texto: str) -> None:
+    """O que foi para o WhatsApp de Pedro entra também no feed de avisos (lib_db.avisos), que o aplicativo lê."""
+    if destino == numero_pedro():
+        lib_db.registrar_aviso("whatsapp", "WhatsApp", texto)
+
+
 def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: int = 0,
-                 inst: Optional[str] = None) -> dict:
+                 inst: Optional[str] = None, aviso: bool = True) -> dict:
     """
     POST /message/sendText. `numero` = dígitos com DDI ou JID de grupo.
     `quoted` = {"key": {...}, "message": {...}} da mensagem original → aparece como resposta no WhatsApp.
     `inst` = instância (sessão) que envia; None = EVOLUTION_INSTANCE.
+    `aviso=False`: o texto enviado a Pedro não entra no feed de avisos (quem chama registra de outro jeito, ou o
+    texto é segredo).
     Retorna {"ok", "simulado", "message_id", "status"?, "resposta"?, "erro"?}.
     """
     destino = numero if eh_grupo(numero) else so_digitos(numero)
@@ -240,12 +249,16 @@ def enviar_texto(numero: str, texto: str, quoted: Optional[dict] = None, delay: 
         body["quoted"] = {"key": quoted["key"], "message": quoted.get("message") or {}}
     if simulado():
         mid = _registrar_simulado("texto", destino, texto, {"quoted": bool(quoted)}, inst)
+        if aviso:
+            _copiar_para_avisos(destino, texto)
         return {"ok": True, "simulado": True, "message_id": mid}
     _marcar_envio(None)              # antes do POST: o eco pode chegar antes da resposta
     r = _post(f"/message/sendText/{inst or instancia()}", body)
     r["simulado"] = False
     r["message_id"] = _message_id(r.get("resposta"))
     _marcar_envio(r["message_id"])
+    if aviso and r.get("ok"):        # só o que saiu: um envio que falha e é repetido não enche o feed
+        _copiar_para_avisos(destino, texto)
     return r
 
 

@@ -205,6 +205,49 @@ class TestCacheClassificacao(Base):
         self.assertIsNone(lib_db.cache_get("whatsapp", "k"))
 
 
+class TestAvisos(Base):
+    def test_registrar_e_listar_em_ordem(self):
+        a = lib_db.registrar_aviso("aviso", "Jornal do dia", "12 notícias", "/painel")
+        b = lib_db.registrar_aviso("whatsapp", "WhatsApp", "Hora do remédio")
+        self.assertLess(a, b)
+        self.assertEqual([(x["id"], x["tipo"], x["titulo"], x["texto"], x["link"]) for x in lib_db.avisos()],
+                         [(a, "aviso", "Jornal do dia", "12 notícias", "/painel"),
+                          (b, "whatsapp", "WhatsApp", "Hora do remédio", "")])
+        self.assertEqual([x["id"] for x in lib_db.avisos(desde=a)], [b])       # só os que chegaram depois
+        self.assertEqual(lib_db.avisos(desde=b), [])
+        self.assertEqual([x["id"] for x in lib_db.avisos(limite=1)], [b])      # sem `desde`: os mais recentes
+        self.assertIsNone(lib_db.registrar_aviso("aviso", " ", ""))            # vazio não entra
+
+    def test_mesmo_ref_na_janela_nao_duplica(self):
+        a = lib_db.registrar_aviso("pendencia", "Carlos", "Oi", ref="p1")
+        self.assertIsNone(lib_db.registrar_aviso("pendencia", "Carlos", "Oi de novo", ref="p1"))
+        self.assertIsNotNone(lib_db.registrar_aviso("pendencia", "Marina", "Olá", ref="p2"))
+        self.assertIsNotNone(lib_db.registrar_aviso("agenda", "Dentista", ref="p1"))   # outro tipo, outro aviso
+        con = lib_db._conectar()
+        with con:   # o primeiro aviso ficou velho: o mesmo ref volta a entrar (o lembrete horas depois)
+            con.execute("UPDATE avisos SET quando = quando - ? WHERE id = ?", (lib_db.AVISO_JANELA_S + 1, a))
+        con.close()
+        self.assertIsNotNone(lib_db.registrar_aviso("pendencia", "Carlos", "Lembrete", ref="p1"))
+
+    def test_podar_avisos(self):
+        velho = lib_db.registrar_aviso("aviso", "Antigo")
+        novo = lib_db.registrar_aviso("aviso", "Novo")
+        con = lib_db._conectar()
+        with con:
+            con.execute("UPDATE avisos SET quando = quando - ? WHERE id = ?", (31 * 86400, velho))
+        con.close()
+        self.assertEqual(lib_db.podar_avisos(0), 0)
+        self.assertEqual(lib_db.podar_avisos(), 1)
+        self.assertEqual([x["id"] for x in lib_db.avisos()], [novo])
+        self.assertGreater(lib_db.registrar_aviso("aviso", "Depois da poda"), novo)   # o id nunca volta atrás
+
+    def test_sem_banco_nao_levanta(self):
+        with mock.patch.dict(os.environ, {"ALFRED_DB": "", "VAULT_ALFRED": ""}):
+            self.assertIsNone(lib_db.registrar_aviso("aviso", "x"))
+            self.assertEqual(lib_db.avisos(), [])
+            self.assertEqual(lib_db.podar_avisos(), 0)
+
+
 def tearDownModule():
     shutil.rmtree(TMP, ignore_errors=True)
 

@@ -38,6 +38,7 @@ itens vencidos. Rode um único processo (sem --workers / --reload) para não dup
 
 import json
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -57,6 +58,7 @@ load_env(override=False)
 import core  # noqa: E402
 import whatsapp  # noqa: E402
 import promessas  # noqa: E402
+import app_token  # noqa: E402
 import remedios  # noqa: E402
 import semanal  # noqa: E402
 from _shared import lib_db  # noqa: E402
@@ -87,6 +89,10 @@ def _laco_fila_whatsapp(parar: threading.Event):
             remedios.passar()
         except Exception as e:
             log(f"[remedios] erro inesperado ({e})")
+        try:
+            app_token.passar()   # token semanal do aplicativo do celular: gera o que venceu e manda a Pedro
+        except Exception as e:
+            log(f"[app] erro inesperado ({e})")
         if parar.wait(FILA_INTERVALO_S):
             return
 
@@ -157,6 +163,29 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Alfred Inbox", version="1.1.0", lifespan=lifespan)
+
+_AUDIO_DA_PENDENCIA = re.compile(r"/pendencias/[^/]+/audio")   # o <audio> da tela da pendência, com a sessão do Painel
+
+
+class _PortaoTailnet:
+    """Um aparelho da tailnet (o aplicativo do celular, ver app_token.py) só alcança o Painel, e sem o cabeçalho
+    Authorization: o token mestre e as rotas dele (/health, /pendencias, /whatsapp…) não valem de fora da máquina.
+    ASGI puro, e não @app.middleware: assim o SSE das rotas continua vendo quando o cliente desconecta."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and app_token.da_tailnet((scope.get("client") or ("",))[0]):
+            caminho = scope.get("path", "")
+            if not (caminho == "/painel" or caminho.startswith("/painel/") or _AUDIO_DA_PENDENCIA.fullmatch(caminho)):
+                await JSONResponse({"detail": "Forbidden"}, status_code=403)(scope, receive, send)
+                return
+            scope = {**scope, "headers": [h for h in scope["headers"] if h[0] != b"authorization"]}
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_PortaoTailnet)
 
 
 def _msg_erro(e: Exception) -> str:
@@ -767,6 +796,8 @@ if painel is not None:
     app.include_router(painel_ferramentas.router)
     import painel_voz  # noqa: E402  (microfone das telas de conversa: /painel/api/voz)
     app.include_router(painel_voz.router)
+    import painel_app  # noqa: E402  (aplicativo do celular: tela do token semanal e o JSON que ele lê)
+    app.include_router(painel_app.router)
 
 
 if __name__ == "__main__":

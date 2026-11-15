@@ -16,6 +16,7 @@ import httpx
 
 from tests.test_whatsapp_assistente import BaseAssistente, FIM, PEDRO, turno_falso
 from tests.test_whatsapp import core, main, whatsapp
+from _shared import lib_db
 from _shared import lib_ferramentas as lf
 import pesquisa
 import remedios
@@ -371,3 +372,23 @@ class TestFerramentas(Base):
     def test_intervalo_invalido_nao_cria(self):
         self.assertIn("intervalo", lf.executar("criar_lembrete_remedio", {"nome": "Dipirona", "intervalo_horas": 0}))
         self.assertEqual(remedios.listar(), [])
+
+
+class TestAvisos(Base):
+    """A dose no feed de avisos (lib_db.avisos), que o aplicativo do celular lê."""
+
+    def test_dose_pergunta_e_fim_do_tratamento(self):
+        marco = (lib_db.avisos(limite=1) or [{"id": 0}])[-1]["id"]
+        r = self.criar(dias=0.2)                                # tratamento de 4,8 h: só cabe uma dose de 8 em 8
+        remedios.passar(self.t0)
+        (a,) = lib_db.avisos(desde=marco)
+        self.assertEqual((a["tipo"], a["titulo"], a["ref"]), ("remedio", "Tomar Amoxicilina", remedios.recados()[0]["id"]))
+        self.assertIn("14:05", a["texto"])
+        remedios.passar(self.t0 + minutos(5))                   # a mesma dose não avisa de novo
+        self.assertEqual(len(lib_db.avisos(desde=marco)), 1)
+        remedios.passar(self.t0 + minutos(10))                  # sem o "tomei": a pergunta do WhatsApp é outro aviso
+        self.assertEqual([x["tipo"] for x in lib_db.avisos(desde=marco)], ["remedio", "whatsapp"])
+        self.assertIn("Amoxicilina", lib_db.avisos(desde=marco)[1]["texto"])
+        remedios.tomei(r["id"], self.t0 + minutos(11))
+        remedios.passar(self.t0 + minutos(11) + H8)             # a próxima dose já cai fora do tratamento
+        self.assertEqual(lib_db.avisos(desde=marco)[-1]["titulo"], "Fim do tratamento: Amoxicilina")

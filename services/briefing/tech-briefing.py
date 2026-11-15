@@ -28,6 +28,7 @@ from _shared.lib_alfred import (
     log, slugify, ollama_generate, ollama_embed_batch, searxng_search,
     deduplicate_by_url_and_title, vault_write, gravar_atomico,
 )
+from _shared import lib_db
 from _shared.perfis import get_briefing, list_all
 from _shared.lib_templates import render_template
 from _shared.lib_cluster import cluster_items, rank_clusters, build_clustered_news_text
@@ -545,6 +546,7 @@ def _run_briefing_nomeado(briefing_cfg: dict, briefing_name: str):
 
     # ── Notificação ───────────────────────────────────────────
     audio_nota = "Áudio disponível." if mp3_path else "Somente markdown."
+    lib_db.registrar_aviso("aviso", briefing_name, f"{titulo_manchete}\n{len(unique)} fontes · {audio_nota}")
     try:
         subprocess.run([
             "notify-send", "--icon=dialog-information", "--urgency=normal",
@@ -688,6 +690,7 @@ def _run_adhoc(tema: str):
         mp3_path = None
 
     # ── Notificação ───────────────────────────────────────────
+    lib_db.registrar_aviso("aviso", "Briefing ad-hoc", f"{titulo}\nTema: {tema} · {len(unique)} fontes")
     try:
         subprocess.run([
             "notify-send", "--icon=dialog-information", "--urgency=normal",

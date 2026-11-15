@@ -274,7 +274,7 @@ class TestVigiaFallback(unittest.TestCase):
         avisos = []
         with mock.patch.object(vigia.subprocess, "run", run), \
              mock.patch.object(vigia.shutil, "which", lambda *a, **k: "/usr/bin/python3"), \
-             mock.patch.object(vigia.core, "_notify", lambda t, c: avisos.append(t)):
+             mock.patch.object(vigia.core, "_notify", lambda t, c, **k: avisos.append(t)):
             self.assertEqual(vigia.aguardar_qr("HTTP 404"), 0)
         return avisos
 

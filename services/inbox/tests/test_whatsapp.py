@@ -1204,6 +1204,50 @@ class TestHistoricoECache(Base):
         self.assertEqual(r.json()["classificacao"]["origem"], "llm")
 
 
+class TestAvisos(Base):
+    """A pendência no feed de avisos (lib_db.avisos), que o aplicativo do celular lê."""
+
+    def setUp(self):
+        super().setUp()
+        con = lib_db._conectar()
+        with con:   # feed vazio a cada teste: a mesma pendência (mesmo ref) de um teste anterior não entraria de novo
+            con.execute("DELETE FROM avisos")
+        con.close()
+
+    def novos(self):
+        return lib_db.avisos()
+
+    def test_pendencia_nova_um_aviso_so(self):
+        """O desktop e o WhatsApp avisam a mesma pendência: no feed é um aviso, com o link dela no Painel."""
+        d = self.post_webhook("evolution_texto.json", notificar="true").json()
+        self.assertEqual(d["acao"], "pendencia_criada", d)
+        pid = d["pendencia"]["id"]
+        self.assertTrue(self.enviados())                       # o resumo saiu no WhatsApp de Pedro...
+        (a,) = self.novos()                                    # ...e não virou um segundo aviso
+        self.assertEqual((a["tipo"], a["link"], a["ref"]), ("pendencia", f"/painel/pendencias/{pid}", pid))
+        self.assertEqual((a["titulo"], a["texto"]), (d["pendencia"]["titulo"], d["pendencia"]["whatsapp"]["texto"]))
+
+    def test_mensagem_agrupada_e_lembrete_entram_de_novo(self):
+        pid = self.post_webhook("evolution_texto.json", notificar="true").json()["pendencia"]["id"]
+        whatsapp.notificar_pedro(pid, agrupada={"tipo_msg": "texto", "texto": "E o prazo?"})
+        self.assertEqual([(a["texto"], a["ref"]) for a in self.novos()][1], ("E o prazo?", ""))
+        con = lib_db._conectar()
+        with con:   # horas depois, o lembrete da mesma pendência é outro aviso
+            con.execute("UPDATE avisos SET quando = quando - 7200")
+        con.close()
+        core.notificar_pendencia(core.obter_pendencia(pid))
+        self.assertEqual([a["ref"] for a in self.novos()], [pid, "", pid])
+
+    def test_pendencia_de_email(self):
+        entry = {"id": "20261112-convite", "tipo": "evento", "titulo": "Convite: banca de TCC",
+                 "evento": {"data_inicio": "2026-11-20T19:00"}}
+        with mock.patch.object(core, "_tem_gui", lambda: False):
+            core.notificar_pendencia(entry)
+        (a,) = self.novos()
+        self.assertEqual((a["tipo"], a["titulo"], a["texto"], a["link"]),
+                         ("pendencia", "Convite: banca de TCC", "2026-11-20T19:00", "/painel/pendencias/20261112-convite"))
+
+
 class TestCacheEmail(unittest.TestCase):
     """core.classificar + lib_db: remetente de envio em massa que cai sempre numa categoria não acionável."""
 

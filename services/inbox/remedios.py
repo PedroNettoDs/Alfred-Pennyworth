@@ -31,7 +31,7 @@ import yaml
 import core
 import pesquisa
 import whatsapp
-from _shared import lib_atividade, lib_whatsapp
+from _shared import lib_atividade, lib_db, lib_whatsapp
 from _shared.lib_alfred import log, ollama_generate_json
 from _shared.lib_templates import render_template
 
@@ -336,12 +336,14 @@ def passar(agora: Optional[datetime] = None) -> list[tuple[str, str]]:
                 perguntar.append(r)
         if abertas or acabados:
             _save(data)
-    for r in acabados:
+    for r in acabados:   # cada aviso vai ao pet (lib_atividade) e ao feed que o aplicativo lê (lib_db.avisos)
         log(f"[remedios] {r['nome']}: fim do tratamento, lembrete encerrado")
         lib_atividade.evento("remedio", f"Fim do tratamento: {r['nome']}")
+        lib_db.registrar_aviso("remedio", f"Fim do tratamento: {r['nome']}")
         feitos.append(("fim", r["id"]))
     for r in abertas:
         lib_atividade.evento("remedio", f"Tomar {r['nome']}")
+        lib_db.registrar_aviso("remedio", f"Tomar {r['nome']}", _detalhe(r), ref=_id_recado(r))
         feitos.append(("dose", r["id"]))
     for r in perguntar:
         enviou = _enviar_a_pedro(_pergunta(r))

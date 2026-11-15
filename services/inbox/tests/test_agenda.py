@@ -31,7 +31,7 @@ import agenda    # noqa: E402
 import agenda_semanal  # noqa: E402
 import promessas  # noqa: E402
 import whatsapp  # noqa: E402
-from _shared import lib_whatsapp  # noqa: E402
+from _shared import lib_db, lib_whatsapp  # noqa: E402
 
 
 def _amanha(h=15, m=0):
@@ -160,6 +160,15 @@ class TestNotificacao(Base):
     def _item(self):
         return agenda.adicionar("Colocar num docx", _amanha(), tipo="tarefa", notificar=False)
 
+    def test_item_notificado_entra_no_feed_de_avisos(self):
+        marco = (lib_db.avisos(limite=1) or [{"id": 0}])[-1]["id"]
+        item = self._item()
+        agenda.notificar_item(item)
+        (a,) = lib_db.avisos(desde=marco)   # o que o aplicativo do celular lê
+        self.assertEqual((a["tipo"], a["titulo"], a["link"], a["ref"]),
+                         ("agenda", "Tarefa na agenda", f"/painel/agenda/{item['id']}", item["id"]))
+        self.assertIn("Colocar num docx", a["texto"])
+
     def _clicar(self, resposta, abriu=True):
         """Roda o aguardador com a notificação respondendo `resposta`. → (id, botões, urls abertas, avisos)."""
         item = self._item()
@@ -175,7 +184,7 @@ class TestNotificacao(Base):
 
         with mock.patch.object(self.cli, "_notificacao_dbus", notificacao), \
              mock.patch.object(core, "abrir_no_navegador", navegador), \
-             mock.patch.object(core, "_notify", lambda _t, c: avisos.append(c)), \
+             mock.patch.object(core, "_notify", lambda _t, c, **k: avisos.append(c)), \
              mock.patch.dict(os.environ, {"PORT_INBOX": "7073"}):
             self.assertEqual(self.cli.cmd_aguardar_agenda(mock.Mock(id=item["id"])), 0)
         return item["id"], botoes, urls, avisos

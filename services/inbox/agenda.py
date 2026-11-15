@@ -632,11 +632,15 @@ def concluir(aid: str, via: str = "painel", propagar: bool = True) -> dict:
 # ══════════════════════════════════════════════════════════════
 
 def notificar_item(item: dict) -> None:
-    """Notificação com [Ok] [Mais detalhes] [Desfazer] num processo destacado (mesmo esquema das pendências)."""
+    """Notificação com [Ok] [Mais detalhes] [Desfazer] num processo destacado (mesmo esquema das pendências).
+    O mesmo texto entra no feed de avisos (lib_db.avisos), que o aplicativo lê."""
+    titulo, corpo = texto_notificacao(item)
+    core.lib_db.registrar_aviso("agenda", titulo.removeprefix("Alfred — "), corpo, f"/painel/agenda/{item['id']}",
+                                item["id"])
     if core._tem_gui():
         core._iniciar_aguardador("_aguardar-agenda", item["id"])
     else:
-        core._notify("Alfred — incluído na agenda", f"{item['titulo']} — {_quando_legivel(item)}")
+        core._notify("Alfred — incluído na agenda", f"{item['titulo']} — {_quando_legivel(item)}", aviso=False)
 
 
 def _descricao_breve(item: dict) -> str:

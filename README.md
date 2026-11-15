@@ -153,6 +153,8 @@ Alfred-Pennyworth/
 │   ├── n8n/                        # Workflows e credenciais do N8N
 │   └── evolution/                  # Sessão do WhatsApp (instances/) e PostgreSQL da Evolution API
 │
+├── app/                            # Aplicativo Android (Flutter): avisos, lembretes, conversa e o Painel, pela Tailscale
+│
 ├── docs/
 │   ├── Alfred.png                  # Avatar/ícone do Alfred
 │   ├── Alfred-Pennyworth-v2-Guia-Reconstrucao.md  # Guia de reconstrução do projeto
@@ -180,6 +182,7 @@ Alfred-Pennyworth/
 │   │   ├── inbox-assistant.py         # CLI (ciclo, scan, jornal, pendencias, responder, responder-texto, whatsapp, ouvir, conversa)
 │   │   ├── main.py                    # FastAPI :7073 — fachada HTTP para o N8N e webhook da Evolution
 │   │   ├── painel.py                  # Painel do Alfred (/painel, só 127.0.0.1): telas e ações de aprovação
+│   │   ├── app_token.py, painel_app.py  # Aplicativo do celular: token semanal, tela do QR code e o JSON que ele lê
 │   │   ├── pesquisa.py                # aba Pesquisar: cliente do researcher, leitura de research/ e o botão do OpenNotebook
 │   │   ├── painel_web/                # Templates Jinja2 + painel.css / painel.js do painel (sem build)
 │   │   ├── n8n/                       # Workflows importáveis (ciclo, aguardar resposta, whatsapp)
@@ -317,6 +320,7 @@ Depois, o mesmo `services/scripts/instalar.sh` (no Ubuntu ele usa `sg docker` at
 | Ollama (11434), API do inbox (7073), shell executor (7071), researcher (7072) | `0.0.0.0` | o próprio PC e os containers do Alfred; a rede local só é barrada **com o ufw ativo e entrada DROP** — sem isso, essas portas ficam abertas na rede local |
 | SearXNG (8889), ChromaDB (8001), N8N (5679) | `DOCKER_BIND_IP` (`127.0.0.1` nas instalações novas) | só o próprio PC |
 | Evolution API (8081) | `127.0.0.1` | só o próprio PC |
+| Painel pela Tailscale (7073, opcional: `PAINEL_HOSTS_APP`) | `0.0.0.0`, a mesma porta da API | o [aplicativo do celular](app/README.md), com o token semanal. Um aparelho da tailnet só chega a `/painel/*`; o resto da API responde 403 para ele |
 
 Os containers chegam ao host por `172.17.0.1` (webhook da Evolution e N8N → API do inbox), mas o
 tráfego entra pela bridge da rede `alfred-net`, que tem nome fixo (`br-alfred`, no `docker-compose.yml`). Com o ufw
@@ -872,7 +876,7 @@ Integração com WhatsApp via Evolution API: mensagens e áudios recebidos (tran
 
 | Componente         | Função                                              | Status          |
 |--------------------|-----------------------------------------------------|-----------------|
-| Cloudflare Tunnel  | Acesso externo seguro sem expor portas no roteador  | 🔲 Planejado    |
+| Cloudflare Tunnel  | Acesso externo seguro sem expor portas no roteador  | 🔲 Planejado (o [aplicativo do celular](app/README.md) usa a Tailscale, sem túnel) |
 | Redis              | Filas e cache para workflows N8N de alta frequência | 🔲 Planejado    |
 | Grafana            | Monitoramento de uso de GPU, RAM e saúde dos serviços | 🔲 Planejado  |
 | Traefik            | Reverse proxy com SSL automático para os containers | 🔲 Planejado    |

@@ -1,13 +1,15 @@
 """
 Alfred — SQLite + FTS5 compartilhado (busca local, histórico do WhatsApp, cache de classificação).
 
-Três usos, um arquivo só ($VAULT_ALFRED/.alfred/alfred.db — o Obsidian ignora pastas com ponto):
+Quatro usos, um arquivo só ($VAULT_ALFRED/.alfred/alfred.db — o Obsidian ignora pastas com ponto):
 
   1. notas   — índice FTS5 dos .md dos cofres (DERIVADO: apague o .db e `indexar` reconstrói tudo).
   2. wa_msgs — histórico das mensagens do WhatsApp (texto/transcrição). Única tabela gravada direto;
                só alimenta a busca e o contexto do prompt. Retenção em dias (`podar_wa`).
   3. cache_classif — resultado do LLM para remetentes que sempre caem numa categoria não acionável
                (promoção, spam...). Só pula o modelo depois de `MINIMO_CONFIRMACOES` respostas iguais.
+  4. avisos  — o que o Alfred avisou a Pedro (WhatsApp, notificação do desktop, dose de remédio), em ordem:
+               o feed que o aplicativo do celular lê e acompanha. Retenção em dias (`podar_avisos`).
 
 Os .md e o YAML continuam sendo a fonte de verdade. Nenhuma função levanta exceção: falha de
 SQLite degrada com log() e devolve vazio/None (o chamador cai no caminho sem banco).
@@ -17,6 +19,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import unicodedata
 from contextlib import closing
 from datetime import datetime, timedelta
@@ -32,6 +35,9 @@ except ImportError:  # carregado por caminho, fora do pacote (testes)
 TOKENIZER = "unicode61 remove_diacritics 2"
 MINIMO_CONFIRMACOES = 3          # o LLM precisa dar a mesma categoria N vezes antes do cache pular o modelo
 CACHE_TTL_DIAS = 30
+AVISO_JANELA_S = 120             # o mesmo `ref` de novo dentro disto é o mesmo aviso por outro canal: não repete
+AVISO_TEXTO_MAX = 4000
+AVISOS_DIAS = 30
 
 _SCHEMA = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS notas USING fts5(
@@ -55,6 +61,9 @@ END;
 CREATE TABLE IF NOT EXISTS cache_classif(
     canal TEXT, chave TEXT, categoria TEXT, resultado TEXT, confirmacoes INTEGER DEFAULT 1,
     usos INTEGER DEFAULT 0, criado TEXT, confirmado TEXT, usado TEXT, PRIMARY KEY(canal, chave));
+
+CREATE TABLE IF NOT EXISTS avisos(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, quando REAL, tipo TEXT, titulo TEXT, texto TEXT, link TEXT, ref TEXT);
 """
 
 
@@ -418,6 +427,69 @@ def cache_put(canal: str, chave: str, resultado: dict, cacheavel: bool = True) -
                             (canal, chave, cat, json.dumps(resultado, ensure_ascii=False), agora, agora))
     except sqlite3.Error as e:
         log(f"[db] cache_put falhou: {e}")
+
+
+# ══════════════════════════════════════════════════════════════
+#  4. Avisos (o feed do aplicativo)
+# ══════════════════════════════════════════════════════════════
+
+def registrar_aviso(tipo: str, titulo: str, texto: str = "", link: str = "", ref: str = "") -> Optional[int]:
+    """
+    Guarda um aviso dado a Pedro. `tipo`: whatsapp | aviso | pendencia | agenda | remedio. `link`: caminho no Painel
+    ("/painel/pendencias/<id>") ou "". `ref` identifica a ocorrência: o mesmo tipo e ref dentro de AVISO_JANELA_S
+    não entra de novo (a pendência avisada no desktop e, em seguida, no WhatsApp). → id do aviso, ou None.
+    """
+    titulo, texto = (titulo or "").strip(), (texto or "").strip()[:AVISO_TEXTO_MAX]
+    if not titulo and not texto:
+        return None
+    con = _conectar()
+    if not con:
+        return None
+    agora = time.time()
+    try:
+        with closing(con), con:
+            if ref and con.execute("SELECT 1 FROM avisos WHERE tipo=? AND ref=? AND quando > ?",
+                                   (tipo, ref, agora - AVISO_JANELA_S)).fetchone():
+                return None
+            return con.execute("INSERT INTO avisos(quando, tipo, titulo, texto, link, ref) VALUES (?,?,?,?,?,?)",
+                               (agora, tipo, titulo, texto, link or "", ref or "")).lastrowid
+    except sqlite3.Error as e:
+        log(f"[db] registrar_aviso falhou: {e}")
+        return None
+
+
+def avisos(desde: Optional[int] = None, limite: int = 50) -> list[dict]:
+    """Avisos em ordem de chegada: sem `desde`, os `limite` mais recentes; com `desde`, os de id maior que ele.
+    → [{id, quando (epoch), tipo, titulo, texto, link, ref}]."""
+    con = _conectar()
+    if not con:
+        return []
+    try:
+        with closing(con):
+            if desde is None:
+                rows = con.execute("SELECT * FROM avisos ORDER BY id DESC LIMIT ?", (int(limite),)).fetchall()[::-1]
+            else:
+                rows = con.execute("SELECT * FROM avisos WHERE id > ? ORDER BY id LIMIT ?",
+                                   (int(desde), int(limite))).fetchall()
+    except sqlite3.Error as e:
+        log(f"[db] avisos falhou: {e}")
+        return []
+    return [dict(r) for r in rows]
+
+
+def podar_avisos(dias: float = AVISOS_DIAS) -> int:
+    """Apaga avisos de mais de `dias` dias (dias <= 0 = não apaga). Retorna quantos saíram."""
+    if dias is None or float(dias) <= 0:
+        return 0
+    con = _conectar()
+    if not con:
+        return 0
+    try:
+        with closing(con), con:
+            return con.execute("DELETE FROM avisos WHERE quando < ?", (time.time() - float(dias) * 86400,)).rowcount
+    except sqlite3.Error as e:
+        log(f"[db] podar_avisos falhou: {e}")
+        return 0
 
 
 def estatisticas() -> dict:

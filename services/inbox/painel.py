@@ -10,7 +10,9 @@ grava YAML.
 
 Segurança (toda rota /painel/*, inclusive login e estáticos):
   - só 127.0.0.1/::1 (a API escuta em 0.0.0.0 por causa do Docker: containers chegam como 172.17.x.x)
-    e header Host local (anti DNS-rebinding);
+    e header Host local (anti DNS-rebinding). Única exceção, e só com PAINEL_HOSTS_APP no .env: o aplicativo do
+    celular, que chega pela Tailscale e entra com o token semanal (app_token.py), nunca com o token mestre;
+    a sessão dele (a1) é separada da local (v1) e acaba com o token da semana;
   - sessão sem estado no servidor: cookie `alfred_painel` = v1.<expira>.<nonce>.<HMAC(token)>, HttpOnly,
     SameSite=Strict, PAINEL_SESSAO_DIAS (padrão 7). Trocar o token invalida todas as sessões;
   - POST exige X-CSRF-Token (HMAC do nonce da sessão) e Origin/Referer da própria origem;
@@ -47,6 +49,7 @@ from markupsafe import Markup, escape
 from starlette.concurrency import run_in_threadpool
 
 import agenda
+import app_token
 import core
 import integracoes
 import limpeza
@@ -90,9 +93,20 @@ def _hostname(host: str) -> str:
     return host.split(":")[0]
 
 
-def _rede_ok(request: Request) -> bool:
+def _classe(request: Request) -> str:
+    """De onde vem o pedido: "local" (127.0.0.1 com Host local), "app" (um aparelho da tailnet chamando um dos
+    nomes de PAINEL_HOSTS_APP: o aplicativo do celular, ver app_token.py) ou "" (recusado)."""
     cliente = (request.client.host if request.client else "") or ""
-    return cliente in CLIENTES_LOCAIS and _hostname(request.headers.get("host", "")) in HOSTS_LOCAIS
+    host = _hostname(request.headers.get("host", ""))
+    if cliente in CLIENTES_LOCAIS and host in HOSTS_LOCAIS:
+        return "local"
+    if app_token.da_tailnet(cliente) and host in app_token.hosts():
+        return "app"
+    return ""
+
+
+def _rede_ok(request: Request) -> bool:
+    return bool(_classe(request))
 
 
 def _erro(codigo: int, texto: str, **extra) -> JSONResponse:
@@ -168,11 +182,17 @@ def dias_sessao() -> float:
     return d
 
 
-def _nova_sessao() -> tuple[str, int]:
-    """→ (valor do cookie, max_age em segundos)."""
+def _nova_sessao(app: Optional[dict] = None) -> tuple[str, int]:
+    """→ (valor do cookie, max_age em segundos). `app` = o token semanal em vigor (app_token.conferir): sessão do
+    aplicativo (prefixo a1), assinada também com ele e que não passa da validade dele. Só vale pela tailnet, e a
+    sessão local (v1) só vale em 127.0.0.1 (_nonce_da_sessao)."""
     max_age = int(dias_sessao() * 86400)
+    if app:
+        max_age = max(1, min(max_age, int(app["expira_em"] - time.time())))
     expira = int(time.time()) + max_age
     nonce = secrets.token_urlsafe(18)
+    if app:
+        return f"a1.{expira}.{nonce}." + _hmac(f"painel-sessao|{expira}|{nonce}|{app['token']}"), max_age
     return f"v1.{expira}.{nonce}.{_hmac(f'painel-sessao|{expira}|{nonce}')}", max_age
 
 
@@ -181,12 +201,19 @@ def _nonce_da_sessao(request: Request) -> Optional[str]:
     if not _token():
         return None
     partes = (request.cookies.get(COOKIE) or "").split(".")
-    if len(partes) != 4 or partes[0] != "v1" or not (partes[1].isascii() and partes[1].isdigit()):
+    classe = _classe(request)
+    if (len(partes) != 4 or partes[0] != {"local": "v1", "app": "a1"}.get(classe)
+            or not (partes[1].isascii() and partes[1].isdigit())):
         return None
     _v, expira, nonce, assinatura = partes
+    assinado = f"painel-sessao|{expira}|{nonce}"
+    if classe == "app":   # a sessão do aplicativo acaba com o token da semana (venceu ou Pedro gerou outro)
+        semanal = app_token.atual()
+        if not semanal:
+            return None
+        assinado += f"|{semanal['token']}"
     # compara bytes: compare_digest(str, str) levanta TypeError com caractere não ASCII (cookie forjado → 500)
-    if not hmac.compare_digest(assinatura.encode("utf-8", "surrogateescape"),
-                               _hmac(f"painel-sessao|{expira}|{nonce}").encode("utf-8")):
+    if not hmac.compare_digest(assinatura.encode("utf-8", "surrogateescape"), _hmac(assinado).encode("utf-8")):
         return None
     if int(expira) <= time.time():
         return None
@@ -197,7 +224,7 @@ def _nonce_da_sessao(request: Request) -> Optional[str]:
 
 
 def sessao_valida(request: Request) -> bool:
-    """Para main.py (GET /pendencias/{id}/audio): sessão do painel vinda da própria máquina."""
+    """Para main.py (GET /pendencias/{id}/audio): sessão do painel vinda da própria máquina ou do aplicativo."""
     return _rede_ok(request) and _nonce_da_sessao(request) is not None
 
 
@@ -214,7 +241,7 @@ def _origem_ok(request: Request) -> bool:
         return False
     host = request.headers.get("host", "").lower()
     return (partes.scheme in ("http", "https") and partes.netloc.lower() == host
-            and _hostname(partes.netloc) in HOSTS_LOCAIS)
+            and _hostname(partes.netloc) in (*HOSTS_LOCAIS, *app_token.hosts()))
 
 
 def _checar_post(request: Request) -> Optional[JSONResponse]:
@@ -1197,18 +1224,24 @@ def estatico(nome: str):
                     headers={"Cache-Control": "no-cache"})   # local e pequeno: sempre a versão atual
 
 
+def _login_html(request: Request, **ctx) -> str:
+    return _render("login.html", app=_classe(request) == "app", **ctx)
+
+
 @router.get("/login")
 def login_pagina(request: Request, proximo: Optional[str] = None):
     if _nonce_da_sessao(request):
         return RedirectResponse(_proximo_seguro(proximo) or "/painel", status_code=303)
     erro = "" if _token() else "SHELL_EXECUTOR_TOKEN não definido no .env"
-    return HTMLResponse(_render("login.html", proximo=_proximo_seguro(proximo), erro=erro))
+    return HTMLResponse(_login_html(request, proximo=_proximo_seguro(proximo), erro=erro))
 
 
 @router.post("/login")
 async def login(request: Request):
+    """Em 127.0.0.1 entra o SHELL_EXECUTOR_TOKEN; pela tailnet (o aplicativo), só o token semanal de app_token.py:
+    o token mestre nunca é aceito de fora da máquina."""
     if not _origem_ok(request):
-        return HTMLResponse(_render("login.html", erro=MSG_CSRF), status_code=403)
+        return HTMLResponse(_login_html(request, erro=MSG_CSRF), status_code=403)
     try:
         campos = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
     except UnicodeDecodeError:
@@ -1217,13 +1250,15 @@ async def login(request: Request):
     proximo = _proximo_seguro((campos.get("proximo") or [""])[0])
     token = _token()
     if not token:
-        return HTMLResponse(_render("login.html", erro="SHELL_EXECUTOR_TOKEN não definido no .env", proximo=proximo),
+        return HTMLResponse(_login_html(request, erro="SHELL_EXECUTOR_TOKEN não definido no .env", proximo=proximo),
                             status_code=401)
-    if not hmac.compare_digest(digitado.encode("utf-8"), token.encode("utf-8")):
+    semanal = app_token.conferir(digitado) if _classe(request) == "app" else None
+    if not semanal and (_classe(request) == "app"
+                        or not hmac.compare_digest(digitado.encode("utf-8"), token.encode("utf-8"))):
         await asyncio.sleep(ATRASO_LOGIN_FALHO)
         # nunca ecoa o que foi digitado
-        return HTMLResponse(_render("login.html", erro="Token inválido", proximo=proximo), status_code=401)
-    valor, max_age = _nova_sessao()
+        return HTMLResponse(_login_html(request, erro="Token inválido", proximo=proximo), status_code=401)
+    valor, max_age = _nova_sessao(semanal)
     resp = RedirectResponse(proximo or "/painel", status_code=303)
     resp.set_cookie(COOKIE, valor, max_age=max_age, path="/", httponly=True, samesite="Strict")
     return resp

@@ -1,6 +1,7 @@
 {#
   Login do painel. Variável opcional: erro (str) — ex.: "Token inválido" ou
-  "SHELL_EXECUTOR_TOKEN não definido no .env"; proximo (str) — caminho /painel… para voltar após entrar.
+  "SHELL_EXECUTOR_TOKEN não definido no .env"; proximo (str) — caminho /painel… para voltar após entrar;
+  app (bool) — o pedido vem da tailnet (aplicativo do celular): quem entra é o token semanal.
   O campo nunca recebe value: o token digitado não volta na página.
 #}
 {% extends "base.html" %}
@@ -13,8 +14,13 @@
         {{ m.icone("marca") }}
         <h1 class="tela-titulo">Painel do Alfred</h1>
       </div>
+      {%- if app is defined and app %}
+      <p class="login__texto">Senhor, para continuar, informe o token semanal do aplicativo. O Alfred manda um novo
+        ao seu WhatsApp a cada semana; ele também aparece no Painel do computador, em Aplicativo.</p>
+      {%- else %}
       <p class="login__texto">Senhor, para continuar, informe o token de acesso do Alfred
         (o mesmo SHELL_EXECUTOR_TOKEN do .env). Ele só será pedido de novo quando a sessão expirar.</p>
+      {%- endif %}
 
       {%- if erro is defined and erro %}
       {{ m.aviso("erro", erro) }}

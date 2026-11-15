@@ -82,8 +82,9 @@ def _chip(m: dict) -> dict:
             "estado": estado, "rotulo": ROTULOS[estado]}
 
 
-def _turnos(msgs: list[dict]) -> list[dict]:
-    """Mensagens do banco → turnos da tela: pergunta de Pedro, chips das ferramentas e a resposta em HTML seguro."""
+def _turnos(msgs: list[dict], formatar=painel._markdown_seguro) -> list[dict]:
+    """Mensagens do banco → turnos da tela: pergunta de Pedro, chips das ferramentas e a resposta em HTML seguro
+    (`formatar=str` deixa o markdown cru, para o aplicativo do celular)."""
     turnos: list[dict] = []
     for m in msgs:
         if m["papel"] == "user" or not turnos:
@@ -95,7 +96,7 @@ def _turnos(msgs: list[dict]) -> list[dict]:
         if m["papel"] == "tool":
             t["ferramentas"].append(_chip(m))
         else:
-            t["resposta"] = painel._markdown_seguro(m["texto"])
+            t["resposta"] = formatar(m["texto"])
             t["modelo"] = m.get("modelo") or ""
     return turnos
 
@@ -128,6 +129,32 @@ def tela_conversa(request: Request, cid: str, q: Optional[str] = None):
     if not conv:
         return _tela(request, None, q, status=404)
     return _tela(request, conv, q)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Rotas — lista e histórico em JSON (o aplicativo do celular)
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/api/conversas")
+def lista_json(request: Request, q: Optional[str] = None):
+    """A coluna da esquerda em JSON → {conversas: [{id, titulo, url, quando, relativo, iso, trecho}]}."""
+    if not painel._nonce_da_sessao(request):
+        return painel._erro(401, painel.MSG_SESSAO)
+    return JSONResponse({"conversas": _lista(" ".join((q or "").split())[:200])})
+
+
+@router.get("/api/conversas/{cid}")
+def conversa_json(request: Request, cid: str):
+    """O histórico em JSON → {id, titulo, turno_ativo, turnos: [{pergunta, ferramentas, resposta, modelo, quando}]},
+    com a resposta em markdown cru. `turno_ativo` = id do turno em andamento ("" se não há)."""
+    if not painel._nonce_da_sessao(request):
+        return painel._erro(401, painel.MSG_SESSAO)
+    conv = conversa.obter_conversa(cid)
+    if not conv:
+        return painel._erro(404, "Conversa não encontrada.")
+    ativo = conversa.turno_ativo(cid)
+    return JSONResponse({"id": cid, "titulo": conv.get("titulo") or "Conversa", "turno_ativo": ativo.id if ativo else "",
+                         "turnos": _turnos(conversa.mensagens(cid), formatar=str)})
 
 
 # ══════════════════════════════════════════════════════════════

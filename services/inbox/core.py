@@ -1213,10 +1213,25 @@ def abrir_no_navegador(url: str) -> bool:
     return True
 
 
+def avisar_pendencia(entry: dict, agrupada: Optional[dict] = None) -> None:
+    """A pendência no feed de avisos (lib_db.avisos), que o aplicativo lê. O desktop e o WhatsApp avisam a mesma
+    pendência em seguida: com o mesmo `ref`, vira um aviso só. A mensagem agrupada (o contato escreveu de novo
+    na mesma pendência) entra sempre."""
+    if agrupada:
+        texto = agrupada.get("texto") or ""
+    elif entry.get("tipo") == "whatsapp":
+        texto = (entry.get("whatsapp") or {}).get("texto") or ""
+    else:
+        texto = (entry.get("evento") or {}).get("data_inicio") or ""
+    lib_db.registrar_aviso("pendencia", entry.get("titulo") or "Pendência", texto[:900],
+                           f"/painel/pendencias/{entry['id']}", "" if agrupada else entry["id"])
+
+
 def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
     """Notificação desktop com botões (processo destacado, fica ocioso aguardando):
     e-mail → Vou / Não vou / Ouvir · WhatsApp → Enviar (rascunho editável) / Não enviar / Agenda / Ouvir."""
     lib_atividade.evento("pendencia", entry.get("titulo") or "")
+    avisar_pendencia(entry)
     if entry.get("tipo") == "whatsapp":
         wa = entry.get("whatsapp") or {}
         if aguardar_resposta and _tem_gui():
@@ -1225,13 +1240,13 @@ def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
         else:
             _notify("Alfred — WhatsApp",
                     f"{wa.get('contato') or entry['titulo']}: {(wa.get('texto') or '')[:120]}\n"
-                    f"Responda: run.sh responder-texto {entry['id']} \"...\"")
+                    f"Responda: run.sh responder-texto {entry['id']} \"...\"", aviso=False)
             if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and tem_audio(entry):
                 tocar_pendencia(entry)
         return
     quando = entry.get("evento", {}).get("data_inicio") or "data não informada"
     _notify(f"Alfred — {'Convite' if entry['tipo'] == 'evento' else 'Contato profissional'}",
-            f"{entry['titulo']}\n{quando}\nResponda: run.sh responder {entry['id']} vou | nao-vou")
+            f"{entry['titulo']}\n{quando}\nResponda: run.sh responder {entry['id']} vou | nao-vou", aviso=False)
     if os.getenv("INBOX_AUTOPLAY", "false").lower() in ("1", "true", "yes") and tem_audio(entry):
         tocar_pendencia(entry)
     if aguardar_resposta and _tem_gui():
@@ -1495,7 +1510,15 @@ def expirar_e_lembrar(cfg: dict) -> dict:
 #  Ciclo completo
 # ══════════════════════════════════════════════════════════════
 
-def _notify(titulo: str, corpo: str):
+_LINK_PAINEL = re.compile(r"https?://127\.0\.0\.1:\d+(/painel[^\s]*)")
+
+
+def _notify(titulo: str, corpo: str, aviso: bool = True):
+    """Notificação simples do desktop. Entra também no feed de avisos (lib_db.avisos), que o aplicativo lê;
+    `aviso=False` para a que repete um aviso já registrado ou só faz sentido no computador."""
+    if aviso:
+        link = _LINK_PAINEL.search(corpo or "")
+        lib_db.registrar_aviso("aviso", (titulo or "").removeprefix("Alfred — "), corpo, link.group(1) if link else "")
     if not shutil.which("notify-send"):
         return
     try:
@@ -1521,6 +1544,7 @@ def indexar_cofres() -> dict:
     except Exception:
         dias = 90.0
     res["wa_podadas"] = lib_db.podar_wa(dias)
+    res["avisos_podados"] = lib_db.podar_avisos()
     log(f"[indice] {res}")
     return res
 

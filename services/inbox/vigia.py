@@ -130,12 +130,16 @@ def agenda_parada(minutos: int = 30) -> list[dict]:
 # ── avisos ────────────────────────────────────────────────────
 
 def _aviso_whatsapp_caiu(estado: str) -> None:
-    """Processo destacado: notificação com [Mostrar QR code] que espera o clique."""
+    """Processo destacado: notificação com [Mostrar QR code] que espera o clique. O aviso entra também no feed
+    (lib_db.avisos): sem o WhatsApp, o aplicativo é o único jeito de Pedro saber fora de casa."""
+    core.lib_db.registrar_aviso("aviso", "WhatsApp desconectado",
+                                f"A conexão do WhatsApp caiu (estado: {estado}). Até reconectar, o Alfred não vê as "
+                                "mensagens.", "/painel/whatsapp")
     if core._tem_gui():
         core._iniciar_aguardador("_vigia-qr", estado)   # unit própria: sobrevive ao fim do vigia
     else:
         core._notify("Alfred — WhatsApp desconectado",
-                     "Reconecte: services/inbox/run.sh whatsapp qrcode e escaneie no celular.")
+                     "Reconecte: services/inbox/run.sh whatsapp qrcode e escaneie no celular.", aviso=False)
 
 
 def aguardar_qr(estado: str) -> int:
@@ -160,7 +164,7 @@ def aguardar_qr(estado: str) -> int:
         core._notify("Alfred — WhatsApp desconectado",
                      f"A conexão do WhatsApp caiu (estado: {estado}). Até reconectar, o Alfred não vê as mensagens.\n\n"
                      "Para parear de novo: services/inbox/run.sh whatsapp qrcode e escaneie em WhatsApp → "
-                     "Aparelhos conectados → Conectar aparelho.")
+                     "Aparelhos conectados → Conectar aparelho.", aviso=False)
     if acao == "qr":
         abrir_qr_no_painel()
     return 0
@@ -170,7 +174,7 @@ def abrir_qr_no_painel() -> None:
     """Abre /painel/whatsapp no navegador: a página gera o QR na hora e mostra o erro se a Evolution falhar."""
     url = core.url_painel("whatsapp")
     if not core.abrir_no_navegador(url):
-        core._notify("Alfred — WhatsApp desconectado", f"Abra {url} no navegador para ver o QR code.")
+        core._notify("Alfred — WhatsApp desconectado", f"Abra {url} no navegador para ver o QR code.", aviso=False)
 
 
 # ── execução ──────────────────────────────────────────────────
