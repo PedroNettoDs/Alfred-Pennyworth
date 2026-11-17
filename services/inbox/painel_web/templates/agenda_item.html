@@ -1,6 +1,7 @@
 {#
   Detalhe de um item da agenda. Vars de painel._dados_agenda_item(): i (view-model da lista), item (entrada do
-  agenda.yml), resumo, analise, dados, contexto, pendencia_url, promessa, dados_promessa, historico, ics_pendente.
+  agenda.yml), resumo, analise, dados, contexto, pendencia_url, promessa, dados_promessa, historico, ics_pendente,
+  prorrogacao ({data, prioridade, motivo, atrasada} da promessa ainda aberta, ou none).
 #}
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
@@ -61,6 +62,19 @@
         <h2 class="cartao__titulo" id="c-dados">Dados</h2>
         {{ m.chave_valor(dados) }}
       </section>
+      {%- if prorrogacao %}
+      <section class="cartao" aria-labelledby="c-prorrogar">
+        <h2 class="cartao__titulo" id="c-prorrogar">{{ "Justificar o atraso" if prorrogacao.atrasada else "Pedir mais prazo" }}</h2>
+        <form data-acao="/painel/api/agenda/{{ i.id }}/prorrogar" data-apos-sucesso="recarregar">
+          {{ m.area_texto("justificativa", "Justificativa", linhas=3, obrigatorio=true, attrs={"maxlength": "500"}) }}
+          {{ m.campo("data", "Novo prazo", valor=prorrogacao.data, tipo="date", obrigatorio=true,
+                     ajuda="Sugestão do Alfred. " ~ prorrogacao.motivo) }}
+          <div class="acoes">
+            {{ m.botao("Pedir prorrogação", "primario", attrs={"data-texto-ocupado": "Prorrogando…"}) }}
+          </div>
+        </form>
+      </section>
+      {%- endif %}
     </div>
   </div>
 </div>

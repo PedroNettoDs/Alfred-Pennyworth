@@ -968,6 +968,32 @@ class TestAgenda(Base):
             self.assertEqual(self.guardar(cli.get(f"/painel/agenda?vista=calendario&dia={ruim}")).status_code, 200)
         self.assertIn("Próximos", self.guardar(cli.get("/painel/agenda")).text)
 
+    def test_prorrogar_promessa_pelo_detalhe(self):
+        import promessas
+        agora = core._now()
+        achada = {"o_que": "Ligar para a Fatec", "para_quem": "Ana", "trecho": "amanhã eu ligo",
+                  "prazo": agora + timedelta(days=1), "dia_inteiro": True, "prazo_assumido": False, "confianca": 0.9}
+        p = promessas.registrar(achada, {"canal": "whatsapp", "contato": "Ana"}, agora, notificar=False)
+        solto = agenda.adicionar("Consulta", agora + timedelta(days=1), notificar=False)
+        cli = self.entrar()
+        html = self.guardar(cli.get(f"/painel/agenda/{p['agenda_id']}")).text
+        for trecho in ("Pedir mais prazo", 'name="justificativa"', 'type="date"', "Sugestão do Alfred", "Pedir prorrogação"):
+            self.assertIn(trecho, html)
+        self.assertNotIn("Pedir prorrogação", cli.get(f"/painel/agenda/{solto['id']}").text)   # só item de promessa
+        token = self.csrf(cli)
+        url = f"/painel/api/agenda/{p['agenda_id']}/prorrogar"
+        novo = (agora + timedelta(days=4)).date().isoformat()
+        self.assertEqual(self.acao(cli, url, {"data": novo, "justificativa": " "}, csrf=token).status_code, 400)
+        self.assertEqual(self.acao(cli, url, {"data": "2020-01-01", "justificativa": "x"}, csrf=token).status_code, 400)
+        self.assertEqual(self.acao(cli, f"/painel/api/agenda/{solto['id']}/prorrogar",
+                                   {"data": novo, "justificativa": "x"}, csrf=token).status_code, 404)
+        resp = self.acao(cli, url, {"data": novo, "justificativa": "Semana de provas"}, csrf=token)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(promessas.obter(p["id"])["prazo"][:10], novo)
+        self.assertEqual(agenda.obter(p["agenda_id"])["inicio"][:10], novo)
+        html = cli.get(f"/painel/agenda/{p['agenda_id']}").text
+        self.assertIn("Justificativa: Semana de provas", html)
+
     def test_feito_detalhe_e_concluidos(self):
         amanha = core._now().replace(hour=15, minute=0, second=0, microsecond=0) + timedelta(days=1)
         r = {"resumo": "Leve a proposta impressa.", "urgencia": "alta", "prioridade": "media", "motivo": "é amanhã"}

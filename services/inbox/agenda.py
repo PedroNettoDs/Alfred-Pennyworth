@@ -26,7 +26,7 @@ Status: pendente → no_calendario | erro (tenta de novo até MAX_TENTATIVAS) ; 
 import re
 import unicodedata
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -496,8 +496,9 @@ def fila_extensao() -> list[dict]:
             elif st == "desfazer":
                 out.append({"id": i["id"], "acao": "remover", "uid": i["uid"], "calendario": i.get("calendario"),
                             "titulo": i["titulo"]})
-            elif st == "feito" and i.get("atualizar") and int(i.get("tentativas") or 0) < MAX_TENTATIVAS:
-                # regrava o evento (mesmo UID) com ☑ no título; "enviado" espera o resultado como em_execucao
+            elif st in ("feito", "no_calendario") and i.get("atualizar") and int(i.get("tentativas") or 0) < MAX_TENTATIVAS:
+                # regrava o evento (mesmo UID): ☑ no título do feito, ou o que alterar() mudou (título, dia);
+                # "enviado" espera o resultado como em_execucao
                 try:
                     if (i["atualizar"] == "enviado"
                             and now - datetime.fromisoformat(i.get("atualizado_em")) < EM_EXECUCAO_TIMEOUT):
@@ -521,17 +522,19 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
         if not item:
             raise KeyError(f"Item da agenda não encontrado: {aid}")
         now = core._now().isoformat(timespec="minutes")
+        regravado = False               # evento que já estava no calendário e foi só regravado: não avisa de novo
         if acao == "remover":
             item["status"] = "desfeito" if ok else "desfazer"
             if ok:
                 _hist(item, "Removido do calendário")
-        elif item.get("status") == "feito":
-            # ☑ no título: só conta a entrega feita depois do Feito ("enviado"); uma criação antiga em
-            # andamento que termine agora não leva o ☑, então continua pendente
+        elif item.get("status") == "feito" or (item.get("status") == "no_calendario" and item.get("atualizar")):
+            # ☑ no título (feito) ou alteração (alterar): só conta a entrega feita depois da mudança ("enviado");
+            # uma gravação antiga em andamento que termine agora não leva a mudança, então continua pendente
+            regravado = True
             if ok and item.get("atualizar") == "enviado":
                 item["atualizar"] = False
                 item["erro"] = None
-                _hist(item, "Marcado ☑ no calendário", "sucesso")
+                _hist(item, "Marcado ☑ no calendário" if item["status"] == "feito" else "Atualizado no calendário", "sucesso")
             elif not ok:
                 item["atualizar"] = True
                 item["tentativas"] = int(item.get("tentativas") or 0) + 1
@@ -552,7 +555,7 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
             item["tentativas"] = int(item.get("tentativas") or 0) + 1
             item["erro"] = (erro or "erro desconhecido")[:300]
             _hist(item, f"Erro ao incluir no calendário: {item['erro']}", "erro")
-        incluido = ok and acao == "criar" and item["status"] == "no_calendario"
+        incluido = ok and acao == "criar" and item["status"] == "no_calendario" and not regravado
         avisar = incluido and item.get("notificar")
         if avisar:
             item["notificar"] = False   # uma notificação por item, mesmo se a extensão gravar de novo
@@ -563,6 +566,50 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
         notificar_item(item)
     elif incluido:
         core._notify("Alfred — agenda", f"No calendário “{item.get('calendario')}”: {item['titulo']} — {_quando_legivel(item)}")
+    return item
+
+
+def alterar(aid: str, titulo: Optional[str] = None, dia: Optional[date] = None, descricao: Optional[str] = None,
+            origem: Optional[dict] = None, historico: str = "", tom: str = "") -> dict:
+    """
+    Muda um item que já existe, sem criar outro: título, dia (a hora do item fica), descrição e origem. O evento
+    do calendário é regravado com o mesmo UID na próxima passada da extensão e a tarefa do tasks.yml muda de dia.
+    Item fechado (feito, desfeito, cancelado) levanta ItemDesfeito.
+    """
+    with _trava():
+        data = _load()
+        item = next((i for i in data["itens"] if i.get("id") == aid), None)
+        if not item:
+            raise KeyError(f"Item da agenda não encontrado: {aid}")
+        if item.get("status") in FECHADOS + ("desfazer",):
+            raise ItemDesfeito(f"“{item.get('titulo')}” já foi fechado; não dá para alterar.")
+        if titulo is not None:
+            item["titulo"] = titulo.strip()[:120] or item["titulo"]
+        if dia is not None:
+            if item.get("dia_inteiro"):
+                item["inicio"] = dia.isoformat()
+            else:
+                ini = datetime.fromisoformat(item["inicio"])
+                novo = ini.replace(year=dia.year, month=dia.month, day=dia.day)
+                if item.get("fim"):
+                    item["fim"] = (datetime.fromisoformat(item["fim"]) + (novo - ini)).isoformat(timespec="minutes")
+                item["inicio"] = novo.isoformat(timespec="minutes")
+        if descricao is not None:
+            item["descricao"] = descricao.strip()[:1500]
+        if origem is not None:
+            item["origem"] = origem
+        item["atualizado_em"] = core._now().isoformat(timespec="minutes")
+        if item.get("status") not in ("pendente", "erro"):
+            item.update({"atualizar": True, "tentativas": 0, "erro": None})    # já foi (ou está indo) ao calendário
+        if historico:
+            _hist(item, historico, tom)
+        _save(data)
+    if dia is not None and item.get("task_id"):
+        try:
+            core._adiar_task(item["task_id"], dia.isoformat())
+        except Exception as e:
+            log(f"[agenda] tarefa #{item['task_id']} não mudou de dia: {e}")
+    log(f"[agenda] {aid} alterado: {item['titulo']!r} — {_quando_legivel(item)}")
     return item
 
 

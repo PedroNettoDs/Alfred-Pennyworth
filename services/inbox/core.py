@@ -1278,6 +1278,21 @@ def _cancelar_task(tid) -> bool:
     return _fechar_task(tid, "cancelled")
 
 
+def _adiar_task(tid, due_date: str) -> bool:
+    """Tarefa aberta → novo due_date (AAAA-MM-DD): o compromisso dela mudou de dia. True se mudou."""
+    f = vault() / "tasks.yml"
+    with trava_arquivo(f):
+        if not f.exists():
+            return False
+        data = _load_tasks(f)
+        t = next((t for t in data["tasks"] if t.get("id") == tid), None)
+        if not t or t.get("status") != "open" or t.get("due_date") == due_date:
+            return False
+        t["due_date"] = due_date
+        gravar_atomico(f, yaml.dump(data, allow_unicode=True, sort_keys=False))
+    return True
+
+
 def _fechar_task(tid, status: str) -> bool:
     """Tarefa aberta → status ("cancelled" | "done") + completed_at. True se mudou."""
     f = vault() / "tasks.yml"

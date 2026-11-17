@@ -13,11 +13,14 @@ Fluxo (no fim do ciclo do e-mail, 07:30 / 18:30, e em `run.sh promessas varrer`)
     verificar() — prazo vencido:
         falas de Pedro ao mesmo contato depois da promessa (e as respostas do contato)
         ↓ nenhuma → atrasada · alguma → Ollama (promessas_verificar.md): sim → cumprida · nao/incerto → atrasada
-        atrasada → agenda.adicionar("Atrasado: …", tipo tarefa) no próximo dia às 09:00
-    "Desfazer" na notificação da agenda (antes do prazo) → descartada: não volta como atrasada.
+        atrasada → o item da promessa na agenda ganha "Atrasado: " no nome (agenda.alterar: o mesmo evento,
+                   sem outro); só a promessa que nasceu vencida entra agora, no próximo dia às 09:00
+    "Desfazer" o item na agenda → descartada: não volta como atrasada.
+    prorrogar() — justificativa + novo prazo (painel do item): volta a aberta, o item perde o "Atrasado: " e
+        muda de dia. sugerir_prazo(): o dia mais leve da agenda na janela da prioridade (JANELA_PRORROGACAO).
 
-Status: aberta → cumprida | atrasada | descartada ; atrasada → cumprida | descartada (CLI feita / descartar,
-        Feito no painel da agenda). Cumprida → os itens dela na agenda viram feito (☑ no calendário).
+Status: aberta → cumprida | atrasada | descartada ; atrasada → cumprida | descartada | aberta (prorrogada)
+        (CLI feita / descartar, Feito no painel da agenda). Cumprida → os itens dela na agenda viram feito (☑ no calendário).
         Domingo, agenda_semanal.py apaga as cumpridas e descartadas (ficam no relatório da semana).
 Ordem das travas: promessas sozinha (a agenda é chamada fora dela).
 """
@@ -555,12 +558,20 @@ def verificar(agora: Optional[datetime] = None, msgs_email: Optional[list[dict]]
             log(f"[promessas] {p['id']} cumprida: {veredito['motivo']}")
             continue
         atraso_id = None
+        descricao = _descricao(p) + f"\nVerificação do Alfred: {veredito['motivo']}"
+        origem = {"canal": "promessa", "contato": p.get("para_quem"), "promessa_id": p["id"],
+                  "via": (p.get("origem") or {}).get("canal"), "atraso": True}
         try:
-            item = agenda.adicionar(f"Atrasado: {_titulo(p)}", _proximo_lembrete(agora), tipo="tarefa",
-                                    descricao=_descricao(p) + f"\nVerificação do Alfred: {veredito['motivo']}",
-                                    notificar=notificar,
-                                    origem={"canal": "promessa", "contato": p.get("para_quem"), "promessa_id": p["id"],
-                                            "via": (p.get("origem") or {}).get("canal"), "atraso": True})
+            if ag and ag.get("status") != "feito":
+                # o item da promessa já está na agenda: só ganha "Atrasado:" no nome (o mesmo evento, sem outro)
+                item = agenda.alterar(ag["id"], titulo=f"Atrasado: {_titulo(p)}", descricao=descricao, origem=origem,
+                                      historico=f"Promessa atrasada: {veredito['motivo']}", tom="aguardando")
+                if notificar is not False:
+                    lib_db.registrar_aviso("agenda", item["titulo"], veredito["motivo"], f"/painel/agenda/{item['id']}",
+                                           f"atraso:{item['id']}")
+            else:                       # promessa que nasceu vencida (ou cujo item já saiu): entra agora
+                item = agenda.adicionar(f"Atrasado: {_titulo(p)}", _proximo_lembrete(agora), tipo="tarefa",
+                                        descricao=descricao, notificar=notificar, origem=origem)
             atraso_id = item["id"]
         except Exception as e:
             log(f"[promessas] {p['id']}: atraso não foi para a agenda: {e}")
@@ -623,6 +634,102 @@ def _fechar_na_agenda(p: dict, status: str, via: str) -> None:
             core._cancelar_task(item["task_id"])
 
 
+# prioridade do item → (primeiro, último) dia depois de hoje em que o novo prazo pode cair
+JANELA_PRORROGACAO = {"alta": (1, 3), "media": (2, 7), "baixa": (4, 14)}
+
+
+def _item_vivo(p: dict) -> Optional[dict]:
+    """O item da promessa que ainda está aberto na agenda (o original; senão, o do atraso), ou None."""
+    for aid in (p.get("agenda_id"), p.get("agenda_atraso_id")):
+        item = agenda.obter(aid) if aid else None
+        if item and item.get("status") not in agenda.FECHADOS + ("desfazer",):
+            return item
+    return None
+
+
+def sugerir_prazo(p: dict, agora: Optional[datetime] = None) -> dict:
+    """
+    Novo prazo para uma promessa: o dia mais leve (menos compromissos abertos na agenda) dentro da janela que a
+    prioridade do item permite; empate fica com o mais próximo. → {data AAAA-MM-DD, prioridade, motivo}.
+    """
+    agora = agora or core._now()
+    prioridade = (_item_vivo(p) or {}).get("prioridade")
+    prioridade = prioridade if prioridade in JANELA_PRORROGACAO else "media"
+    de, ate = JANELA_PRORROGACAO[prioridade]
+    carga: dict = {}
+    for i in agenda.listar():
+        if i.get("status") not in agenda.FECHADOS + ("desfazer",):
+            carga[str(i.get("inicio"))[:10]] = carga.get(str(i.get("inicio"))[:10], 0) + 1
+    dias = [(agora + timedelta(days=n)).date() for n in range(de, ate + 1)]
+    dia = min(dias, key=lambda d: (carga.get(d.isoformat(), 0), d))
+    n = carga.get(dia.isoformat(), 0)
+    rotulo = {"alta": "alta", "media": "média", "baixa": "baixa"}[prioridade]
+    cheio = "sem nada na agenda" if not n else f"com {n} compromisso{'s' if n > 1 else ''} na agenda"
+    return {"data": dia.isoformat(), "prioridade": prioridade,
+            "motivo": f"Prioridade {rotulo}: novo prazo em até {ate} dias. {dia:%d/%m} é o dia mais leve da janela, {cheio}."}
+
+
+def prorrogar(pid: str, nova_data: str, justificativa: str, via: str = "painel") -> dict:
+    """
+    Você justificou o atraso e pediu mais prazo: a promessa volta a aberta com o prazo novo (dia inteiro) e o
+    mesmo item da agenda perde o "Atrasado:" e muda de dia; se havia dois itens (o original e o do atraso), fica um.
+    Levanta KeyError (id) / ValueError (promessa fechada, data inválida ou passada, justificativa vazia).
+    """
+    p = obter(pid)
+    if not p:
+        raise KeyError(f"Promessa não encontrada: {pid}")
+    if p.get("status") not in ABERTAS:
+        raise ValueError(f"Esta promessa já está {p.get('status')}.")
+    justificativa = " ".join((justificativa or "").split())[:500]
+    if not justificativa:
+        raise ValueError("Escreva a justificativa do atraso.")
+    agora = core._now()
+    try:
+        dia = datetime.fromisoformat(str(nova_data)[:10]).date()
+    except ValueError:
+        raise ValueError("Data do novo prazo inválida.") from None
+    if dia < agora.date():
+        raise ValueError("O novo prazo não pode ficar no passado.")
+    prazo = agora.replace(year=dia.year, month=dia.month, day=dia.day, hour=HORA_PADRAO, minute=0, second=0, microsecond=0)
+    nota = {"em": agora.isoformat(timespec="minutes"), "de": p.get("prazo"), "para": prazo.isoformat(timespec="minutes"),
+            "justificativa": justificativa}
+    novo = {**p, "prazo": nota["para"], "dia_inteiro": True, "prazo_assumido": False}
+    origem = {"canal": "promessa", "contato": p.get("para_quem"), "promessa_id": pid,
+              "via": (p.get("origem") or {}).get("canal")}
+    item = _item_vivo(p)
+    for aid in {p.get("agenda_id"), p.get("agenda_atraso_id")} - {None, item and item["id"]}:
+        try:
+            agenda.desfazer(aid, propagar=False)        # o outro item da mesma promessa: fica um só
+        except KeyError:
+            pass                                        # já saiu do registro (relatório semanal)
+    historico = f"Prorrogado para {dia:%d/%m/%Y} ({via}). Justificativa: {justificativa}"
+    if item:
+        item = agenda.alterar(item["id"], titulo=_titulo(p), dia=dia, descricao=_descricao(novo), origem=origem,
+                              historico=historico)
+    else:
+        item = agenda.adicionar(_titulo(p), prazo, dia_inteiro=True, tipo="tarefa", descricao=_descricao(novo),
+                                notificar=False, origem=origem)
+    return _atualizar(pid, status="aberta", prazo=nota["para"], dia_inteiro=True, prazo_assumido=False,
+                      motivo=f"prorrogada ({via}): {justificativa}", justificativa=justificativa,
+                      prorrogacoes=(p.get("prorrogacoes") or []) + [nota], agenda_id=item["id"], agenda_atraso_id=None)
+
+
+def unir_duplicados() -> list[tuple[str, str, str]]:
+    """Promessas abertas com dois itens vivos na agenda (do tempo em que o atraso criava outro): fica o
+    "Atrasado: …" e o original sai do calendário, sem descartar a promessa. → [(promessa, item que ficou, item que saiu)]."""
+    unidos = []
+    for p in listar():
+        ids = [p.get("agenda_atraso_id"), p.get("agenda_id")]
+        itens = [agenda.obter(a) if a else None for a in ids]
+        if (p.get("status") not in ABERTAS or ids[0] == ids[1]
+                or any(not i or i.get("status") in agenda.FECHADOS + ("desfazer",) for i in itens)):
+            continue
+        agenda.desfazer(ids[1], propagar=False)
+        _atualizar(p["id"], agenda_id=ids[0])
+        unidos.append((p["id"], ids[0], ids[1]))
+    return unidos
+
+
 def marcar(pid: str, status: str, motivo: str = "") -> dict:
     """CLI feita / painel Feito → cumprida · descartar → descartada; a agenda acompanha (_fechar_na_agenda)."""
     p = obter(pid)
@@ -641,8 +748,8 @@ def marcar(pid: str, status: str, motivo: str = "") -> dict:
 # ══════════════════════════════════════════════════════════════
 
 def adicionar_parser(sub) -> None:
-    sp = sub.add_parser("promessas", help="o que você disse que ia fazer: listar | varrer | verificar | feita ID | descartar ID")
-    sp.add_argument("acao", nargs="?", default="listar", choices=("listar", "varrer", "verificar", "feita", "descartar"))
+    sp = sub.add_parser("promessas", help="o que você disse que ia fazer: listar | varrer | verificar | feita ID | descartar ID | unir")
+    sp.add_argument("acao", nargs="?", default="listar", choices=("listar", "varrer", "verificar", "feita", "descartar", "unir"))
     sp.add_argument("arg", nargs="*", default=[])
     sp.add_argument("--retroativo", type=float, default=None, metavar="DIAS",
                     help="varrer: lê os últimos DIAS (inclui as respostas já gravadas nas pendências)")
@@ -684,6 +791,12 @@ def cmd_promessas(args) -> int:
             print(json.dumps({k: v for k, v in res.items() if k != "novas"}, ensure_ascii=False, indent=2, default=str))
             _imprimir([p for p in listar() if p["id"] in set(res.get("novas") or [])
                        or p["id"] in set((res.get("verificacao") or res).get("atrasadas") or [])])
+        return 0
+    if args.acao == "unir":
+        unidos = unir_duplicados()
+        for pid, ficou, saiu in unidos:
+            print(f"{pid}: ficou {ficou}, saiu {saiu}")
+        print(f"{len(unidos)} promessa(s) com item duplicado unidas.")
         return 0
     if not args.arg:
         print(f"Uso: promessas {args.acao} <id>")

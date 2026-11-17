@@ -317,6 +317,96 @@ class TestVerificacao(Base):
         self.assertEqual(agenda.obter(p["agenda_id"])["status"], "feito")
 
 
+class TestAtrasoEProrrogacao(Base):
+    def _no_prazo(self):
+        achada = {"o_que": "Ligar para a Fatec", "para_quem": "Ana", "trecho": "amanhã eu ligo",
+                  "prazo": self.agora + timedelta(days=1), "dia_inteiro": True, "prazo_assumido": False, "confianca": 0.9}
+        return promessas.registrar(achada, {"canal": "whatsapp", "contato": "Ana", "remote_jid": JID}, self.agora,
+                                   notificar=False)
+
+    def _atrasar(self, p, dias=3):
+        depois = self.agora + timedelta(days=dias)
+        promessas.verificar(depois, msgs_email=[], notificar=False)
+        return promessas.obter(p["id"]), depois
+
+    def test_atraso_renomeia_o_mesmo_item_e_regrava_o_evento(self):
+        p = self._no_prazo()
+        agenda.fila_extensao()
+        agenda.registrar_resultado(p["agenda_id"], "criar", True, calendario="Agenda")
+        antes = agenda.obter(p["agenda_id"])
+        p, _ = self._atrasar(p)
+        self.assertEqual((p["status"], p["agenda_atraso_id"]), ("atrasada", p["agenda_id"]))
+        (item,) = agenda.listar()                                       # um item só: nada de "Atrasado: …" à parte
+        self.assertEqual((item["titulo"], item["inicio"], item["uid"]),
+                         ("Atrasado: Ligar para a Fatec (Ana)", antes["inicio"], antes["uid"]))
+        self.assertTrue(item["origem"]["atraso"])
+        fila = agenda.fila_extensao()                                   # o evento é regravado com o mesmo UID
+        self.assertEqual([(i["acao"], i["uid"]) for i in fila], [("criar", antes["uid"])])
+        self.assertIn("Atrasado: Ligar para a Fatec", fila[0]["ics"])
+        with mock.patch.object(core, "_notify") as notify:
+            agenda.registrar_resultado(item["id"], "criar", True, calendario="Agenda")
+        notify.assert_not_called()                                      # regravação não avisa "incluído" de novo
+        item = agenda.obter(item["id"])
+        self.assertEqual((item["status"], item["atualizar"]), ("no_calendario", False))
+        self.assertEqual(agenda.fila_extensao(), [])
+
+    def test_sugestao_escolhe_o_dia_mais_leve_da_janela_da_prioridade(self):
+        p, depois = self._atrasar(self._no_prazo())
+        for n in (1, 3):                                                # amanhã e depois de amanhã+1 ocupados
+            agenda.adicionar(f"Reunião {n}", (depois + timedelta(days=n)).replace(hour=10), notificar=False)
+        with mock.patch.object(promessas, "_item_vivo", return_value={"prioridade": "alta"}):
+            s = promessas.sugerir_prazo(p, depois)
+        self.assertEqual((s["data"], s["prioridade"]), ((depois + timedelta(days=2)).date().isoformat(), "alta"))
+        s = promessas.sugerir_prazo(p, depois)                          # sem prioridade no item: média (2 a 7 dias)
+        self.assertEqual((s["data"], s["prioridade"]), ((depois + timedelta(days=2)).date().isoformat(), "media"))
+        with mock.patch.object(promessas, "_item_vivo", return_value={"prioridade": "baixa"}):
+            self.assertEqual(promessas.sugerir_prazo(p, depois)["data"], (depois + timedelta(days=4)).date().isoformat())
+
+    def test_prorrogar_reabre_a_promessa_e_muda_o_mesmo_item_de_dia(self):
+        p, depois = self._atrasar(self._no_prazo())
+        novo = (depois + timedelta(days=2)).date()
+        with mock.patch.object(core, "_now", return_value=depois):
+            for data, texto in ((novo.isoformat(), " "), ("ontem", "x"), ((depois - timedelta(days=1)).date().isoformat(), "x")):
+                with self.assertRaises(ValueError):
+                    promessas.prorrogar(p["id"], data, texto)
+            r = promessas.prorrogar(p["id"], novo.isoformat(), "Fiquei doente")
+            self.assertIsNone(promessas.negligencia(depois))            # nem a promessa nem a tarefa contam mais
+        self.assertEqual((r["status"], r["prazo"][:10], r["justificativa"], r["agenda_atraso_id"]),
+                         ("aberta", novo.isoformat(), "Fiquei doente", None))
+        self.assertEqual(r["prorrogacoes"][0]["justificativa"], "Fiquei doente")
+        (item,) = agenda.listar()
+        self.assertEqual((item["id"], item["titulo"], item["inicio"][:10]), (r["agenda_id"], "Ligar para a Fatec (Ana)", novo.isoformat()))
+        self.assertNotIn("atraso", item["origem"])
+        self.assertIn("Justificativa: Fiquei doente", item["historico"][-1]["texto"])
+        p, _ = self._atrasar(p, dias=9)                                 # venceu de novo: o mesmo item volta a "Atrasado:"
+        self.assertEqual(p["status"], "atrasada")
+        self.assertEqual([i["titulo"] for i in agenda.listar()], ["Atrasado: Ligar para a Fatec (Ana)"])
+
+    def test_prorrogar_com_dois_itens_antigos_deixa_um(self):
+        p = self._no_prazo()
+        atraso = agenda.adicionar("Atrasado: Ligar para a Fatec (Ana)", self.agora + timedelta(days=3), tipo="tarefa",
+                                  notificar=False, origem={"canal": "promessa", "promessa_id": p["id"], "atraso": True})
+        promessas._atualizar(p["id"], status="atrasada", agenda_atraso_id=atraso["id"])
+        novo = (self.agora + timedelta(days=5)).date()
+        r = promessas.prorrogar(p["id"], novo.isoformat(), "Semana de provas")
+        self.assertEqual(r["agenda_id"], p["agenda_id"])
+        self.assertEqual(sorted((i["id"], i["status"]) for i in agenda.listar()),
+                         sorted([(p["agenda_id"], "pendente"), (atraso["id"], "cancelado")]))
+        self.assertEqual(promessas.obter(p["id"])["status"], "aberta")  # desfazer o item extra não descarta a promessa
+
+    def test_unir_duplicados_deixa_so_o_atrasado_sem_descartar(self):
+        p = self._no_prazo()
+        atraso = agenda.adicionar("Atrasado: Ligar para a Fatec (Ana)", self.agora + timedelta(days=3), tipo="tarefa",
+                                  notificar=False, origem={"canal": "promessa", "promessa_id": p["id"], "atraso": True})
+        promessas._atualizar(p["id"], status="atrasada", agenda_atraso_id=atraso["id"])
+        self.assertEqual(promessas.unir_duplicados(), [(p["id"], atraso["id"], p["agenda_id"])])
+        self.assertEqual(sorted((i["id"], i["status"]) for i in agenda.listar()),
+                         sorted([(p["agenda_id"], "cancelado"), (atraso["id"], "pendente")]))
+        depois = promessas.obter(p["id"])
+        self.assertEqual((depois["status"], depois["agenda_id"]), ("atrasada", atraso["id"]))
+        self.assertEqual(promessas.unir_duplicados(), [])               # nada a unir na segunda vez
+
+
 class TestNegligencia(Base):
     """O que Pedro deixou vencer, resumido para o pet (estado.json → negligencia)."""
 

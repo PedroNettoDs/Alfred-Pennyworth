@@ -796,8 +796,11 @@ def _dados_agenda_item(i: dict) -> dict:
         promessa = promessas.obter(origem["promessa_id"])
     pid = origem.get("pendencia_id")
     conf = origem.get("confianca")
+    prorrogacao = None
+    if promessa and promessa.get("status") in promessas.ABERTAS and vm["pode_desfazer"]:
+        prorrogacao = {**promessas.sugerir_prazo(promessa), "atrasada": promessa.get("status") == "atrasada"}
     return {
-        "i": vm, "item": i, "resumo": i.get("resumo") or "",
+        "i": vm, "item": i, "resumo": i.get("resumo") or "", "prorrogacao": prorrogacao,
         "analise": [("Urgência", ROTULO_NIVEL.get(i.get("urgencia"))), ("Prioridade", ROTULO_NIVEL.get(i.get("prioridade"))),
                     ("Motivo", i.get("motivo"))],
         "dados": [("Tipo", {"evento": "Evento", "tarefa": "Tarefa", "lembrete": "Lembrete"}.get(i.get("tipo"), i.get("tipo"))),
@@ -813,7 +816,8 @@ def _dados_agenda_item(i: dict) -> dict:
                            ("Prazo", fmt_data(str(promessa.get("prazo") or "")[:10] if promessa.get("dia_inteiro")
                                               else promessa.get("prazo"))
                                      + (" (assumido)" if promessa.get("prazo_assumido") else "")),
-                           ("Situação", promessa.get("status"))] if promessa else [],
+                           ("Situação", promessa.get("status")),
+                           ("Justificativa", promessa.get("justificativa"))] if promessa else [],
         "historico": _historico_agenda(i, promessa),
         "ics_pendente": i.get("status") == "feito" and bool(i.get("atualizar")),
     }
@@ -1655,6 +1659,36 @@ async def acao_desfazer(request: Request, aid: str):
     else:
         msg = "Item cancelado. Ele não irá para o calendário."
     return JSONResponse({"ok": True, "mensagem": msg, "status": r.get("status")})
+
+
+@router.post("/api/agenda/{aid}/prorrogar")
+async def acao_prorrogar(request: Request, aid: str):
+    """Justificativa do atraso + novo prazo da promessa deste item (promessas.prorrogar)."""
+    if recusa := _checar_post(request):
+        return recusa
+    corpo = await _corpo_json(request)
+    justificativa = str(corpo.get("justificativa") or "").strip()
+    if not justificativa:
+        return _erro(400, "Escreva a justificativa do atraso.", campo="justificativa")
+
+    def _fazer():
+        import promessas
+        origem = (agenda.obter(aid) or {}).get("origem") or {}
+        if origem.get("canal") != "promessa" or not origem.get("promessa_id"):
+            return _erro(404, "Este item não é de uma promessa.")
+        try:
+            return promessas.prorrogar(origem["promessa_id"], str(corpo.get("data") or ""), justificativa)
+        except KeyError:
+            return _erro(404, "Promessa não encontrada.")
+        except ValueError as e:
+            return _erro(409 if "já" in str(e) else 400, str(e), campo="data")
+
+    r = await run_in_threadpool(_fazer)
+    if isinstance(r, Response):
+        return r
+    return JSONResponse({"ok": True, "status": r.get("status"),
+                         "mensagem": f"Prazo prorrogado para {fmt_data(str(r.get('prazo'))[:10])}. O mesmo evento muda de dia "
+                                     "no calendário na próxima passada da extensão."})
 
 
 @router.post("/api/agenda/{aid}/feito")

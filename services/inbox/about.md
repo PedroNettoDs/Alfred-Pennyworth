@@ -1076,8 +1076,12 @@ fim do ciclo do e-mail (07:30 / 18:30)  ·  ./run.sh promessas varrer
         ↓ promessas.yml (aberta) + tarefa na agenda no prazo — sem data: prazo_padrao_dias (3) depois da fala
     prazo vencido → mensagens suas ao mesmo contato depois da promessa?
         nenhuma → atrasada (sem LLM)  ·  alguma → gemma4 (promessas_verificar.md): sim → cumprida · nao/incerto → atrasada
-        atrasada → "Atrasado: <o quê> (<quem>)" na agenda, próximo dia às 09:00
+        atrasada → o mesmo item da agenda vira "Atrasado: <o quê> (<quem>)" (o evento é regravado, não duplicado)
 ```
+
+- **Justificar o atraso / pedir mais prazo** (cartão à direita no detalhe do item, no Painel): justificativa + novo prazo.
+  O Alfred sugere o dia mais leve da agenda dentro da janela da prioridade (alta: 1 a 3 dias; média: 2 a 7; baixa: 4 a 14).
+  A promessa volta a `aberta`, o item perde o "Atrasado:" e muda de dia, e a justificativa fica no histórico.
 
 - **Feito** no painel da agenda (ou `promessas feita <id>`) = cumprida: o item ganha ☑ no calendário.
 - Cada promessa nova chega com a notificação da agenda **[Ok] [Mais detalhes] [Desfazer]** assim que está no calendário. Desfazer antes do prazo = não era promessa:
