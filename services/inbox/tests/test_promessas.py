@@ -278,10 +278,10 @@ class TestVerificacao(Base):
                   "prazo": self.agora + timedelta(days=1), "dia_inteiro": True, "prazo_assumido": False, "confianca": 0.9}
         p = promessas.registrar(achada, {"canal": "whatsapp", "contato": "Ana", "remote_jid": JID}, self.agora,
                                 notificar=False)
-        agenda.desfazer(p["agenda_id"])
-        r = promessas.verificar(self.agora + timedelta(days=3), msgs_email=[], notificar=False)
-        self.assertEqual(r["descartadas"], [p["id"]])
+        agenda.desfazer(p["agenda_id"])                                # descarta na hora, sem esperar a verificação
         self.assertEqual(promessas.obter(p["id"])["status"], "descartada")
+        r = promessas.verificar(self.agora + timedelta(days=3), msgs_email=[], notificar=False)
+        self.assertEqual((r["descartadas"], r["atrasadas"]), ([], []))
         self.assertEqual([i["status"] for i in agenda.listar()], ["cancelado"])
 
     def test_antes_do_prazo_nada_muda(self):
@@ -340,6 +340,20 @@ class TestNegligencia(Base):
         p, _ = self._registrar_vencida()
         promessas.marcar(p["id"], "cumprida")
         self.assertIsNone(promessas.negligencia(self.agora))
+
+    def test_leva_o_item_da_agenda_e_desfazer_o_item_descarta_a_atrasada(self):
+        achada = {"o_que": "Ligar para a Fatec", "para_quem": "Ana", "trecho": "amanhã eu ligo",
+                  "prazo": self.agora + timedelta(days=1), "dia_inteiro": True, "prazo_assumido": False, "confianca": 0.9}
+        p = promessas.registrar(achada, {"canal": "whatsapp", "contato": "Ana", "remote_jid": JID}, self.agora,
+                                notificar=False)
+        depois = self.agora + timedelta(days=3)
+        promessas.verificar(depois, msgs_email=[], notificar=False)    # nada enviado depois: atrasada, com item novo
+        p = promessas.obter(p["id"])
+        self.assertEqual(p["status"], "atrasada")
+        self.assertEqual(promessas.negligencia(depois)["agenda_id"], p["agenda_atraso_id"])
+        agenda.desfazer(p["agenda_atraso_id"])
+        self.assertEqual(promessas.obter(p["id"])["status"], "descartada")
+        self.assertIsNone(promessas.negligencia(depois))
 
     def test_tarefa_vencida_soma_e_a_promessa_e_o_motivo(self):
         self._registrar_vencida(dias_atras=5)                    # 4 dias: teto de 0,7

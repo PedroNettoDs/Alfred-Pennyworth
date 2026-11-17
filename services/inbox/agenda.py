@@ -566,7 +566,10 @@ def registrar_resultado(aid: str, acao: str, ok: bool, calendario: str = "", err
     return item
 
 
-def desfazer(aid: str) -> dict:
+def desfazer(aid: str, propagar: bool = True) -> dict:
+    """Desfaz o item (sai do calendário, ou é cancelado se ainda não foi) e cancela a tarefa dele no tasks.yml.
+    Item de promessa → a promessa vira descartada: nada disso conta mais como vencido (propagar=False quando
+    quem chama é o promessas.py)."""
     with _trava():
         data = _load()
         item = next((i for i in data["itens"] if i.get("id") == aid), None)
@@ -580,6 +583,20 @@ def desfazer(aid: str) -> dict:
         item["atualizado_em"] = item["desfeito_em"] = core._now().isoformat(timespec="minutes")
         _hist(item, "Você desfez" + (" — sai do calendário na próxima sincronização" if item["status"] == "desfazer" else ""))
         _save(data)
+    if item.get("task_id"):
+        try:
+            core._cancelar_task(item["task_id"])
+        except Exception as e:
+            log(f"[agenda] tarefa #{item['task_id']} não cancelada: {e}")
+    origem = item.get("origem") or {}
+    if propagar and origem.get("canal") == "promessa" and origem.get("promessa_id"):
+        try:
+            import promessas
+            promessas.marcar(origem["promessa_id"], "descartada", "item desfeito na agenda")
+        except KeyError:
+            pass                        # promessa já saiu do registro (relatório semanal)
+        except Exception as e:
+            log(f"[agenda] promessa {origem['promessa_id']} não descartada: {e}")
     log(f"[agenda] {aid} → {item['status']}")
     return item
 

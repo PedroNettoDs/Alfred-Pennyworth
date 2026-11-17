@@ -263,15 +263,17 @@ PESO_TAREFA = (0.25, 0.05, 0.5)
 def negligencia(agora: Optional[datetime] = None) -> Optional[dict]:
     """
     O quanto Pedro deixou vencer: promessas abertas e tarefas de tasks.yml com prazo passado.
-    → {nivel 0..1, motivo "promessa"|"tarefa", texto do item que mais pesa, quantos}, ou None sem nada vencido.
+    → {nivel 0..1, motivo "promessa"|"tarefa", texto do item que mais pesa, quantos, agenda_id}, ou None sem nada
+    vencido. agenda_id é o item desse texto na agenda (None se não há): é o que o Painel abre.
     """
     from _shared import lib_ferramentas   # aqui dentro: só esta função usa, e o módulo é pesado
     agora = agora or core._now()
-    itens = []   # (peso, motivo, título, dias de atraso)
+    itens = []   # (peso, motivo, título, dias de atraso, id do item na agenda ou None)
     for p in listar():
         if p.get("status") in ABERTAS and _vencida(p, agora):
             dias = (agora.date() - _prazo_dt(p).date()).days
-            itens.append((PESO_PROMESSA, "promessa", _titulo(p), dias))
+            aid = next((a for a in (p.get("agenda_atraso_id"), p.get("agenda_id")) if a and agenda.obter(a)), None)
+            itens.append((PESO_PROMESSA, "promessa", _titulo(p), dias, aid))
     try:
         tarefas = lib_ferramentas._ler_tasks()["tasks"]
     except RuntimeError:
@@ -279,15 +281,16 @@ def negligencia(agora: Optional[datetime] = None) -> Optional[dict]:
     for t in tarefas:
         d = lib_ferramentas._data_ou_none(t.get("due_date")) if t.get("status") == "open" and t.get("due_date") else None
         if d and d < agora.date().isoformat():
-            itens.append((PESO_TAREFA, "tarefa", str(t.get("title") or ""), (agora.date() - datetime.fromisoformat(d).date()).days))
+            aid = next((i["id"] for i in agenda.listar() if i.get("task_id") == t.get("id")), None)
+            itens.append((PESO_TAREFA, "tarefa", str(t.get("title") or ""), (agora.date() - datetime.fromisoformat(d).date()).days, aid))
     if not itens:
         return None
-    pesados = sorted(((min(teto, base + por_dia * dias), motivo, titulo, dias)
-                      for (base, por_dia, teto), motivo, titulo, dias in itens), key=lambda i: -i[0])
-    _peso, motivo, titulo, dias = pesados[0]
+    pesados = sorted(((min(teto, base + por_dia * dias), motivo, titulo, dias, aid)
+                      for (base, por_dia, teto), motivo, titulo, dias, aid in itens), key=lambda i: -i[0])
+    _peso, motivo, titulo, dias, aid = pesados[0]
     atraso = "vencida hoje" if dias < 1 else f"vencida há {dias} dia{'s' if dias > 1 else ''}"
     return {"nivel": round(min(1.0, sum(i[0] for i in pesados)), 2), "motivo": motivo,
-            "texto": f"{titulo}, {atraso}", "quantos": len(pesados)}
+            "texto": f"{titulo}, {atraso}", "quantos": len(pesados), "agenda_id": aid}
 
 
 def _quando(p: dict) -> str:
@@ -606,7 +609,7 @@ def ciclo(inbox_cfg: dict, retroativo_dias: Optional[float] = None, notificar: b
 
 def _fechar_na_agenda(p: dict, status: str, via: str) -> None:
     """cumprida → os itens da promessa na agenda viram feito (☑ no calendário) · descartada → sai da agenda
-    o que ainda não aconteceu."""
+    o que ainda não aconteceu, e a tarefa do que já passou é cancelada (não conta como vencida)."""
     agora = core._now()
     for aid in (p.get("agenda_id"), p.get("agenda_atraso_id")):
         item = agenda.obter(aid) if aid else None
@@ -615,7 +618,9 @@ def _fechar_na_agenda(p: dict, status: str, via: str) -> None:
         if status == "cumprida":
             agenda.concluir(aid, via=via, propagar=False)
         elif (core._parse_dt(str(item.get("inicio"))) or agora) > agora:
-            agenda.desfazer(aid)
+            agenda.desfazer(aid, propagar=False)
+        elif item.get("task_id"):
+            core._cancelar_task(item["task_id"])
 
 
 def marcar(pid: str, status: str, motivo: str = "") -> dict:

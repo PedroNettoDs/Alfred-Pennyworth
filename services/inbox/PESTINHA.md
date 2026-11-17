@@ -48,7 +48,9 @@ timers do systemd (qualquer unit oneshot do catálogo)
 - **Negligência:** `estado.json` leva `negligencia` (`promessas.negligencia()`, relido a cada 30 s): o que Pedro
   deixou vencer. Cada promessa aberta com prazo passado pesa 0,4 + 0,1 por dia de atraso (teto 0,7); cada tarefa
   aberta de `tasks.yml` vencida, 0,25 + 0,05 por dia (teto 0,5). O `nivel` é a soma, até 1; `motivo` e `texto` são
-  do item que mais pesa; `link` abre a agenda no Painel. Nada vencido: `null`. No pet isso vira o protesto de
+  do item que mais pesa; `link` abre esse item no Painel (`/painel/agenda/<id>`; sem item na agenda, a agenda), e é
+  o que o pet abre no clique da plaquinha. Desfazer um item na agenda cancela a tarefa dele e descarta a promessa:
+  nada disso conta mais. Nada vencido: `null`. No pet isso vira o protesto de
   **dever** (pigarro, sarcasmo, braços cruzados), que só passa quando a pendência é resolvida.
 - **Notado:** usar o Alfred conta como atenção para o pet. `lib_atividade.notado(origem)` grava `notado.json`
   e o `estado.json` leva `notado` (horário do último uso). Quem chama: o Painel (abrir uma tela, enviar,

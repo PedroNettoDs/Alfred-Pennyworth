@@ -153,9 +153,10 @@ def _recado_feito(pid: str) -> None:
 
 
 def _negligencia_para_o_pet() -> Optional[dict]:
-    """O que Pedro deixou vencer (promessas.negligencia) no formato do estado.json; o link abre a agenda no Painel."""
+    """O que Pedro deixou vencer (promessas.negligencia) no formato do estado.json; o link abre no Painel o item
+    de que o texto fala (ou a agenda, se ele não tem item lá)."""
     n = promessas.negligencia()
-    return n and {**n, "link": f"{lib_atividade.links()['painel']}/agenda"}
+    return n and {**n, "link": f"{lib_atividade.links()['painel']}/agenda" + (f"/{n['agenda_id']}" if n.get("agenda_id") else "")}
 
 
 @asynccontextmanager
