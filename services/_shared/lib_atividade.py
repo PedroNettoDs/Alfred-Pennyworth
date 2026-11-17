@@ -10,7 +10,7 @@ logs/atividade/
   fila.json                fila pedida pelo usuário
   notado.json              última vez que Pedro usou o Alfred (painel, conversa, WhatsApp, terminal)
   estado.json              retrato para quem lê: agora, fila, agendadas, catálogo, eventos, recados,
-                           negligência, notado
+                           pendentes, negligência, notado
 
 Só o Despachante (uma thread da API) grava fila.json e estado.json; os outros processos só deixam arquivos
 novos nas pastas. Por isso não há trava. A gravação é temporário + os.replace, sem fsync: o estado é
@@ -62,6 +62,9 @@ RECADOS_A_CADA_S = 5     # de quanto em quanto o Despachante relê os recados
 AO_RECADO_FEITO = None   # função (id) que encerra o recado na origem; quem sobe a API registra (main.py)
 FONTE_RECADOS = None     # função sem argumentos → [{id, texto, link, detalhe, tipo?, quando?}]; quem sobe a API
                          # registra (main.py). tipo: "recado" (padrão) | "remedio"; quando: epoch em que nasceu
+FONTE_PENDENTES = None   # função sem argumentos → [{id, texto, link}]: as pendências ainda abertas; idem. Quem
+                         # acompanha tira o aviso (evento com `ref`) da pendência que saiu desta lista
+MAX_PENDENTES = 100      # o Pestinha lê até este tanto (LIMITES["pendentes"] em pestinha/sense/alfred.py)
 NEGLIGENCIA_A_CADA_S = 30   # de quanto em quanto o Despachante relê o que Pedro deixou vencer
 FONTE_NEGLIGENCIA = None    # função sem argumentos → {nivel 0..1, motivo, texto, link} ou None; idem
 
@@ -131,9 +134,11 @@ def passo(texto: str, feito: Optional[int] = None, total: Optional[int] = None) 
     _tentar(_gravar, caminho, dados)
 
 
-def evento(tipo: str, texto: str) -> None:
-    """Aviso pontual para quem acompanha (ex.: "pendencia", título)."""
-    _tentar(_novo, "eventos", {"tipo": tipo, "texto": str(texto)[:200], "quando": time.time()})
+def evento(tipo: str, texto: str, ref: str = "", link: str = "") -> None:
+    """Aviso pontual para quem acompanha (ex.: "pendencia", título). `ref` é o id da pendência do aviso e `link`,
+    o endereço dela no Painel: com eles o aviso some quando ela é resolvida e abre o detalhe dela."""
+    _tentar(_novo, "eventos", {"tipo": tipo, "texto": str(texto)[:200], "quando": time.time(),
+                               "ref": str(ref), "link": str(link)})
 
 
 _notado_em = 0.0
@@ -251,6 +256,7 @@ class Despachante:
             "catalogo": [{"tipo": tipo, "rotulo": rotulo} for tipo, (_unit, rotulo) in self.catalogo.items()],
             "eventos": self._eventos(agora),
             "recados": self._recados(agora),
+            "pendentes": self._pendentes(),
             "negligencia": self._negligencia(agora),
             "notado": (_ler(self.base / "notado.json") or {}).get("quando"),
             "links": links(),
@@ -285,8 +291,9 @@ class Despachante:
                 self.fila = [i for i in self.fila if i["id"] != alvo]
                 if acao == "frente":
                     self.fila = achados + self.fila
-            elif acao == "recado_feito" and AO_RECADO_FEITO and alvo in {r["id"] for r in getattr(self, "_recados_lidos", [])}:
-                try:                      # só um recado que está publicado: o pet não fecha outra coisa
+            elif acao == "recado_feito" and AO_RECADO_FEITO and alvo in {
+                    r["id"] for r in getattr(self, "_recados_lidos", []) + self._pendentes()}:
+                try:                      # só um recado ou pendência que está publicado: o pet não fecha outra coisa
                     AO_RECADO_FEITO(alvo)
                 except Exception as e:
                     log(f"[atividade] recado {alvo} não encerrado ({e})")
@@ -320,6 +327,17 @@ class Despachante:
                 log(f"[atividade] recados indisponíveis ({e})")
         return getattr(self, "_recados_lidos", [])
 
+    def _pendentes(self) -> list:
+        """As pendências ainda abertas (FONTE_PENDENTES), relidas a cada volta: o aviso de uma pendência nova e
+        ela própria saem no mesmo retrato. Fonte com erro → as últimas."""
+        if FONTE_PENDENTES:
+            try:
+                self._pendentes_lidas = [{"id": str(p["id"]), "texto": str(p.get("texto") or "")[:200],
+                                          "link": str(p.get("link") or "")} for p in FONTE_PENDENTES()][:MAX_PENDENTES]
+            except Exception as e:
+                log(f"[atividade] pendentes indisponíveis ({e})")
+        return getattr(self, "_pendentes_lidas", [])
+
     def _negligencia(self, agora: float) -> Optional[dict]:
         """O que Pedro deixou vencer (FONTE_NEGLIGENCIA), relido a cada NEGLIGENCIA_A_CADA_S; fonte com erro → o último."""
         if FONTE_NEGLIGENCIA and agora - getattr(self, "_negligencia_em", -1e9) >= NEGLIGENCIA_A_CADA_S:
@@ -342,7 +360,8 @@ class Despachante:
             if not isinstance(quando, (int, float)) or agora - quando > EVENTO_VALE_S:
                 f.unlink(missing_ok=True)
                 continue
-            vivos.append({"id": f.stem, "tipo": d.get("tipo"), "texto": d.get("texto"), "quando": quando})
+            vivos.append({"id": f.stem, "tipo": d.get("tipo"), "texto": d.get("texto"), "quando": quando,
+                          "ref": d.get("ref") or "", "link": d.get("link") or ""})
         return vivos
 
 

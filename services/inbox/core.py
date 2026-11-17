@@ -1230,7 +1230,8 @@ def avisar_pendencia(entry: dict, agrupada: Optional[dict] = None) -> None:
 def notificar_pendencia(entry: dict, aguardar_resposta: bool = True):
     """Notificação desktop com botões (processo destacado, fica ocioso aguardando):
     e-mail → Vou / Não vou / Ouvir · WhatsApp → Enviar (rascunho editável) / Não enviar / Agenda / Ouvir."""
-    lib_atividade.evento("pendencia", entry.get("titulo") or "")
+    lib_atividade.evento("pendencia", entry.get("titulo") or "", ref=entry["id"],
+                         link=f"{lib_atividade.links()['painel']}/pendencias/{entry['id']}")
     avisar_pendencia(entry)
     if entry.get("tipo") == "whatsapp":
         wa = entry.get("whatsapp") or {}

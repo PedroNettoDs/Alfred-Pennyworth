@@ -328,6 +328,14 @@ class TestPestinha(Base):
         responder.assert_not_called()
         self.assertEqual(remedios.recados(), [])
 
+    def test_feito_do_postit_fecha_a_pendencia_sem_resposta_pelo_caminho_do_tipo(self):
+        for tipo, usado in (("whatsapp", "texto"), ("evento", "decisao")):
+            with mock.patch.object(core, "obter_pendencia", return_value={"id": "p1", "tipo": tipo}), \
+                 mock.patch.object(whatsapp, "responder_texto") as texto, mock.patch.object(core, "responder") as decisao:
+                main._recado_feito("p1")
+            self.assertEqual((texto.called, decisao.called), (usado == "texto", usado == "decisao"))
+        decisao.assert_called_once_with("p1", "ignorar", origem="via pestinha", so_se_aguardando=True)
+
 
 class TestFerramentas(Base):
     def test_criar_listar_tomar_e_parar_pela_conversa(self):

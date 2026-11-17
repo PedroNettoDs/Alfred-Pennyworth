@@ -196,6 +196,22 @@ class TestFila(Base):
             self.assertEqual(d.tick(2.0)["recados"], [])          # relido na mesma volta, sem esperar os 5 s
         self.assertEqual(encerrados, ["p1"])
 
+    def test_aviso_leva_a_pendencia_e_o_feito_do_pet_encerra_a_que_esta_aberta(self):
+        abertas, encerradas = [{"id": "p1", "texto": "Convite", "link": "http://127.0.0.1:7073/painel/pendencias/p1"}], []
+        def encerrar(pid):
+            encerradas.append(pid)
+            abertas.clear()
+        with mock.patch.object(la, "FONTE_PENDENTES", lambda: abertas), mock.patch.object(la, "AO_RECADO_FEITO", encerrar):
+            d = la.Despachante(self.sis)
+            la.evento("pendencia", "Convite", ref="p1", link=abertas[0]["link"])
+            est = d.tick()
+            self.assertEqual([(e["ref"], e["link"]) for e in est["eventos"]], [("p1", abertas[0]["link"])])
+            self.assertEqual(est["pendentes"], abertas)
+            la.pedir("recado_feito", id="ja-resolvida")
+            la.pedir("recado_feito", id="p1")
+            self.assertEqual(d.tick()["pendentes"], [])           # resolvida: sai da lista na mesma volta
+        self.assertEqual(encerradas, ["p1"])
+
     def test_recado_leva_o_tipo_e_o_horario_em_que_nasceu(self):
         recados = [{"id": "remedio:x:1", "tipo": "remedio", "texto": "Tomar Amoxicilina", "quando": 1762870000.0},
                    {"id": "p1", "texto": "Marina"}]

@@ -27,12 +27,17 @@ timers do systemd (qualquer unit oneshot do catálogo)
   rotina do catálogo está rodando, inclusive as disparadas por timer. "Na frente" entra na posição 1.
 - **Agendadas:** próximos horários dos timers (`systemctl --user list-timers`), relidos a cada 30 s.
 - **Catálogo:** `CATALOGO` em `_shared/lib_atividade.py` (unit → tipo, rótulo), só das units instaladas.
-- **Avisos:** ficam 2 minutos no estado. Hoje só `pendencia` (título da pendência nova, e-mail ou WhatsApp).
+- **Avisos:** ficam 2 minutos no estado. Hoje só `pendencia` (título da pendência nova, e-mail ou WhatsApp), com
+  `ref` (id da pendência) e `link` (o detalhe dela no Painel).
+- **Pendentes:** `estado.json` leva `pendentes` (`{id, texto, link}` das pendências aguardando, até 100, relidas a
+  cada volta). O post-it de um aviso some quando a pendência dele sai da lista (resolvida no Painel, no WhatsApp ou
+  no aplicativo). **Feito** no post-it deixa o pedido `recado_feito` e a pendência é fechada sem resposta
+  ("ignorar"); **Mais detalhes** abre o `link` no navegador. O botão do meio só tira o post-it.
 - **Recados:** `estado.json` leva `recados` (`whatsapp.recados()`, relido a cada 5 s): as pendências aguardando
   que chegaram pelo número do Alfred. O pet cola um post-it por recado: arrastar move, clicar abre o `detalhe` (quem,
-  quando e o recado) com **Feito** e **Voltar**, e só o botão do meio do mouse fecha. O Feito pergunta "Encerrar também no Alfred?":
-  com **Sim**, o pet deixa o pedido `recado_feito` e a pendência é fechada sem resposta (o "ignorar" do Painel); com
-  **Não**, ou fechando pelo botão do meio, só o post-it sai e a pendência continua aguardando. Os post-its ficam
+  quando e o recado) com **Mais detalhes**, **Feito** e **Voltar**, e só o botão do meio do mouse fecha. Com o **Feito**,
+  o pet deixa o pedido `recado_feito` e a pendência é fechada sem resposta (o "ignorar" do Painel); fechando pelo
+  botão do meio, só o post-it sai e a pendência continua aguardando. Os post-its ficam
   atrás das outras janelas. Os post-its voltam ao mesmo lugar quando o pet reabre. Os mesmos recados aparecem no cartão **Anotações** do Início do Painel.
   Cada recado leva `quando` (epoch em que foi criado): o pet escreve dia e hora na faixa de cima do post-it, e dois
   post-its iguais se distinguem por ela.

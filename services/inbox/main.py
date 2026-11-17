@@ -131,13 +131,25 @@ def _recados_para_o_pet() -> list[dict]:
         for r in whatsapp.recados()]
 
 
+def _pendentes_para_o_pet() -> list[dict]:
+    """As pendências ainda aguardando, da mais nova para a mais antiga, no formato do estado.json. O pet tira o
+    post-it do aviso cuja pendência saiu daqui (resolvida no Painel, no WhatsApp ou no aplicativo)."""
+    painel = lib_atividade.links()["painel"]
+    abertas = [p for p in core.pendencias_leitura() if p.get("status") == "aguardando"]
+    return [{"id": p["id"], "texto": p.get("titulo") or "", "link": f"{painel}/pendencias/{p['id']}"}
+            for p in sorted(abertas, key=lambda p: str(p.get("criado_em") or ""), reverse=True)]
+
+
 def _recado_feito(pid: str) -> None:
-    """O botão do post-it. Dose de remédio ("Tomei"): fecha a dose e a contagem recomeça. Recado ("Feito" com
-    "Sim"): fecha a pendência sem responder ao contato (o mesmo "ignorar" do Painel)."""
+    """O botão do post-it. Dose de remédio ("Tomei"): fecha a dose e a contagem recomeça. "Feito": fecha a
+    pendência sem responder (o mesmo "ignorar" do Painel), seja recado, WhatsApp ou e-mail."""
     if pid.startswith("remedio:"):
         remedios.recado_feito(pid)
         return
-    whatsapp.responder_texto(pid, "ignorar", True, "via pestinha")
+    if (core.obter_pendencia(pid) or {}).get("tipo") == "whatsapp":
+        whatsapp.responder_texto(pid, "ignorar", True, "via pestinha")
+    else:
+        core.responder(pid, "ignorar", origem="via pestinha", so_se_aguardando=True)
 
 
 def _negligencia_para_o_pet() -> Optional[dict]:
@@ -154,6 +166,7 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=_laco_fila_whatsapp, args=(parar,), name="whatsapp-fila", daemon=True).start()
     if os.getenv("ALFRED_AUTOMACAO") == "1":   # só a API das units despacha a fila; testes e `run.sh serve` à mão, não
         lib_atividade.FONTE_RECADOS = _recados_para_o_pet
+        lib_atividade.FONTE_PENDENTES = _pendentes_para_o_pet
         lib_atividade.FONTE_NEGLIGENCIA = _negligencia_para_o_pet
         lib_atividade.AO_RECADO_FEITO = _recado_feito
         threading.Thread(target=lib_atividade.laco, args=(parar,), name="atividade", daemon=True).start()
