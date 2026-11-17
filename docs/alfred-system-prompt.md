@@ -64,6 +64,13 @@ Antes de ir à web, verifique se você já pesquisou sobre o assunto.
 
 `listar_cofre` serve para orientação ("o que já sei sobre X?"), não para responder perguntas.
 
+### 1b. Consulte suas skills antes de uma tarefa técnica (`buscar_skill` → `ver_skill`)
+
+Skills são procedimentos prontos em texto (segurança, pentest e afins). Antes de executar uma tarefa técnica,
+veja se existe um procedimento: `buscar_skill("assunto")` devolve as mais parecidas; `ver_skill("nome")` lê os
+passos inteiros, que você então segue com as ferramentas que já tem. `listar_skills` mostra o catálogo. A skill
+não roda nada sozinha — é um guia, não um comando.
+
 ### 2. Consulte o vault do Pedro se a pergunta for pessoal (`buscar_cofre` com cofre="pedro")
 
 Pedro pergunta sobre seus próprios projetos, anotações ou decisões → `buscar_cofre` com cofre="pedro".

@@ -51,7 +51,7 @@ from typing import Literal, Optional, Union, get_args, get_origin
 import httpx
 import yaml
 
-from _shared import lib_academico, lib_db, lib_memoria, lib_rag, lib_web
+from _shared import lib_academico, lib_db, lib_memoria, lib_rag, lib_skills, lib_web
 from _shared.lib_alfred import PROJECT_ROOT, gravar_atomico, log, searxng_search
 from _shared.lib_mail import compactar_urls, html_to_text
 
@@ -1407,6 +1407,50 @@ def buscar_cofre(consulta: str, cofre: Literal["todos", "pedro", "alfred"] = "to
             "inteira com ler_nota(caminho, cofre):\n\n"
             + "\n\n".join(f"[{n}] {a['caminho']} (cofre {a['cofre']})\n{trecho(a['trecho'])}"
                           for n, a in enumerate(achados, 1)))
+
+
+@ferramenta("buscar_skill",
+            "Busca skills (procedimentos reutilizáveis em texto) por assunto e devolve nome + descrição das mais "
+            "parecidas. Use antes de uma tarefa técnica (segurança, pentest, etc.) para achar o procedimento certo; "
+            "depois leia-o inteiro com ver_skill(nome). As skills não rodam nada — são passos que você segue com as "
+            "ferramentas que já tem.")
+def buscar_skill(consulta: str, limite: int = 5) -> str:
+    """
+    :param consulta: Termos ou tarefa a procurar, ex.: "sql injection", "escalar privilégio no linux"
+    :param limite: Máximo de skills (até 20)
+    """
+    achados = lib_skills.buscar(consulta, min(max(limite, 1), 20))
+    if not achados:
+        return f"Nenhuma skill encontrada para {consulta!r}. Veja o catálogo com listar_skills."
+    return (f"{len(achados)} skill(s) para {consulta!r} — leia o procedimento inteiro com ver_skill(nome):\n\n"
+            + "\n".join(f"- {a['nome']} [{a['categoria']}] — {a['descricao']}" for a in achados))
+
+
+@ferramenta("listar_skills",
+            "Lista o catálogo de skills (nome + descrição), opcionalmente de uma categoria. Para buscar por assunto "
+            "use buscar_skill; para ler um procedimento use ver_skill.")
+def listar_skills(categoria: str = "") -> str:
+    """
+    :param categoria: Filtra por categoria (ex.: "web", "cloud", "wireless"); vazio = todas
+    """
+    skills = lib_skills.listar(categoria)
+    if not skills:
+        if categoria:
+            return f"Nenhuma skill na categoria {categoria!r}. Categorias: {', '.join(lib_skills.categorias()) or '—'}."
+        return "Nenhuma skill instalada (veja SKILLS_DIR ou a pasta skills/ do projeto)."
+    cab = f"{len(skills)} skill(s)" + (f" na categoria {categoria!r}" if categoria else "") + ":\n\n"
+    return cab + "\n".join(f"- {s['nome']} [{s['categoria']}] — {s['descricao']}" for s in skills)
+
+
+@ferramenta("ver_skill", "Lê o procedimento inteiro de uma skill (nome de buscar_skill ou listar_skills).")
+def ver_skill(nome: str) -> str:
+    """
+    :param nome: Nome exato da skill, ex.: "offensive-sqli"
+    """
+    corpo = lib_skills.ver(nome)
+    if corpo is None:
+        return f"Skill {nome!r} não encontrada. Use listar_skills ou buscar_skill para achar o nome certo."
+    return corpo
 
 
 @ferramenta("ler_nota", "Lê o conteúdo completo de uma nota de um dos cofres (caminho de buscar_cofre ou listar_cofre).")
